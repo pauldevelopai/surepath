@@ -1,0 +1,33 @@
+# Environment files (contain API keys and secrets)
+.env
+.env.local
+.env.production
+.env*.local
+dashboard/.env.local
+
+# Dependencies
+node_modules/
+dashboard/node_modules/
+
+# Next.js build
+.next/
+dashboard/.next/
+dashboard/out/
+
+# Generated reports
+reports/
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Property images (large binary files)
+dashboard/public/property-images/
+
+# Editor
+.vscode/
+.idea/
