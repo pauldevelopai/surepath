@@ -564,10 +564,17 @@ export default function PropertyDetailPage() {
                   {concerns.length > 0 && <span className="ml-2 text-orange-600 font-bold">{concerns.length} concerns found</span>}
                   {positives.length > 0 && <span className="ml-2 text-green-600">{positives.length} positives</span>}
                 </div>
-                {concerns.length > 0 && (
+                {concerns.length > 0 && (() => {
+                  // Filter to area-relevant concerns (safety, noise, infrastructure — not hotel/restaurant service)
+                  const areaKeywords = new Set(['unsafe', 'crime', 'robbery', 'stolen', 'break-in', 'mugging', 'noise', 'noisy', 'loud', 'traffic', 'flood', 'flooding', 'loadshedding', 'load shedding', 'power cut', 'sewage', 'pollution', 'construction']);
+                  const relevant = concerns
+                    .filter((c: A) => (c.keywords || []).some((k: string) => areaKeywords.has(k)))
+                    .slice(0, 5);
+                  const shown = relevant.length > 0 ? relevant : concerns.slice(0, 5);
+                  return (
                   <div className="space-y-2 mb-3">
-                    <h3 className="text-xs font-bold text-orange-700">Concerns from nearby reviews</h3>
-                    {concerns.map((c: A, i: number) => (
+                    <h3 className="text-xs font-bold text-orange-700">Area concerns from nearby reviews ({shown.length} of {concerns.length})</h3>
+                    {shown.map((c: A, i: number) => (
                       <div key={i} className="bg-orange-50 border-l-3 border-orange-300 rounded p-2 text-xs" style={{ borderLeft: "3px solid #F59E0B" }}>
                         <div className="flex justify-between">
                           <span className="font-medium">{c.place}</span>
@@ -582,7 +589,8 @@ export default function PropertyDetailPage() {
                       </div>
                     ))}
                   </div>
-                )}
+                  );
+                })()}
                 {positives.length > 0 && (
                   <div className="space-y-1">
                     <h3 className="text-xs font-bold text-green-700">Positive mentions</h3>

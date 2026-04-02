@@ -4,6 +4,9 @@ import { withAuth } from "@/lib/auth";
 import path from "path";
 import fs from "fs";
 
+// Allow long-running vision analysis (up to 5 minutes)
+export const maxDuration = 300;
+
 async function loadModule(name: string) {
   const modPath = path.resolve(process.cwd(), "..", `${name}.js`);
   const mod = await import(/* webpackIgnore: true */ modPath);
@@ -164,8 +167,17 @@ export const POST = withAuth(async (req: NextRequest, { params }: { params: Prom
       if (analysis.roof_material && analysis.roof_material !== "unknown") await query("UPDATE properties SET roof_material=$1 WHERE id=$2", [analysis.roof_material, id]);
       if (analysis.security_visible) await query("UPDATE properties SET security_visible=TRUE WHERE id=$1", [id]);
 
+      // Run specialist exterior security analysis
+      let specialistCount = 0;
+      try {
+        const secResult = await vision.analyseExteriorSecurity(base64);
+        await query("UPDATE property_images SET vision_analysis = vision_analysis || $1::jsonb WHERE id = $2",
+          [JSON.stringify({ security_assessment: secResult.security_assessment, specialist_findings: secResult.findings }), svImg[0].id]);
+        specialistCount++;
+      } catch (e: unknown) { console.error("[analyse_streetview] Security specialist error:", e instanceof Error ? e.message : e); }
+
       const findingCount = (analysis.findings || []).length;
-      return NextResponse.json({ ok: true, message: `Street View analysed: ${findingCount} findings` });
+      return NextResponse.json({ ok: true, message: `Street View analysed: ${findingCount} findings + ${specialistCount} specialist modules` });
     }
 
     // ── ANALYSE SATELLITE ──
@@ -353,10 +365,18 @@ export const POST = withAuth(async (req: NextRequest, { params }: { params: Prom
       // Run inline — collect risks for this property's city/suburb
       const results: string[] = [];
 
-      // Water quality — removed hardcoded data. Real DWS API integration needed.
-      // The DWS Blue/Green Drop reports are published as PDFs, not APIs.
-      // TODO: Parse actual DWS reports or find a data source with per-municipality scores.
-      results.push("Water quality: no live data source available yet (DWS publishes PDFs only)");
+      // Water quality — real Blue/Green Drop scores digitized from DWS PDF reports
+      try {
+        const municipal = await loadModule("collect-municipal");
+        const waterResult = await municipal.collectForProperty(parseInt(id));
+        if (waterResult?.water_quality_score != null) {
+          results.push(`Water: ${waterResult.water_quality_score}/10 (Blue Drop ${waterResult.blue_drop_percent}%), Sewerage: ${waterResult.sewerage_quality_score}/10 (Green Drop ${waterResult.green_drop_percent}%)`);
+        } else {
+          results.push(`Water quality: no Blue/Green Drop data for ${prop.city || 'this municipality'} — DWS report does not cover this area`);
+        }
+      } catch (e: unknown) {
+        results.push("Water quality: " + (e instanceof Error ? e.message : "failed"));
+      }
 
       // Solar — real data from EU PVGIS API
       if (prop.lat) {
