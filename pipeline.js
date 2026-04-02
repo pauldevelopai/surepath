@@ -553,6 +553,94 @@ async function generateReport(input, askingPrice, phoneNumber) {
       log(7, 'No satellite image — skipping');
     }
 
+    // ── STEP 05B: Deep specialist analysis routing ──────────────────
+    log('5B', 'Deep specialist analysis routing');
+    {
+      const counts = { db_board: 0, ceiling: 0, exterior: 0, plumbing: 0 };
+      try {
+        const { rows: analysedImgs } = await pool.query(
+          `SELECT id, image_url, vision_analysis FROM property_images
+           WHERE property_id = $1 AND vision_analysis IS NOT NULL
+             AND image_url LIKE 'http%'
+           ORDER BY id`, [propertyId]
+        );
+
+        for (const img of analysedImgs) {
+          if (counts.db_board >= 3 && counts.ceiling >= 3 && counts.exterior >= 3 && counts.plumbing >= 3) break;
+          const va = typeof img.vision_analysis === 'string' ? JSON.parse(img.vision_analysis) : img.vision_analysis;
+          const photoType = va?.photo_type;
+          const findingsText = JSON.stringify(va?.findings || []).toLowerCase();
+
+          try {
+            // DB Board
+            if (photoType === 'db_board' && counts.db_board < 3) {
+              const buffer = await vision.downloadImage(img.image_url);
+              const result = await vision.analyseDBBoard(buffer.toString('base64'));
+              await pool.query('UPDATE property_images SET vision_analysis = vision_analysis || $1::jsonb WHERE id = $2',
+                [JSON.stringify({ db_board: result.db_board, specialist_findings: result.findings }), img.id]);
+              counts.db_board++;
+            }
+
+            // Ceiling
+            if ((photoType === 'ceiling' || (va?.findings || []).some(f => f.category === 'ceiling' && (f.severity === 'CRITICAL' || f.severity === 'HIGH'))) && counts.ceiling < 3) {
+              const buffer = await vision.downloadImage(img.image_url);
+              const result = await vision.analyseCeilingDeep(buffer.toString('base64'));
+              await pool.query('UPDATE property_images SET vision_analysis = vision_analysis || $1::jsonb WHERE id = $2',
+                [JSON.stringify({ ceiling: result.ceiling, specialist_findings: result.findings }), img.id]);
+              counts.ceiling++;
+            }
+
+            // Exterior security
+            if (photoType === 'exterior' && counts.exterior < 3) {
+              const buffer = await vision.downloadImage(img.image_url);
+              const result = await vision.analyseExteriorSecurity(buffer.toString('base64'));
+              await pool.query('UPDATE property_images SET vision_analysis = vision_analysis || $1::jsonb WHERE id = $2',
+                [JSON.stringify({ security_assessment: result.security_assessment, specialist_findings: result.findings }), img.id]);
+              counts.exterior++;
+            }
+
+            // Plumbing
+            if (['bathroom', 'kitchen', 'other'].includes(photoType) &&
+                (findingsText.includes('pipe') || findingsText.includes('geyser') || findingsText.includes('plumbing') ||
+                 findingsText.includes('rust') || findingsText.includes('corrosion') || findingsText.includes('tap') || findingsText.includes('basin')) &&
+                counts.plumbing < 3) {
+              const buffer = await vision.downloadImage(img.image_url);
+              const result = await vision.analysePlumbing(buffer.toString('base64'));
+              await pool.query('UPDATE property_images SET vision_analysis = vision_analysis || $1::jsonb WHERE id = $2',
+                [JSON.stringify({ plumbing: result.plumbing, specialist_findings: result.findings }), img.id]);
+              counts.plumbing++;
+            }
+          } catch (specialistErr) {
+            console.error(`[step 05b] Specialist error on image ${img.id}: ${specialistErr.message}`);
+          }
+        }
+      } catch (err) {
+        console.error(`[step 05b] Error: ${err.message}`);
+      }
+      const total = counts.db_board + counts.ceiling + counts.exterior + counts.plumbing;
+      log('5B', `${total} photos sent for specialist deep analysis: db_board=${counts.db_board}, ceiling=${counts.ceiling}, exterior=${counts.exterior}, plumbing=${counts.plumbing}`);
+    }
+
+    // ── STEP 06B: Temporal change detection ──────────────────────────
+    if (streetviewBase64 && geo) {
+      log('6B', 'Temporal change detection — comparing current vs historical Street View');
+      try {
+        const historicalBase64 = maps.getStreetViewHistorical ? await maps.getStreetViewHistorical(geo.lat, geo.lng) : null;
+        if (historicalBase64) {
+          const temporalResult = await vision.analyseTemporalChange(streetviewBase64, historicalBase64);
+          await pool.query(
+            `UPDATE property_reports SET temporal_change_analysis = $1 WHERE property_id = $2 AND status != 'failed' ORDER BY created_at DESC LIMIT 1`,
+            [JSON.stringify(temporalResult), propertyId]
+          ).catch(() => {});
+          log('6B', `Temporal analysis: trajectory=${temporalResult.condition_trajectory}, ${(temporalResult.red_flags || []).length} red flags`);
+        } else {
+          log('6B', 'No historical Street View available — skipping');
+        }
+      } catch (err) {
+        log('6B', `Temporal analysis error (non-fatal): ${err.message}`);
+      }
+    }
+
     // ── STEP 08: AVM + comparables ──────────────────────────────────
     log(8, 'AVM + comparables — generated by Claude from property data and asking price');
 
@@ -569,6 +657,39 @@ async function generateReport(input, askingPrice, phoneNumber) {
     const era = propRows[0]?.construction_era;
     log(10, `Construction era: ${era || 'unknown'} → age risk matrix applied`);
 
+    // ── STEP 10B: Buyer Risk Index calculation ──────────────────────
+    log('10B', 'Calculating BuyerRiskIndex from verified data');
+
+    let buyerRiskIndex = 5; // default
+    try {
+      // Fetch latest aggregated data from property_images
+      const { rows: imgRows } = await pool.query(
+        `SELECT vision_analysis FROM property_images WHERE property_id = $1 AND vision_analysis IS NOT NULL`,
+        [propertyId]
+      );
+      const allAnalyses = imgRows.map(r => typeof r.vision_analysis === 'string' ? JSON.parse(r.vision_analysis) : r.vision_analysis);
+      const agg = vision.aggregateFindings(allAnalyses);
+
+      const asbestosMap = { NEGLIGIBLE: 0, LOW: 1, MEDIUM: 3, HIGH: 7, CRITICAL: 10 };
+      const asbestosScore = asbestosMap[agg.asbestos_risk] || 0;
+      const structuralCount = (agg.structural_flags || []).filter(f => f.severity === 'CRITICAL' || f.severity === 'HIGH').length;
+      const complianceCount = (agg.compliance_flags || []).filter(f => f.severity === 'CRITICAL' || f.severity === 'HIGH').length;
+      const eraMap = { 'pre-1977': 3, '1977-1990': 2, '1990-2000': 1 };
+      const eraRisk = era ? (eraMap[era] || 0) : 0;
+
+      buyerRiskIndex = Math.min(10, Math.round(
+        (agg.insurance_risk_score * 0.25) +
+        (asbestosScore * 0.20) +
+        ((10 - (agg.security_score || 5)) * 0.15) +
+        (Math.min(10, structuralCount * 1.5) * 0.20) +
+        (Math.min(10, complianceCount * 1.5) * 0.10) +
+        (eraRisk * 0.10)
+      ));
+      log('10B', `BuyerRiskIndex: ${buyerRiskIndex}/10 (insurance=${agg.insurance_risk_score}, asbestos=${asbestosScore}, security=${agg.security_score || 'n/a'}, structural=${structuralCount}, compliance=${complianceCount}, era=${eraRisk})`);
+    } catch (err) {
+      log('10B', `BuyerRiskIndex calculation error (non-fatal): ${err.message}`);
+    }
+
     // ── STEP 11: Report synthesis ───────────────────────────────────
     log(11, 'Report synthesis via Claude Opus');
 
@@ -576,6 +697,11 @@ async function generateReport(input, askingPrice, phoneNumber) {
     reportId = synthesisResult.report_id;
     const report = synthesisResult.report;
     log(11, `Report ${reportId} synthesised: decision=${report.decision}`);
+
+    // Store BuyerRiskIndex
+    try {
+      await pool.query('UPDATE property_reports SET buyer_risk_index = $1 WHERE id = $2', [buyerRiskIndex, reportId]);
+    } catch {}
 
     // ── STEP 12: B2B field propagation ──────────────────────────────
     log(12, 'B2B field propagation to properties table');
