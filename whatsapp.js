@@ -252,7 +252,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
         const normalised = body.toLowerCase().trim();
 
         if (['yes', 'ja', '1', 'buy', 'full report', 'yes please', 'yep', 'sure', 'ok', 'okay'].includes(normalised)) {
-          // Create property + order + payment link
+          // TEST MODE: skip payment, go straight to report generation
           const erfNumber = `PP_WA_${phoneNumber}_${Date.now()}`;
           const { rows: propRows } = await pool.query(
             `INSERT INTO properties (erf_number, address_raw)
@@ -265,7 +265,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
 
           const { rows: orderRows } = await pool.query(
             `INSERT INTO orders (property_id, phone_number, price_zar, payment_status)
-             VALUES ($1, $2, 149, 'pending')
+             VALUES ($1, $2, 0, 'test_bypass')
              RETURNING id`,
             [propertyId, phoneNumber]
           );
@@ -277,10 +277,11 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
             asking_price: conv.asking_price || null,
           });
 
-          const payUrl = generatePayFastURL(orderId, 149);
-          await sendWhatsApp(from,
-            `Here's your payment link 👇\n\nR149 for the full Surepath report on this property.\n\n${payUrl}\n\nOnce payment clears, your report will be ready in about 10 minutes.`
-          );
+          await sendWhatsApp(from, 'Generating your full report now — this takes about 10 minutes. ⏳');
+
+          // Run pipeline directly (no payment needed in test mode)
+          const order = { id: orderId, phone_number: phoneNumber, property_id: propertyId };
+          runPipelineAsync(order, conv);
 
         } else if (['no', 'nee', '2', 'no thanks', 'nope', 'skip', 'not now'].includes(normalised)) {
           await upsertConversation(phoneNumber, { state: 'awaiting_property' });
