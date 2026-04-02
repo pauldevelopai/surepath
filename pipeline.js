@@ -291,7 +291,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
     log(5, 'Vision analysis — listing photos');
 
     if (photoUrls.length > 0) {
-      const listingVision = await vision.analysePropertyImages(photoUrls, propertyId);
+      const listingVision = await vision.analyseWithHFPrestage(propertyId, photoUrls);
       if (listingVision) {
         log(5, `Analysed ${listingVision.analyses.length} listing photos, ${listingVision.aggregated.vision_findings.length} total findings`);
       } else {
