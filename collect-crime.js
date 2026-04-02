@@ -48,18 +48,19 @@ function fetchHTML(url) {
   });
 }
 
-// Cache the full precincts list (1,190 stations)
+// ─── CrimeHub API caches ────────────────────────────────────────────────
+
 let _precinctsCache = null;
 let _precinctsCacheTime = 0;
+let _hierarchyCache = null; // { provinces, districts, municipalities }
+let _hierarchyCacheTime = 0;
 
 async function getAllPrecincts() {
-  // Cache for 24 hours
   if (_precinctsCache && Date.now() - _precinctsCacheTime < 86400000) return _precinctsCache;
-
   try {
     const data = await fetchJSON('https://crimehub.org/my-police-station/lookups/precincts');
     if (data.results) {
-      _precinctsCache = data.results; // [{ id, text, file_id }]
+      _precinctsCache = data.results;
       _precinctsCacheTime = Date.now();
       return _precinctsCache;
     }
@@ -67,6 +68,178 @@ async function getAllPrecincts() {
     console.error('[crime] Failed to fetch precincts list:', e.message);
   }
   return [];
+}
+
+/**
+ * Build the full CrimeHub hierarchy: Province → District → Municipality → Precincts.
+ * Cached for 7 days. ~50 API calls to build, then instant lookups.
+ */
+async function getHierarchy() {
+  if (_hierarchyCache && Date.now() - _hierarchyCacheTime < 7 * 86400000) return _hierarchyCache;
+
+  console.log('[crime] Building CrimeHub hierarchy cache...');
+  const hierarchy = { provinces: [], municipalities: [], precinctsByMuni: {} };
+
+  try {
+    const provData = await fetchJSON('https://crimehub.org/lookups/provinces');
+    hierarchy.provinces = provData.results || [];
+
+    for (const prov of hierarchy.provinces) {
+      const distData = await fetchJSON(`https://crimehub.org/lookups/districts?parents=${prov.id}`);
+      const districts = distData.results || [];
+
+      for (const dist of districts) {
+        const muniData = await fetchJSON(`https://crimehub.org/lookups/municipalities?parents=${dist.id}`);
+        const municipalities = muniData.results || [];
+
+        for (const muni of municipalities) {
+          hierarchy.municipalities.push({
+            id: muni.id,
+            name: muni.text,
+            district: dist.text,
+            province: prov.text,
+          });
+
+          // Fetch precincts for this municipality
+          try {
+            const precData = await fetchJSON(`https://crimehub.org/lookups/precincts?municipalities=${muni.id}`);
+            hierarchy.precinctsByMuni[muni.id] = (precData.results || []).map(p => ({
+              id: p.id,
+              name: p.text,
+              municipalityId: muni.id,
+              municipality: muni.text,
+            }));
+          } catch {}
+        }
+      }
+    }
+
+    _hierarchyCache = hierarchy;
+    _hierarchyCacheTime = Date.now();
+    const totalPrecincts = Object.values(hierarchy.precinctsByMuni).reduce((s, arr) => s + arr.length, 0);
+    console.log(`[crime] Hierarchy built: ${hierarchy.provinces.length} provinces, ${hierarchy.municipalities.length} municipalities, ${totalPrecincts} precincts`);
+  } catch (e) {
+    console.error('[crime] Hierarchy build failed:', e.message);
+  }
+
+  return hierarchy;
+}
+
+/**
+ * Find the nearest police station using the CrimeHub geographic hierarchy.
+ * This is the ULTIMATE FALLBACK — works for any SA location by navigating:
+ * Province → District → Municipality → Precincts
+ *
+ * Matches the property's city/suburb against municipality names.
+ */
+async function findStationByHierarchy(suburb, city, province) {
+  const hierarchy = await getHierarchy();
+  if (!hierarchy.municipalities.length) return null;
+
+  // Map common city names to their municipality name in CrimeHub
+  const CITY_MUNI_MAP = {
+    'cape town': 'city of cape town', 'johannesburg': 'city of johannesburg',
+    'pretoria': 'city of tshwane', 'centurion': 'city of tshwane',
+    'durban': 'ethekwini', 'port elizabeth': 'nelson mandela bay',
+    'gqeberha': 'nelson mandela bay', 'bloemfontein': 'mangaung',
+    'east london': 'buffalo city', 'ballito': 'kwadukuza',
+    'dolphin coast': 'kwadukuza', 'umhlanga': 'ethekwini',
+    'sandton': 'city of johannesburg', 'randburg': 'city of johannesburg',
+    'midrand': 'city of johannesburg', 'benoni': 'ekurhuleni',
+    'boksburg': 'ekurhuleni', 'germiston': 'ekurhuleni',
+    'kempton park': 'ekurhuleni', 'springs': 'ekurhuleni',
+    'alberton': 'ekurhuleni', 'edenvale': 'ekurhuleni',
+    'roodepoort': 'city of johannesburg', 'krugersdorp': 'mogale city',
+    'paarl': 'drakenstein', 'wellington': 'drakenstein',
+    'stellenbosch': 'stellenbosch', 'somerset west': 'city of cape town',
+    'hermanus': 'overstrand', 'george': 'george', 'knysna': 'knysna',
+    'mossel bay': 'mossel bay', 'pietermaritzburg': 'msunduzi',
+    'newcastle': 'newcastle', 'richards bay': 'umhlathuze',
+    'polokwane': 'polokwane', 'nelspruit': 'mbombela',
+    'mbombela': 'mbombela', 'rustenburg': 'rustenburg',
+    'kimberley': 'sol plaatje', 'potchefstroom': 'tlokwe',
+    'vanderbijlpark': 'emfuleni', 'vereeniging': 'emfuleni',
+  };
+
+  const searchTerms = [suburb, city].filter(Boolean).map(s => s.toLowerCase());
+  const provLower = (province || '').toLowerCase();
+
+  // Step 1: Check direct city-to-municipality mapping
+  let bestMuni = null;
+  for (const term of searchTerms) {
+    const mappedMuni = CITY_MUNI_MAP[term];
+    if (mappedMuni) {
+      bestMuni = hierarchy.municipalities.find(m => m.name.toLowerCase() === mappedMuni);
+      if (bestMuni) break;
+    }
+  }
+
+  // Step 2: Fuzzy search municipality names
+  if (!bestMuni) {
+    for (const muni of hierarchy.municipalities) {
+      const muniLower = muni.name.toLowerCase();
+      const muniProvLower = muni.province.toLowerCase();
+
+      // Filter by province if we know it
+      if (provLower && !muniProvLower.includes(provLower) && !provLower.includes(muniProvLower)) continue;
+
+      for (const term of searchTerms) {
+        if (muniLower === term || muniLower.includes(term) || term.includes(muniLower)) {
+          bestMuni = muni;
+          break;
+        }
+      }
+      if (bestMuni) break;
+
+      // Check district name too
+      const distLower = muni.district.toLowerCase();
+      for (const term of searchTerms) {
+        if (distLower.includes(term) || term.includes(distLower)) {
+          bestMuni = muni;
+          break;
+        }
+      }
+      if (bestMuni) break;
+    }
+  }
+
+  // Step 3: Province-level fallback — pick the METRO municipality (largest) not just first alphabetically
+  if (!bestMuni && provLower) {
+    const metroNames = ['city of cape town', 'city of johannesburg', 'city of tshwane',
+      'ethekwini', 'ekurhuleni', 'nelson mandela bay', 'buffalo city', 'mangaung'];
+    const provMunis = hierarchy.municipalities.filter(m =>
+      m.province.toLowerCase().includes(provLower) || provLower.includes(m.province.toLowerCase()));
+    bestMuni = provMunis.find(m => metroNames.includes(m.name.toLowerCase())) || provMunis[0];
+  }
+
+  if (!bestMuni) {
+    console.log(`[crime] No municipality match found for ${suburb}, ${city}, ${province}`);
+    return null;
+  }
+
+  // Step 3: Get precincts in this municipality
+  const precincts = hierarchy.precinctsByMuni[bestMuni.id] || [];
+  if (precincts.length === 0) {
+    console.log(`[crime] No precincts found in ${bestMuni.name}`);
+    return null;
+  }
+
+  // Step 4: Pick the best precinct (prefer one matching suburb/city name)
+  let bestPrecinct = precincts[0]; // default: first
+  for (const p of precincts) {
+    const pLower = p.name.toLowerCase();
+    for (const term of searchTerms) {
+      if (pLower.includes(term) || term.includes(pLower)) {
+        bestPrecinct = p;
+        break;
+      }
+    }
+  }
+
+  console.log(`[crime] Hierarchy lookup: ${suburb}, ${city} → ${bestMuni.name} municipality → ${bestPrecinct.name} station`);
+
+  // Step 5: Get the station UUID
+  return findStationId(bestPrecinct.name);
 }
 
 /**
@@ -267,7 +440,7 @@ async function getStationStats(stationId) {
  * Collect crime data for a property.
  */
 async function collectForProperty(propertyId) {
-  const { rows } = await pool.query('SELECT id, suburb, city, address_raw, address_normalised FROM properties WHERE id = $1', [propertyId]);
+  const { rows } = await pool.query('SELECT id, suburb, city, province, address_raw, address_normalised FROM properties WHERE id = $1', [propertyId]);
   if (!rows.length) return null;
 
   const prop = rows[0];
@@ -276,17 +449,24 @@ async function collectForProperty(propertyId) {
 
   console.log(`[crime] Looking up station for: ${suburb}`);
 
-  // Try suburb first
+  // Strategy 1: Direct suburb name match
   let station = await findStationId(suburb);
 
+  // Strategy 2: Known mappings + address parts
   if (!station) {
-    // Use the full address to find nearby stations
     const addr = (prop.address_normalised || prop.address_raw || '').toLowerCase();
     const addressParts = addr.split(/[,\/]/).map(s => s.trim()).filter(s => s.length > 3 && s.length < 30);
     station = await findNearestStation(suburb, prop.city, addressParts);
-
-    if (!station) return { error: `No CrimeHub station found for ${suburb}. Try searching for the nearest police station at crimehub.org` };
   }
+
+  // Strategy 3: CrimeHub geographic hierarchy (ULTIMATE FALLBACK)
+  // Navigates Province → District → Municipality → Precincts
+  if (!station) {
+    console.log(`[crime] All name-based lookups failed for ${suburb} — trying hierarchy...`);
+    station = await findStationByHierarchy(suburb, prop.city, prop.province);
+  }
+
+  if (!station) return { error: `No CrimeHub station found for ${suburb}. Try searching for the nearest police station at crimehub.org` };
 
   return collectWithStation(propertyId, prop, station);
 }
@@ -360,4 +540,4 @@ async function collectWithStation(propertyId, prop, station) {
   };
 }
 
-module.exports = { collectForProperty, findStationId, getStationStats };
+module.exports = { collectForProperty, findStationId, findStationByHierarchy, getStationStats };
