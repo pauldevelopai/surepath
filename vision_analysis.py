@@ -1,11 +1,14 @@
 """
 SurePath Vision Analysis Module
-Uses Claude Vision (claude-opus-4-5 / claude-sonnet-4-5) to inspect property photos.
+Uses Claude Vision for property analysis.
+HuggingFace pre-classification for room/space detection and crack detection.
 """
 
 import anthropic
 import base64
 import json
+import sys
+import os
 import httpx
 from pathlib import Path
 from typing import Optional
@@ -37,8 +40,148 @@ Return ONLY valid JSON. No markdown fences, no commentary."""
 
 # Use opus for full reports, sonnet for bulk/cost-sensitive operations
 MODEL_FULL = "claude-opus-4-5-20250929"
-MODEL_SCALE = "claude-sonnet-4-5-20250514"
+MODEL_SCALE = "claude-sonnet-4-6"
 
+# HuggingFace model endpoints
+HF_SPACE_CLASSIFIER = "https://api-inference.huggingface.co/models/andupets/real-estate-image-classification-30classes"
+HF_CRACK_DETECTOR = "https://api-inference.huggingface.co/models/OpenSistemas/YOLOv8-crack-seg"
+
+# Space types that indicate exterior walls (eligible for crack detection)
+WALL_TYPES = {"wall", "facade", "house_facade", "exterior"}
+
+
+# ─── HuggingFace Pre-Classification ─────────────────────────────────────
+
+def classify_image_space(image_base64: str, hf_token: str) -> dict:
+    """Classify a property image into one of 30 real estate space types.
+
+    Uses andupets/real-estate-image-classification-30classes via HF Inference API.
+
+    Args:
+        image_base64: Base64-encoded image data.
+        hf_token: HuggingFace API token.
+
+    Returns:
+        {"label": "kitchen", "score": 0.92} for the top classification.
+        Returns {"label": "unknown", "score": 0} on any error.
+    """
+    try:
+        image_bytes = base64.b64decode(image_base64)
+        response = httpx.post(
+            HF_SPACE_CLASSIFIER,
+            headers={"Authorization": f"Bearer {hf_token}"},
+            content=image_bytes,
+            timeout=30.0,
+        )
+        if response.status_code != 200:
+            return {"label": "unknown", "score": 0}
+
+        results = response.json()
+        if isinstance(results, list) and len(results) > 0:
+            # HF returns sorted by score descending
+            top = results[0]
+            return {"label": top.get("label", "unknown"), "score": round(top.get("score", 0), 4)}
+
+        return {"label": "unknown", "score": 0}
+    except Exception:
+        return {"label": "unknown", "score": 0}
+
+
+def detect_wall_cracks(image_base64: str, hf_token: str) -> list | None:
+    """Detect cracks in wall/facade images using YOLOv8-crack-seg.
+
+    Only call this when the image is classified as a wall/facade type
+    with confidence > 0.55.
+
+    Args:
+        image_base64: Base64-encoded image data.
+        hf_token: HuggingFace API token.
+
+    Returns:
+        List of detection results from the model, or None on error.
+    """
+    try:
+        image_bytes = base64.b64decode(image_base64)
+        response = httpx.post(
+            HF_CRACK_DETECTOR,
+            headers={"Authorization": f"Bearer {hf_token}"},
+            content=image_bytes,
+            timeout=30.0,
+        )
+        if response.status_code != 200:
+            return None
+
+        results = response.json()
+        if isinstance(results, list):
+            return results
+        return None
+    except Exception:
+        return None
+
+
+def run_hf_prestage(image_base64: str, hf_token: str) -> dict:
+    """Run the full HF pre-classification pipeline on a single image.
+
+    Stage 1: Classify the image space type (kitchen, bathroom, facade, etc.)
+    Stage 2: If the image is a wall/facade with confidence > 0.55, run crack detection.
+
+    Args:
+        image_base64: Base64-encoded image data.
+        hf_token: HuggingFace API token.
+
+    Returns:
+        {
+            "space_type": "wall",
+            "space_confidence": 0.82,
+            "crack_detections": null | [...]
+        }
+    """
+    # Stage 1: Space classification
+    space = classify_image_space(image_base64, hf_token)
+
+    result = {
+        "space_type": space["label"],
+        "space_confidence": space["score"],
+        "crack_detections": None,
+    }
+
+    # Stage 2: Crack detection (only for wall/facade images with good confidence)
+    if space["label"] in WALL_TYPES and space["score"] > 0.55:
+        cracks = detect_wall_cracks(image_base64, hf_token)
+        result["crack_detections"] = cracks
+
+    return result
+
+
+# ─── CLI entry point for Node.js subprocess calls ───────────────────────
+
+def _cli_prestage():
+    """Called from Node.js via: python3 vision_analysis.py prestage <base64_file>
+
+    Reads base64 image data from a temp file, runs HF pre-stage,
+    prints JSON result to stdout.
+    """
+    if len(sys.argv) < 3:
+        print(json.dumps({"error": "Usage: vision_analysis.py prestage <base64_file>"}))
+        sys.exit(1)
+
+    hf_token = os.environ.get("HF_API_TOKEN", "")
+    if not hf_token:
+        print(json.dumps({"space_type": "unknown", "space_confidence": 0, "crack_detections": None}))
+        sys.exit(0)
+
+    base64_file = sys.argv[2]
+    try:
+        image_b64 = Path(base64_file).read_text().strip()
+    except Exception as e:
+        print(json.dumps({"error": f"Failed to read base64 file: {e}"}))
+        sys.exit(1)
+
+    result = run_hf_prestage(image_b64, hf_token)
+    print(json.dumps(result))
+
+
+# ─── Existing Claude Vision functions ────────────────────────────────────
 
 def _encode_image_file(path: str) -> tuple[str, str]:
     """Read a local image file and return (base64_data, media_type)."""
@@ -80,16 +223,6 @@ def analyse_single_image(
     client: Optional[anthropic.Anthropic] = None,
     model: str = MODEL_SCALE,
 ) -> dict:
-    """Analyse a single property image with Claude Vision.
-
-    Args:
-        image_source: URL or local file path to the image.
-        client: Anthropic client instance (created if not provided).
-        model: Model to use. Defaults to sonnet for cost efficiency.
-
-    Returns:
-        Parsed JSON dict with photo_type, findings, roof_material, etc.
-    """
     if client is None:
         client = anthropic.Anthropic()
 
@@ -120,20 +253,6 @@ def analyse_property_images(
     model: str = MODEL_SCALE,
     batch: bool = False,
 ) -> list[dict]:
-    """Analyse multiple property images.
-
-    For a single property report, pass all available photos. Each image is
-    analysed individually to get per-photo structured findings.
-
-    Args:
-        image_sources: List of URLs or local file paths.
-        client: Anthropic client instance.
-        model: Model to use.
-        batch: If True, send all images in one request for cross-referencing.
-
-    Returns:
-        List of analysis dicts, one per image (or one combined if batch=True).
-    """
     if client is None:
         client = anthropic.Anthropic()
 
@@ -152,7 +271,6 @@ def _analyse_batch(
     client: anthropic.Anthropic,
     model: str,
 ) -> dict:
-    """Send all images in a single request for cross-referenced analysis."""
     content_blocks = []
     for i, source in enumerate(image_sources, 1):
         content_blocks.append(
@@ -182,19 +300,6 @@ def _analyse_batch(
 
 
 def aggregate_findings(analyses: list[dict]) -> dict:
-    """Aggregate per-image analyses into a property-level summary.
-
-    Returns a dict suitable for populating property_reports fields:
-    - vision_findings: all findings across images
-    - asbestos_risk: worst-case risk level from indicators
-    - structural_flags: filtered structural findings
-    - compliance_flags: electrical/plumbing compliance issues
-    - repair_estimates: aggregated cost estimates
-    - insurance_risk_score: 1-10 derived from findings
-    - solar_suitability_score: 1-10 based on roof analysis
-    - trades_flags: prioritised trades work list
-    - roof_material, solar_installed, security_visible: from image analysis
-    """
     all_findings = []
     roof_material = "unknown"
     solar_installed = False
@@ -204,7 +309,6 @@ def aggregate_findings(analyses: list[dict]) -> dict:
 
     for analysis in analyses:
         if isinstance(analysis, list):
-            # Handle batch response returning array
             for item in analysis:
                 _extract(item, all_findings)
                 roof_material, solar_installed, roof_orientation, asbestos_indicators, security_visible = _merge_meta(
@@ -216,17 +320,12 @@ def aggregate_findings(analyses: list[dict]) -> dict:
                 analysis, roof_material, solar_installed, roof_orientation, asbestos_indicators, security_visible
             )
 
-    # Derive scores
     severity_weights = {"CRITICAL": 10, "HIGH": 7, "MEDIUM": 4, "LOW": 2, "COSMETIC": 1}
-    total_severity = sum(severity_weights.get(f.get("severity", "LOW"), 2) for f in all_findings)
-
-    # Insurance risk: higher severity = higher risk
     insurance_findings = [f for f in all_findings if "insurance" in f.get("relevant_to", [])]
     insurance_severity = sum(severity_weights.get(f.get("severity", "LOW"), 2) for f in insurance_findings)
     insurance_risk_score = min(10, max(1, insurance_severity // 2 + (3 if asbestos_indicators else 0)))
 
-    # Solar suitability: based on roof material, orientation, existing panels
-    solar_score = 5  # baseline
+    solar_score = 5
     if roof_orientation in ("north",):
         solar_score += 3
     elif roof_orientation in ("east", "west"):
@@ -236,28 +335,21 @@ def aggregate_findings(analyses: list[dict]) -> dict:
     if roof_material in ("IBR", "concrete_tile", "clay_tile"):
         solar_score += 1
     if roof_material == "corrugated_cement":
-        solar_score -= 1  # potential asbestos, harder install
+        solar_score -= 1
     if solar_installed:
-        solar_score += 1  # already proven viable
-    # Penalise for roof damage findings
+        solar_score += 1
     roof_issues = [f for f in all_findings if f.get("category") == "roof" and f.get("severity") in ("CRITICAL", "HIGH")]
     solar_score -= len(roof_issues)
     solar_suitability_score = min(10, max(1, solar_score))
 
-    # Crime risk score (from suburb_crime_score, not vision — placeholder)
-    crime_risk_score = 5  # default, updated from crime_incidents data
+    crime_risk_score = 5
 
-    # Structural flags
     structural_flags = [f for f in all_findings if f.get("category") in ("structure", "walls", "ceiling")]
-
-    # Compliance flags
     compliance_flags = [f for f in all_findings if f.get("category") in ("electrical", "plumbing")]
 
-    # Repair estimates aggregated
     total_min = sum(f.get("estimated_repair_cost_zar", {}).get("min", 0) for f in all_findings)
     total_max = sum(f.get("estimated_repair_cost_zar", {}).get("max", 0) for f in all_findings)
 
-    # Trades flags: group by category, sort by severity
     trades_by_category = {}
     for f in all_findings:
         if "trades" in f.get("relevant_to", []):
@@ -274,7 +366,6 @@ def aggregate_findings(analyses: list[dict]) -> dict:
         )
     ]
 
-    # Asbestos risk level
     asbestos_risk = "NEGLIGIBLE"
     if asbestos_indicators:
         asbestos_risk = "HIGH"
@@ -300,7 +391,6 @@ def aggregate_findings(analyses: list[dict]) -> dict:
 
 
 def _extract(analysis: dict, findings_list: list):
-    """Extract findings from a single analysis into the combined list."""
     for finding in analysis.get("findings", []):
         finding["photo_type"] = analysis.get("photo_type", "unknown")
         findings_list.append(finding)
@@ -314,7 +404,6 @@ def _merge_meta(
     asbestos_indicators: bool,
     security_visible: bool,
 ) -> tuple:
-    """Merge metadata from an analysis, preferring definitive values."""
     rm = analysis.get("roof_material", "unknown")
     if rm != "unknown":
         roof_material = rm
@@ -328,3 +417,13 @@ def _merge_meta(
     if analysis.get("security_visible"):
         security_visible = True
     return roof_material, solar_installed, roof_orientation, asbestos_indicators, security_visible
+
+
+# ─── Main ────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == "prestage":
+        _cli_prestage()
+    else:
+        print("Usage: python3 vision_analysis.py prestage <base64_file>")
+        sys.exit(1)

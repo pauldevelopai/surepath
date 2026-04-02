@@ -31,3 +31,4 @@ dashboard/public/property-images/
 # Editor
 .vscode/
 .idea/
+__pycache__/

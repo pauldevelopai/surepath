@@ -1,11 +1,16 @@
 const https = require('https');
 const http = require('http');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
 const pool = require('./db');
 
 const client = new Anthropic();
 
 const BATCH_SIZE = 6;
+const VISION_MODEL = 'claude-sonnet-4-6';
 
 const VISION_SYSTEM_PROMPT = `You are a certified property inspector with 20 years of South African experience.
 Analyse these property photos. Identify every visible risk, defect, or flag
@@ -166,15 +171,23 @@ function parseVisionResponse(text) {
 // ─── Core batch analysis ───────────────────────────────────────────────
 
 /**
- * Analyse a batch of up to 6 images with Claude Vision (claude-opus-4-5).
+ * Analyse a batch of up to 6 images with Claude Vision.
  * @param {Array<{base64: string, mediaType: string, url: string}>} images
+ * @param {Array<object>} [hfResults] - Optional HF pre-classification results (one per image)
  * @returns {Array<object>} Parsed analysis for each image
  */
-async function analyseBatch(images) {
+async function analyseBatch(images, hfResults) {
   const content = [];
 
   for (let i = 0; i < images.length; i++) {
-    content.push({ type: 'text', text: `Photo ${i + 1}:` });
+    // Prepend HF context if available
+    let photoLabel = `Photo ${i + 1}:`;
+    if (hfResults && hfResults[i] && hfResults[i].space_type !== 'unknown') {
+      const hf = hfResults[i];
+      const crackInfo = hf.crack_detections ? `${hf.crack_detections.length} detection(s)` : 'none';
+      photoLabel = `[HF Pre-analysis: space_type=${hf.space_type}, confidence=${hf.space_confidence}, crack_detections=${crackInfo}]\nPhoto ${i + 1}:`;
+    }
+    content.push({ type: 'text', text: photoLabel });
     content.push({
       type: 'image',
       source: {
@@ -194,7 +207,7 @@ async function analyseBatch(images) {
   });
 
   const message = await client.messages.create({
-    model: 'claude-3-haiku-20240307',
+    model: VISION_MODEL,
     max_tokens: 4096,
     system: getEnhancedPrompt(),
     messages: [{ role: 'user', content }],
@@ -203,7 +216,7 @@ async function analyseBatch(images) {
   // Log cost
   try {
     const { logClaude } = require('./costs');
-    await logClaude('claude-3-haiku-20240307', message.usage.input_tokens, message.usage.output_tokens, 'vision/analyse_batch');
+    await logClaude(VISION_MODEL, message.usage.input_tokens, message.usage.output_tokens, 'vision/analyse_batch');
   } catch {}
 
   const parsed = parseVisionResponse(message.content[0].text);
@@ -313,7 +326,7 @@ async function analysePropertyImages(imageUrls, propertyId) {
  */
 async function analyseStreetView(imageBase64) {
   const message = await client.messages.create({
-    model: 'claude-3-haiku-20240307',
+    model: VISION_MODEL,
     max_tokens: 4096,
     system: STREETVIEW_PROMPT,
     messages: [{
@@ -339,7 +352,7 @@ async function analyseStreetView(imageBase64) {
  */
 async function analyseSatellite(imageBase64) {
   const message = await client.messages.create({
-    model: 'claude-3-haiku-20240307',
+    model: VISION_MODEL,
     max_tokens: 4096,
     system: SATELLITE_PROMPT,
     messages: [{
@@ -469,12 +482,186 @@ function aggregateFindings(analyses) {
   };
 }
 
+// ─── HuggingFace Pre-Stage ───────────────────────────────────────────────
+
+/**
+ * Run HF pre-classification on a single image via Python subprocess.
+ * @param {string} imageBase64 - Base64-encoded image data
+ * @returns {Promise<{space_type: string, space_confidence: number, crack_detections: Array|null}>}
+ */
+function runHFPrestage(imageBase64) {
+  return new Promise((resolve) => {
+    const hfToken = process.env.HF_API_TOKEN;
+    if (!hfToken) {
+      resolve({ space_type: 'unknown', space_confidence: 0, crack_detections: null });
+      return;
+    }
+
+    // Write base64 to a temp file (avoids command-line length limits)
+    const tmpFile = path.join(os.tmpdir(), `surepath_hf_${Date.now()}_${Math.random().toString(36).slice(2)}.b64`);
+    fs.writeFileSync(tmpFile, imageBase64);
+
+    const pyScript = path.join(__dirname, 'vision_analysis.py');
+    const child = spawn('python3', [pyScript, 'prestage', tmpFile], {
+      env: { ...process.env, HF_API_TOKEN: hfToken },
+      timeout: 60000,
+    });
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => stdout += d);
+    child.stderr.on('data', (d) => stderr += d);
+
+    child.on('close', (code) => {
+      // Clean up temp file
+      try { fs.unlinkSync(tmpFile); } catch {}
+
+      if (code !== 0 || !stdout.trim()) {
+        if (stderr) console.error('[hf-prestage] stderr:', stderr.trim());
+        resolve({ space_type: 'unknown', space_confidence: 0, crack_detections: null });
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(stdout.trim()));
+      } catch {
+        resolve({ space_type: 'unknown', space_confidence: 0, crack_detections: null });
+      }
+    });
+
+    child.on('error', () => {
+      try { fs.unlinkSync(tmpFile); } catch {}
+      resolve({ space_type: 'unknown', space_confidence: 0, crack_detections: null });
+    });
+  });
+}
+
+/**
+ * Full vision pipeline with HuggingFace pre-classification.
+ *
+ * 1. Downloads all images
+ * 2. Runs HF pre-classification on each (space type + crack detection)
+ * 3. Passes HF context to Claude Vision for enhanced analysis
+ * 4. Stores HF results alongside vision_analysis in the database
+ *
+ * Falls back to standard analysePropertyImages() if HF_API_TOKEN is not set.
+ *
+ * @param {number} propertyId
+ * @param {string[]} imageUrls
+ * @returns {Promise<{analyses: object[], aggregated: object}|null>}
+ */
+async function analyseWithHFPrestage(propertyId, imageUrls) {
+  const hfToken = process.env.HF_API_TOKEN;
+  if (!hfToken) {
+    console.log('[vision] HF_API_TOKEN not set — falling back to standard pipeline');
+    return analysePropertyImages(imageUrls, propertyId);
+  }
+
+  // Step 1: Download all images
+  console.log(`[vision+hf] Downloading ${imageUrls.length} images...`);
+  const images = [];
+  for (const url of imageUrls) {
+    try {
+      const buffer = await downloadImage(url);
+      const mediaType = detectMediaType(url, buffer);
+      images.push({ url, base64: buffer.toString('base64'), mediaType });
+    } catch (err) {
+      console.error(`[vision+hf] Failed to download ${url}:`, err.message);
+    }
+  }
+
+  if (images.length === 0) {
+    console.error('[vision+hf] No images downloaded');
+    return null;
+  }
+
+  // Step 2: Run HF pre-classification on each image (parallel)
+  console.log(`[vision+hf] Running HF pre-classification on ${images.length} images...`);
+  const hfResults = await Promise.all(
+    images.map((img) => runHFPrestage(img.base64))
+  );
+
+  const classified = hfResults.filter(r => r.space_type !== 'unknown').length;
+  const crackDetected = hfResults.filter(r => r.crack_detections && r.crack_detections.length > 0).length;
+  console.log(`[vision+hf] HF classified ${classified}/${images.length} images, ${crackDetected} with crack detections`);
+
+  // Step 3: Batch into groups of 6 and analyse with Claude Vision + HF context
+  const batches = [];
+  const hfBatches = [];
+  for (let i = 0; i < images.length; i += BATCH_SIZE) {
+    batches.push(images.slice(i, i + BATCH_SIZE));
+    hfBatches.push(hfResults.slice(i, i + BATCH_SIZE));
+  }
+
+  console.log(`[vision+hf] Analysing ${images.length} images in ${batches.length} batch(es) with Claude Vision...`);
+  const allAnalyses = [];
+
+  for (let i = 0; i < batches.length; i++) {
+    console.log(`  Batch ${i + 1}/${batches.length} (${batches[i].length} images)...`);
+    const batchResults = await analyseBatch(batches[i], hfBatches[i]);
+
+    for (let j = 0; j < batchResults.length; j++) {
+      const imgIndex = i * BATCH_SIZE + j;
+      if (imgIndex < images.length) {
+        batchResults[j]._source_url = images[imgIndex].url;
+      }
+    }
+    allAnalyses.push(...batchResults);
+  }
+
+  // Step 4: Store results in database
+  console.log('[vision+hf] Storing results...');
+  for (let i = 0; i < allAnalyses.length; i++) {
+    const analysis = allAnalyses[i];
+    const sourceUrl = analysis._source_url || imageUrls[i] || 'unknown';
+    const hfData = hfResults[i] || null;
+
+    try {
+      const { rows: existing } = await pool.query(
+        'SELECT id FROM property_images WHERE property_id = $1 AND image_url = $2 LIMIT 1',
+        [propertyId, sourceUrl]
+      );
+
+      if (existing.length > 0) {
+        // Store vision analysis
+        await pool.query(
+          'UPDATE property_images SET vision_analysis = $1, analysed_at = NOW(), image_type = $2 WHERE id = $3',
+          [JSON.stringify(analysis), analysis.photo_type || 'other', existing[0].id]
+        );
+        // Merge HF pre-stage results into vision_analysis
+        if (hfData) {
+          await pool.query(
+            'UPDATE property_images SET vision_analysis = vision_analysis || $1::jsonb WHERE id = $2',
+            [JSON.stringify({ hf_prestage: hfData }), existing[0].id]
+          );
+        }
+      } else {
+        const fullAnalysis = hfData ? { ...analysis, hf_prestage: hfData } : analysis;
+        await pool.query(
+          `INSERT INTO property_images (property_id, source, image_url, image_type, vision_analysis, analysed_at)
+           VALUES ($1, 'analysed', $2, $3, $4, NOW())`,
+          [propertyId, sourceUrl, analysis.photo_type || 'other', JSON.stringify(fullAnalysis)]
+        );
+      }
+    } catch (err) {
+      console.error('[vision+hf] Failed to store:', err.message);
+    }
+  }
+
+  // Step 5: Aggregate
+  const aggregated = aggregateFindings(allAnalyses);
+
+  return { analyses: allAnalyses, aggregated, hfResults };
+}
+
 module.exports = {
   analysePropertyImages,
+  analyseWithHFPrestage,
   analyseStreetView,
   analyseSatellite,
   analyseBatch,
   aggregateFindings,
   downloadImage,
   parseVisionResponse,
+  runHFPrestage,
 };
