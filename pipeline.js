@@ -1,11 +1,14 @@
 const https = require('https');
 const http = require('http');
+const Anthropic = require('@anthropic-ai/sdk');
 const pool = require('./db');
 const maps = require('./maps');
 const windeed = require('./windeed');
 const vision = require('./vision');
 const { synthesiseReport } = require('./synthesis');
 const { renderReport } = require('./pdf');
+
+const anthropicClient = new Anthropic();
 
 // ─── Logging ───────────────────────────────────────────────────────────
 
@@ -99,6 +102,215 @@ function extractProperty24Data(html) {
   return { photoUrls, address };
 }
 
+// ─── PrivateProperty scraping ──────────────────────────────────────────
+
+function isPrivatePropertyURL(input) {
+  return /privateproperty\.co\.za|(?<![a-z])pp\.co\.za/i.test(input);
+}
+
+async function extractPrivatePropertyData(url) {
+  try {
+    const html = await fetchHTML(url);
+
+    // Listing ID from URL
+    const listingIdMatch = url.match(/(T\d+)/);
+    const listingId = listingIdMatch ? listingIdMatch[1] : null;
+
+    // Photos — find images.pp.co.za/listing/{listingId}/{imageId} in raw HTML
+    const photoUrls = [];
+    const photoSeen = new Set();
+    const ppImgRegex = /images\.pp\.co\.za\/listing\/(\d+)\/([A-Za-z0-9_-]+)/g;
+    let match;
+    while ((match = ppImgRegex.exec(html)) !== null) {
+      if (!photoSeen.has(match[2])) {
+        photoSeen.add(match[2]);
+        photoUrls.push(`https://images.pp.co.za/listing/${match[1]}/${match[2]}/1600/1066/contain/jpegorpng`);
+      }
+      if (photoUrls.length >= 16) break;
+    }
+
+    // Address — try JSON-LD first
+    let address = null;
+    const jsonldMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
+    if (jsonldMatches) {
+      for (const block of jsonldMatches) {
+        try {
+          const jsonStr = block.replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '');
+          const ld = JSON.parse(jsonStr);
+          const items = ld['@graph'] || [ld];
+          for (const item of items) {
+            if (item['@type'] === 'RealEstateListing' && item.about?.address) {
+              const a = item.about.address;
+              address = [a.streetAddress, a.addressLocality, a.addressRegion].filter(Boolean).join(', ');
+              if (address) break;
+            }
+          }
+        } catch {}
+        if (address) break;
+      }
+    }
+
+    // Fallback: h1
+    if (!address) {
+      const h1Match = html.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+      if (h1Match) address = h1Match[1].trim();
+    }
+
+    // Fallback: title tag — PP titles: "X Bedroom House for Sale in Suburb"
+    if (!address) {
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      if (titleMatch) {
+        const addrMatch = titleMatch[1].match(/(?:for\s+sale|to\s+rent)\s+in\s+(.+?)(?:\s*[-–|]|$)/i);
+        if (addrMatch) address = addrMatch[1].trim();
+      }
+    }
+
+    // Strip HTML from body for text matching
+    const bodyText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+    // Asking price
+    let askingPrice = null;
+    const priceMatch = bodyText.match(/R\s*([\d\s,]+)/);
+    if (priceMatch) {
+      const parsed = parseInt(priceMatch[1].replace(/[\s,]/g, ''));
+      if (parsed >= 50000) askingPrice = parsed;
+    }
+
+    // Bedrooms, bathrooms, floor area
+    const bedsMatch = bodyText.match(/(\d+)\s*Bed/i);
+    const bathsMatch = bodyText.match(/(\d+)\s*Bath/i);
+    const areaMatch = bodyText.match(/(\d+)\s*m²/);
+
+    // Property type
+    let propertyType = null;
+    const lower = bodyText.toLowerCase();
+    if (lower.includes('apartment') || lower.includes('flat')) propertyType = 'sectional';
+    else if (lower.includes('townhouse') || lower.includes('cluster')) propertyType = 'estate';
+    else if (lower.includes('house') && !lower.includes('townhouse')) propertyType = 'freehold';
+
+    // Description
+    let description = null;
+    const descMatch = html.match(/<[^>]*class="[^"]*(?:description|listing-body)[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i);
+    if (descMatch) {
+      description = descMatch[1].replace(/<[^>]+>/g, '').trim().substring(0, 1000) || null;
+    }
+
+    return {
+      photoUrls,
+      address,
+      askingPrice,
+      bedrooms: bedsMatch ? parseInt(bedsMatch[1]) : null,
+      bathrooms: bathsMatch ? parseInt(bathsMatch[1]) : null,
+      floorAreaSqm: areaMatch ? parseInt(areaMatch[1]) : null,
+      propertyType,
+      description,
+      listingId,
+    };
+  } catch (err) {
+    console.error(`[pipeline] extractPrivatePropertyData error: ${err.message}`);
+    return null;
+  }
+}
+
+// ─── Tease generation ─────────────────────────────────────────────────
+
+async function generateTease(extractedData) {
+  try {
+    // Step 1: Take first 3 photos
+    const photoSlice = (extractedData.photoUrls || []).slice(0, 3);
+    let topRiskFlags = [];
+    let hasAsbestosRisk = false;
+    let hasStructuralFlags = false;
+    let nicoTease = "I couldn't pull a full photo preview on this one. The full report will cover everything.";
+
+    if (photoSlice.length > 0) {
+      // Step 2: Download and encode images
+      const images = [];
+      for (const url of photoSlice) {
+        try {
+          const buffer = await vision.downloadImage(url);
+          const mediaType = url.includes('.png') ? 'image/png' : 'image/jpeg';
+          images.push({ base64: buffer.toString('base64'), mediaType, url });
+        } catch (err) {
+          console.error(`[tease] Download failed: ${err.message}`);
+        }
+      }
+
+      if (images.length > 0) {
+        // Step 3: Run vision analysis on the batch
+        const analyses = await vision.analyseBatch(images);
+
+        // Step 4: Extract top risk flags
+        const allFindings = [];
+        for (const a of analyses) {
+          if (Array.isArray(a.findings)) allFindings.push(...a.findings);
+        }
+
+        topRiskFlags = allFindings
+          .filter(f => f.severity === 'CRITICAL' || f.severity === 'HIGH')
+          .map(f => f.observation)
+          .filter(Boolean)
+          .slice(0, 3);
+
+        // Step 5: Check asbestos and structural flags
+        hasAsbestosRisk = analyses.some(a => a.asbestos_indicators === true);
+        hasStructuralFlags = allFindings.some(f =>
+          (f.category === 'structure' || f.category === 'walls') &&
+          (f.severity === 'CRITICAL' || f.severity === 'HIGH')
+        );
+
+        // Step 6: Generate Nico tease via Claude
+        const flagsText = topRiskFlags.length > 0
+          ? topRiskFlags.join('; ')
+          : 'none found in first 3 photos';
+
+        const message = await anthropicClient.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 150,
+          system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. You've seen a lot of properties and you don't sugarcoat things. Write exactly 2 sentences that tease the most important risk finding about this property without giving away the full detail. The reader is considering buying. Be honest but not alarmist. Do not mention AI. Do not use estate agent language. Do not say 'however' or 'that said'. Write in plain conversational South African English. If there are no risk flags, write 2 honest sentences about what looks reasonable and what a buyer should still verify in person.",
+          messages: [{
+            role: 'user',
+            content: `Property: ${extractedData.address || 'unknown address'}. Asking price: R${extractedData.askingPrice ? extractedData.askingPrice.toLocaleString('en-ZA') : 'unknown'}. Top risk flags from photo analysis: ${flagsText}.`,
+          }],
+        });
+
+        nicoTease = message.content[0].text;
+
+        // Log cost
+        try {
+          const { logClaude } = require('./costs');
+          await logClaude('claude-sonnet-4-6', message.usage.input_tokens, message.usage.output_tokens, 'tease/nico');
+        } catch {}
+      }
+    }
+
+    return {
+      address: extractedData.address,
+      askingPrice: extractedData.askingPrice,
+      bedrooms: extractedData.bedrooms,
+      bathrooms: extractedData.bathrooms,
+      topRiskFlags,
+      hasAsbestosRisk,
+      hasStructuralFlags,
+      nicoTease,
+      photoCount: (extractedData.photoUrls || []).length,
+    };
+  } catch (err) {
+    console.error(`[tease] Error: ${err.message}`);
+    return {
+      address: extractedData.address,
+      askingPrice: extractedData.askingPrice,
+      bedrooms: extractedData.bedrooms,
+      bathrooms: extractedData.bathrooms,
+      topRiskFlags: [],
+      hasAsbestosRisk: false,
+      hasStructuralFlags: false,
+      nicoTease: "I couldn't pull a full photo preview on this one. The full report will cover everything.",
+      photoCount: (extractedData.photoUrls || []).length,
+    };
+  }
+}
+
 // ─── Main pipeline ─────────────────────────────────────────────────────
 
 /**
@@ -130,6 +342,15 @@ async function generateReport(input, askingPrice, phoneNumber) {
       if (!address) {
         throw new Error('Could not extract address from Property24 listing');
       }
+    } else if (isPrivatePropertyURL(input)) {
+      log(1, `Fetching PrivateProperty listing: ${input}`);
+      const extracted = await extractPrivatePropertyData(input);
+      if (!extracted) throw new Error('Could not fetch PrivateProperty listing');
+      photoUrls = extracted.photoUrls || [];
+      address = extracted.address;
+      if (!askingPrice && extracted.askingPrice) askingPrice = extracted.askingPrice;
+      log(1, `Extracted ${photoUrls.length} photos, address: "${address}", price: R${askingPrice}`);
+      if (!address) throw new Error('Could not extract address from PrivateProperty listing');
     } else {
       address = input;
       log(1, `Using address directly: "${address}"`);
@@ -418,6 +639,10 @@ async function generateReport(input, askingPrice, phoneNumber) {
 
 module.exports = {
   generateReport,
+  generateTease,
+  fetchHTML,
   isProperty24URL,
   extractProperty24Data,
+  isPrivatePropertyURL,
+  extractPrivatePropertyData,
 };
