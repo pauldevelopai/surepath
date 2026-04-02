@@ -197,7 +197,25 @@ function parseVisionResponse(text) {
   if (jsonEnd > 0 && jsonEnd < cleaned.length - 1) {
     cleaned = cleaned.substring(0, jsonEnd + 1);
   }
-  return JSON.parse(cleaned);
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    // Fix common JSON issues from Claude: trailing commas, unescaped quotes in strings
+    let fixed = cleaned
+      .replace(/,\s*([}\]])/g, '$1')           // trailing commas
+      .replace(/:\s*'([^']*)'/g, ': "$1"')      // single quotes → double quotes
+      .replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":') // unquoted keys
+      .replace(/\n/g, ' ');                      // newlines in strings
+
+    try {
+      return JSON.parse(fixed);
+    } catch {
+      // Last resort: return a minimal valid response so pipeline doesn't crash
+      console.error('[vision] JSON parse failed, returning empty analysis. First 200 chars:', cleaned.substring(0, 200));
+      return { photo_type: 'unknown', findings: [], roof_material: 'unknown', solar_installed: false, asbestos_indicators: false, security_visible: false };
+    }
+  }
 }
 
 // ─── Core batch analysis ───────────────────────────────────────────────

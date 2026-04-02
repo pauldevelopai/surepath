@@ -419,9 +419,12 @@ async function runPipelineAsync(order, conv) {
   const phoneNumber = order.phone_number;
 
   try {
-    await sendWhatsApp(phoneNumber,
-      'Payment received! Generating your Surepath report now. This takes about 10-15 minutes.'
-    );
+    // Only send "payment received" if this was a real payment (not test bypass)
+    if (order.payment_status !== 'test_bypass') {
+      await sendWhatsApp(phoneNumber,
+        'Payment received! Generating your Surepath report now. This takes about 10-15 minutes.'
+      );
+    }
 
     const input = conv.input_data;
     const askingPrice = conv.asking_price;
