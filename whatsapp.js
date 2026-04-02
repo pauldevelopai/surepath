@@ -12,6 +12,12 @@ const {
 
 const router = express.Router();
 
+// Serve PDF reports so Twilio can fetch them for WhatsApp delivery
+const reportPath = require('path').join(__dirname, 'reports');
+const reportFs = require('fs');
+if (!reportFs.existsSync(reportPath)) reportFs.mkdirSync(reportPath, { recursive: true });
+router.use('/reports', express.static(reportPath));
+
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_WHATSAPP_NUMBER = process.env.TWILIO_WHATSAPP_NUMBER;
@@ -440,21 +446,25 @@ async function runPipelineAsync(order, conv) {
 
     await upsertConversation(phoneNumber, { state: 'report_ready' });
 
-    if (result.pdf_url) {
-      await sendWhatsApp(phoneNumber,
-        `Your Surepath report is attached.\n\n` +
-        `Decision: *${result.decision}*\n` +
-        `${result.decision_reasoning}\n\n` +
-        `If you have questions about what we found, reply here.`,
-        result.pdf_url
-      );
+    // Make PDF URL publicly accessible for Twilio to fetch
+    let publicPdfUrl = result.pdf_url;
+    if (publicPdfUrl && publicPdfUrl.startsWith('/reports/')) {
+      // Local PDF — serve via ngrok/server
+      const serverHost = process.env.SERVER_HOST || 'localhost:3000';
+      const proto = serverHost.includes('ngrok') || serverHost.includes('surepath.co.za') ? 'https' : 'http';
+      publicPdfUrl = `${proto}://${serverHost}${publicPdfUrl}`;
+    }
+
+    const reportMsg = `*Your Surepath Report is Ready*\n\n` +
+      `Decision: *${result.decision}*\n` +
+      `${result.decision_reasoning}\n\n` +
+      `If you have questions about what we found, reply here.\n\nTo check another property, send me a new listing link.`;
+
+    if (publicPdfUrl) {
+      console.log(`[pipeline] Sending PDF: ${publicPdfUrl}`);
+      await sendWhatsApp(phoneNumber, reportMsg, publicPdfUrl);
     } else {
-      await sendWhatsApp(phoneNumber,
-        `Your Surepath report is ready.\n\n` +
-        `Decision: *${result.decision}*\n` +
-        `${result.decision_reasoning}\n\n` +
-        `If you have questions about what we found, reply here.`
-      );
+      await sendWhatsApp(phoneNumber, reportMsg);
     }
 
     console.log(`[pipeline] Report ${result.report_id} delivered to ${phoneNumber}`);

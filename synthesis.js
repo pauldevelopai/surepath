@@ -294,12 +294,37 @@ ${JSON.stringify(context, null, 2)}`,
     }],
   });
 
-  // Parse response
+  // Parse response — resilient to malformed JSON from Claude
   let reportText = message.content[0].text.trim();
   if (reportText.startsWith('```')) {
     reportText = reportText.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
   }
-  const report = JSON.parse(reportText);
+  // Strip prose before/after JSON
+  const jStart = reportText.search(/[\[{]/);
+  if (jStart > 0) reportText = reportText.substring(jStart);
+  const jEnd = Math.max(reportText.lastIndexOf('}'), reportText.lastIndexOf(']'));
+  if (jEnd > 0 && jEnd < reportText.length - 1) reportText = reportText.substring(0, jEnd + 1);
+
+  let report;
+  try {
+    report = JSON.parse(reportText);
+  } catch (e) {
+    // Fix trailing commas and retry
+    const fixed = reportText.replace(/,\s*([}\]])/g, '$1').replace(/\n/g, ' ');
+    try {
+      report = JSON.parse(fixed);
+    } catch {
+      console.error('[synthesis] JSON parse failed, using fallback report');
+      report = {
+        decision: 'INSPECT_FIRST',
+        decision_reasoning: 'Report synthesis produced malformed output. Manual inspection recommended.',
+        price_verdict: null,
+        comparables: [],
+        suburb_intelligence: {},
+        negotiation_intel: [],
+      };
+    }
+  }
 
   // Track API cost — use actual Haiku pricing
   const inputTokens = message.usage.input_tokens || 0;
