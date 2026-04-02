@@ -94,8 +94,14 @@ async function findStationId(stationName) {
     // Exact name match
     let match = precincts.find(p => p.text.toLowerCase() === searchTerm);
 
-    // Partial match (precinct name contains suburb or vice versa)
-    if (!match) match = precincts.find(p => p.text.toLowerCase().includes(searchTerm) || searchTerm.includes(p.text.toLowerCase()));
+    // Partial match — only if the precinct name is a close match (avoid "Umhlanga" matching "Langa")
+    if (!match) {
+      match = precincts.find(p => {
+        const pName = p.text.toLowerCase();
+        // Precinct name must be at least 70% of the search term length to avoid false partials
+        return (pName.includes(searchTerm) || searchTerm.includes(pName)) && pName.length >= searchTerm.length * 0.7;
+      });
+    }
 
     // Word-level match (any word in the suburb matches a precinct name)
     if (!match) {
@@ -130,11 +136,71 @@ async function findStationId(stationName) {
   return null;
 }
 
+// Known suburb-to-station mappings for areas without their own police station
+const SUBURB_STATION_MAP = {
+  'ballito': 'kwadukuza',
+  'salt rock': 'umhlali',
+  'zimbali': 'kwadukuza',
+  'dolphin coast': 'kwadukuza',
+  'simbithi': 'kwadukuza',
+  'tinley manor': 'kwadukuza',
+  'sheffield beach': 'umhlali',
+  'bryanston': 'randburg',
+  'lonehill': 'randburg',
+  'fourways': 'douglasdale',
+  'dainfern': 'douglasdale',
+  'constantia': 'wynberg',
+  'tokai': 'diep river',
+  'newlands': 'claremont',
+  'bishops court': 'wynberg',
+  'kenilworth': 'claremont',
+  'plumstead': 'diep river',
+  'observatory': 'woodstock',
+  'mowbray': 'woodstock',
+  'rondebosch': 'rondebosch',
+  'green point': 'sea point',
+  'mouille point': 'sea point',
+  'waterfront': 'sea point',
+  'camps bay': 'camps bay',
+  'bantry bay': 'sea point',
+  'clifton': 'sea point',
+  'hout bay': 'hout bay',
+  'century city': 'milnerton',
+  'blouberg': 'table view',
+  'parklands': 'table view',
+  'umhlanga': 'durban north',
+  'la lucia': 'durban north',
+  'morningside': 'berea',
+  'waterfall': 'hillcrest',
+  'kloof': 'hillcrest',
+  'illovo': 'sandringham',
+  'craighall': 'norwood',
+  'parkhurst': 'norwood',
+  'parktown north': 'norwood',
+  'melville': 'brixton',
+  'greenside': 'norwood',
+  'emmarentia': 'linden',
+  'northcliff': 'linden',
+  'bedfordview': 'bedfordview',
+  'sunninghill': 'sandton',
+};
+
 /**
  * Find the nearest police station for a given lat/lng using the precincts list.
- * Tries common nearby suburb/area names from the geocoded address.
+ * Tries known mappings, then suburb/city/address parts.
  */
 async function findNearestStation(suburb, city, addressParts) {
+  // Try known suburb-to-station mappings first (exact and partial)
+  const suburbLower = (suburb || '').toLowerCase();
+  const cityLower = (city || '').toLowerCase();
+  for (const [key, station] of Object.entries(SUBURB_STATION_MAP)) {
+    if (suburbLower === key || suburbLower.includes(key) || key.includes(suburbLower) ||
+        cityLower === key || cityLower.includes(key)) {
+      const mapped = await findStationId(station);
+      if (mapped) return mapped;
+    }
+  }
+
   const candidates = new Set();
 
   // Add the suburb and city

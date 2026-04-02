@@ -264,8 +264,11 @@ export const POST = withAuth(async (req: NextRequest, { params }: { params: Prom
       }
 
       const vision = await loadModule("vision");
-      // Use HF-enhanced pipeline if available, falls back automatically if no HF_API_TOKEN
-      const result = await vision.analyseWithHFPrestage(parseInt(id), httpUrls);
+      // Use HF-enhanced pipeline if available, fall back to standard if function not found (module cache)
+      const analyseFn = vision.analyseWithHFPrestage || vision.analysePropertyImages;
+      const result = typeof analyseFn === 'function'
+        ? await (vision.analyseWithHFPrestage ? analyseFn(parseInt(id), httpUrls) : analyseFn(httpUrls, parseInt(id)))
+        : null;
       if (!result) return NextResponse.json({ ok: false, message: "Vision analysis returned no results" });
 
       // Store aggregated results into property + report
