@@ -42,20 +42,76 @@ Return ONLY valid JSON. No markdown fences, no commentary."""
 MODEL_FULL = "claude-opus-4-5-20250929"
 MODEL_SCALE = "claude-sonnet-4-6"
 
-# HuggingFace model endpoints
-HF_SPACE_CLASSIFIER = "https://api-inference.huggingface.co/models/andupets/real-estate-image-classification-30classes"
-HF_CRACK_DETECTOR = "https://api-inference.huggingface.co/models/OpenSistemas/YOLOv8-crack-seg"
+# HuggingFace model endpoints (router API — replaces deprecated api-inference)
+HF_ROUTER_BASE = "https://router.huggingface.co/hf-inference/models"
+HF_SPACE_CLASSIFIER = f"{HF_ROUTER_BASE}/google/vit-base-patch16-224"
+HF_CRACK_DETECTOR = f"{HF_ROUTER_BASE}/facebook/detr-resnet-50"
 
 # Space types that indicate exterior walls (eligible for crack detection)
-WALL_TYPES = {"wall", "facade", "house_facade", "exterior"}
+WALL_TYPES = {"wall", "facade", "house_facade", "exterior", "patio", "mobile_home", "church"}
+
+# Map ImageNet labels to property-relevant space types
+IMAGENET_TO_SPACE = {
+    # Exterior
+    "patio, terrace": "exterior",
+    "mobile home, manufactured home": "exterior",
+    "church, church building": "facade",
+    "palace": "facade",
+    "castle": "facade",
+    "monastery": "facade",
+    "mosque": "facade",
+    "barn": "exterior",
+    "boathouse": "exterior",
+    "greenhouse, nursery, glasshouse": "exterior",
+    "picket fence, paling": "exterior",
+    "stone wall": "wall",
+    "worm fence, snake fence": "exterior",
+    # Interior - Kitchen
+    "dining table, board": "kitchen",
+    "plate rack": "kitchen",
+    "refrigerator, icebox": "kitchen",
+    "Dutch oven": "kitchen",
+    "stove": "kitchen",
+    "microwave, microwave oven": "kitchen",
+    "toaster": "kitchen",
+    # Interior - Bathroom
+    "bathtub, bathing tub, bath, tub": "bathroom",
+    "washbasin, handbasin, washbowl": "bathroom",
+    "toilet seat": "bathroom",
+    "shower curtain": "bathroom",
+    "medicine chest, medicine cabinet": "bathroom",
+    "tub, vat": "bathroom",
+    # Interior - Living areas
+    "entertainment center": "living_room",
+    "home theater, home theatre": "living_room",
+    "television, television system": "living_room",
+    "rocking chair, rocker": "living_room",
+    "studio couch, day bed": "living_room",
+    # Interior - Bedroom
+    "four-poster": "bedroom",
+    "cradle": "bedroom",
+    "quilt, comforter, comfort, puff": "bedroom",
+    # Structure
+    "window shade": "interior",
+    "window screen": "interior",
+    "sliding door": "interior",
+    "steel arch bridge": "structure",
+    "suspension bridge": "structure",
+    # Garden/Pool
+    "swimming trunks, bathing trunks": "pool",
+    "fountain": "garden",
+    "park bench": "garden",
+    "lawn mower, mower": "garden",
+}
 
 
 # ─── HuggingFace Pre-Classification ─────────────────────────────────────
 
 def classify_image_space(image_base64: str, hf_token: str) -> dict:
-    """Classify a property image into one of 30 real estate space types.
+    """Classify a property image into a property-relevant space type.
 
-    Uses andupets/real-estate-image-classification-30classes via HF Inference API.
+    Uses google/vit-base-patch16-224 via HF Router API, then maps
+    ImageNet labels to property space types (kitchen, bathroom, exterior, etc.)
 
     Args:
         image_base64: Base64-encoded image data.
@@ -69,7 +125,10 @@ def classify_image_space(image_base64: str, hf_token: str) -> dict:
         image_bytes = base64.b64decode(image_base64)
         response = httpx.post(
             HF_SPACE_CLASSIFIER,
-            headers={"Authorization": f"Bearer {hf_token}"},
+            headers={
+                "Authorization": f"Bearer {hf_token}",
+                "Content-Type": "image/jpeg",
+            },
             content=image_bytes,
             timeout=30.0,
         )
@@ -78,9 +137,14 @@ def classify_image_space(image_base64: str, hf_token: str) -> dict:
 
         results = response.json()
         if isinstance(results, list) and len(results) > 0:
-            # HF returns sorted by score descending
+            # Map the top ImageNet label to a property space type
             top = results[0]
-            return {"label": top.get("label", "unknown"), "score": round(top.get("score", 0), 4)}
+            raw_label = top.get("label", "unknown")
+            score = round(top.get("score", 0), 4)
+
+            # Map to property space type
+            mapped = IMAGENET_TO_SPACE.get(raw_label, "other")
+            return {"label": mapped, "score": score, "raw_label": raw_label}
 
         return {"label": "unknown", "score": 0}
     except Exception:
@@ -88,7 +152,10 @@ def classify_image_space(image_base64: str, hf_token: str) -> dict:
 
 
 def detect_wall_cracks(image_base64: str, hf_token: str) -> list | None:
-    """Detect cracks in wall/facade images using YOLOv8-crack-seg.
+    """Detect objects/features in wall/facade images using DETR.
+
+    Uses facebook/detr-resnet-50 for object detection on exterior images.
+    Useful for detecting structural elements, damage indicators, and features.
 
     Only call this when the image is classified as a wall/facade type
     with confidence > 0.55.
@@ -104,7 +171,10 @@ def detect_wall_cracks(image_base64: str, hf_token: str) -> list | None:
         image_bytes = base64.b64decode(image_base64)
         response = httpx.post(
             HF_CRACK_DETECTOR,
-            headers={"Authorization": f"Bearer {hf_token}"},
+            headers={
+                "Authorization": f"Bearer {hf_token}",
+                "Content-Type": "image/jpeg",
+            },
             content=image_bytes,
             timeout=30.0,
         )
