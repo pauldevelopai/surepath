@@ -216,42 +216,53 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
   try {
     const conv = await getConversation(phoneNumber);
     const state = conv ? conv.state : 'awaiting_property';
+    const normalised = body.toLowerCase().trim();
+    const url = extractURL(body);
+    const hasListingURL = url && (isProperty24URL(url) || isPrivatePropertyURL(url));
 
+    // ── GLOBAL: Reset commands work from ANY state ──────────────
+    const isReset = ['start again', 'reset', 'new', 'new property', 'start over', 'restart', 'cancel', 'menu', 'hi', 'hello', 'hey'].includes(normalised);
+
+    if (isReset && state !== 'awaiting_property') {
+      await upsertConversation(phoneNumber, { state: 'awaiting_property' });
+      await sendWhatsApp(from,
+        "No problem — let's start fresh.\n\nSend me a PrivateProperty or Property24 listing link and I'll give you a quick risk preview before you decide on the full report."
+      );
+      res.type('text/xml').send('<Response></Response>');
+      return;
+    }
+
+    // ── GLOBAL: Listing URL sent from ANY state → start new analysis ──
+    if (hasListingURL && state !== 'scraping') {
+      await sendWhatsApp(from, 'On it — pulling the listing now. Give me 30 seconds. ⏳');
+      await upsertConversation(phoneNumber, {
+        state: 'scraping',
+        input_data: url,
+        listing_url: url,
+      });
+      runTeaseAsync(from, phoneNumber, url);
+      res.type('text/xml').send('<Response></Response>');
+      return;
+    }
+
+    // ── STATE-SPECIFIC HANDLING ─────────────────────────────────
     switch (state) {
 
-      // ── AWAITING PROPERTY ───────────────────────────────────────
       case 'awaiting_property': {
-        const url = extractURL(body);
-
-        if (url && (isProperty24URL(url) || isPrivatePropertyURL(url))) {
-          await sendWhatsApp(from, 'On it — pulling the listing now. Give me 30 seconds. ⏳');
-          await upsertConversation(phoneNumber, {
-            state: 'scraping',
-            input_data: url,
-            listing_url: url,
-          });
-          // Fire and forget — do NOT await
-          runTeaseAsync(from, phoneNumber, url);
-        } else {
-          await upsertConversation(phoneNumber, { state: 'awaiting_property' });
-          await sendWhatsApp(from,
-            "Welcome to Surepath 👋\n\nSend me a PrivateProperty or Property24 listing link and I'll show you what to watch out for before you decide whether to buy the full report."
-          );
-        }
+        await upsertConversation(phoneNumber, { state: 'awaiting_property' });
+        await sendWhatsApp(from,
+          "Welcome to Surepath 👋\n\nI check properties for hidden risks before you buy.\n\nPaste a PrivateProperty or Property24 listing link and I'll pull the photos, analyse them for defects, and give you a quick preview — free.\n\nIf you want the full report with deeds, comparable sales, and a buy/negotiate/walk away verdict, it's R149."
+        );
         break;
       }
 
-      // ── SCRAPING (tease in progress) ────────────────────────────
       case 'scraping': {
         await sendWhatsApp(from, 'Still pulling this one — almost done. 🔍');
         break;
       }
 
-      // ── TEASE SENT — awaiting buy decision ──────────────────────
       case 'tease_sent': {
-        const normalised = body.toLowerCase().trim();
-
-        if (['yes', 'ja', '1', 'buy', 'full report', 'yes please', 'yep', 'sure', 'ok', 'okay'].includes(normalised)) {
+        if (['yes', 'ja', '1', 'buy', 'full report', 'yes please', 'yep', 'sure', 'ok', 'okay', 'do it', 'go ahead', 'lets go', "let's go"].includes(normalised)) {
           // TEST MODE: skip payment, go straight to report generation
           const erfNumber = `PP_WA_${phoneNumber}_${Date.now()}`;
           const { rows: propRows } = await pool.query(
@@ -272,39 +283,39 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
           const orderId = orderRows[0].id;
 
           await upsertConversation(phoneNumber, {
-            state: 'payment_pending',
+            state: 'generating',
             order_id: orderId,
             asking_price: conv.asking_price || null,
           });
 
-          await sendWhatsApp(from, 'Generating your full report now — this takes about 10 minutes. ⏳');
+          await sendWhatsApp(from, "Generating your full Surepath report now. I'll check deeds history, comparable sales, run all the risk analysis, and give you a clear verdict.\n\nThis takes about 10-15 minutes — I'll message you when it's ready. ⏳");
 
-          // Run pipeline directly (no payment needed in test mode)
           const order = { id: orderId, phone_number: phoneNumber, property_id: propertyId };
           runPipelineAsync(order, conv);
 
-        } else if (['no', 'nee', '2', 'no thanks', 'nope', 'skip', 'not now'].includes(normalised)) {
+        } else if (['no', 'nee', '2', 'no thanks', 'nope', 'skip', 'not now', 'pass'].includes(normalised)) {
           await upsertConversation(phoneNumber, { state: 'awaiting_property' });
-          await sendWhatsApp(from, 'No problem. Send me another listing whenever you\'re ready.');
+          await sendWhatsApp(from, "No problem. Send me another listing link whenever you're ready — I'll pull a free preview on that one too.");
 
         } else {
-          await sendWhatsApp(from, 'Reply *1* to get the full report (R149) or *2* to pass on this one.');
+          // Don't just repeat the prompt — acknowledge what they said
+          await sendWhatsApp(from, `I need a quick yes or no on that property.\n\nReply *1* for the full report or *2* to skip.\n\nOr paste a new listing link to check a different property.`);
         }
         break;
       }
 
-      // ── PAYMENT PENDING ─────────────────────────────────────────
+      case 'generating':
       case 'payment_pending': {
         await sendWhatsApp(from,
-          'Waiting for payment confirmation — once it clears your report will be on its way. Usually a minute or two. ⏳'
+          "Your report is being generated — I'll send it as soon as it's ready. Usually 10-15 minutes.\n\nIn the meantime, you can paste another listing link and I'll queue a preview on that one too."
         );
+        // If they sent a new URL, the global handler above already caught it
         break;
       }
 
-      // ── REPORT READY ────────────────────────────────────────────
       case 'report_ready': {
         await sendWhatsApp(from,
-          "Your report was already delivered. Got questions about what we found? Reply here.\n\nTo check another property, just send me a new listing link."
+          "Your report was delivered above ☝️\n\nGot questions about what I found? Ask away — or send me a new listing link to check another property."
         );
         await upsertConversation(phoneNumber, { state: 'awaiting_property' });
         break;
@@ -313,7 +324,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
       default: {
         await upsertConversation(phoneNumber, { state: 'awaiting_property' });
         await sendWhatsApp(from,
-          "Welcome to Surepath 👋\n\nSend me a PrivateProperty or Property24 listing link and I'll show you what to watch out for before you decide whether to buy the full report."
+          "Welcome to Surepath 👋\n\nPaste a PrivateProperty or Property24 listing link and I'll give you a free risk preview."
         );
       }
     }
