@@ -4,7 +4,11 @@
   "description": "",
   "main": "db.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "collect:gvr": "node collect-gvr.js",
+    "collect:gvr:metro": "node collect-gvr.js --metro",
+    "migrate": "node migrate.js",
+    "test:vision": "node test-vision-modules.js"
   },
   "keywords": [],
   "author": "",

@@ -1,10 +1,3 @@
-// If DeedsWeb credentials are configured, use the direct government API
-// instead of the Windeed reseller. Cheaper per query, no markup.
-if (process.env.DEEDSWEB_USERNAME && process.env.DEEDSWEB_PASSWORD) {
-  module.exports = require('./deedsweb');
-  return;
-}
-
 const https = require('https');
 const { URL } = require('url');
 const pool = require('./db');

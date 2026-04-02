@@ -235,6 +235,18 @@ async function main() {
   const start = Date.now();
 
   try {
+    // GVR collection — Sundays only (free municipal data)
+    let gvr = { inserted: 0, updated: 0, skipped: 0 };
+    if (new Date().getDay() === 0) {
+      await log('Sunday — running GVR supplementary roll updates');
+      try {
+        const { collectAllGVRs } = require('./collect-gvr');
+        gvr = await collectAllGVRs();
+      } catch (err) {
+        await log(`GVR ERROR: ${err.message}`);
+      }
+    }
+
     // Run in order of priority
     const crime = await collectCrimeData();
     const solar = await collectSolarData();
@@ -244,6 +256,7 @@ async function main() {
 
     const elapsed = Math.round((Date.now() - start) / 1000);
     await log(`=== Nightly Collection Complete (${elapsed}s) ===`);
+    if (gvr.inserted > 0 || gvr.updated > 0) await log(`  GVR: ${gvr.inserted} new, ${gvr.updated} updated`);
     await log(`  Crime: ${crime.success} OK, ${crime.failed} failed`);
     await log(`  Solar: ${solar.success} OK, ${solar.failed} failed`);
     await log(`  Water: ${water.success} OK, ${water.failed} failed`);
@@ -254,7 +267,7 @@ async function main() {
     await pool.query(`
       INSERT INTO api_costs (service, endpoint, cost_usd, cost_zar, model)
       VALUES ('nightly_run', 'summary', 0, 0, $1)`,
-      [JSON.stringify({ crime, solar, water, discovery, refresh, elapsed })]
+      [JSON.stringify({ gvr, crime, solar, water, discovery, refresh, elapsed })]
     );
   } catch (err) {
     await log(`FATAL: ${err.message}`);
