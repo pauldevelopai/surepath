@@ -56,7 +56,7 @@ async function recordSource(propertyId, sourceName, exactUrl, confidence, fields
   }
 
   await pool.query(
-    `UPDATE properties SET data_sources = data_sources || $1::jsonb WHERE id = $2`,
+    `UPDATE properties SET data_sources = COALESCE(data_sources, '{}'::jsonb) || $1::jsonb WHERE id = $2`,
     [JSON.stringify(updates), propertyId]
   );
 }

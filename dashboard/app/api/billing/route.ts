@@ -130,6 +130,51 @@ export const GET = withAuth(async () => {
     ORDER BY ac.created_at DESC LIMIT 50
   `);
 
+  // WhatsApp / Twilio costs
+  // Twilio WhatsApp pricing: ~$0.005 per message (utility), ~$0.0042 per session message
+  // Using $0.005 per outbound message as estimate
+  const TWILIO_COST_PER_MSG_USD = 0.005;
+  const whatsapp = await query(`
+    SELECT
+      COUNT(*) AS total_messages,
+      COUNT(*) FILTER (WHERE direction = 'outbound') AS outbound,
+      COUNT(*) FILTER (WHERE direction = 'inbound') AS inbound,
+      COUNT(*) FILTER (WHERE media_url IS NOT NULL) AS with_media,
+      COUNT(DISTINCT phone_number) AS unique_users,
+      MIN(created_at) AS first_message,
+      MAX(created_at) AS last_message
+    FROM whatsapp_messages
+  `);
+
+  const whatsappToday = await query(`
+    SELECT
+      COUNT(*) FILTER (WHERE direction = 'outbound') AS outbound,
+      COUNT(*) FILTER (WHERE direction = 'inbound') AS inbound
+    FROM whatsapp_messages WHERE created_at >= CURRENT_DATE
+  `);
+
+  const whatsappMonth = await query(`
+    SELECT
+      COUNT(*) FILTER (WHERE direction = 'outbound') AS outbound,
+      COUNT(*) FILTER (WHERE direction = 'inbound') AS inbound
+    FROM whatsapp_messages WHERE created_at >= date_trunc('month', NOW())
+  `);
+
+  const whatsappDaily = await query(`
+    SELECT created_at::date AS day, direction, COUNT(*) AS cnt
+    FROM whatsapp_messages
+    WHERE created_at >= NOW() - INTERVAL '30 days'
+    GROUP BY day, direction ORDER BY day
+  `);
+
+  const whatsappRecent = await query(`
+    SELECT phone_number, direction, body, media_url, created_at
+    FROM whatsapp_messages ORDER BY created_at DESC LIMIT 30
+  `);
+
+  const wa = whatsapp[0] || {};
+  const waOutbound = Number(wa.outbound || 0);
+
   return NextResponse.json({
     totals: totals[0],
     today: today[0],
@@ -141,5 +186,15 @@ export const GET = withAuth(async () => {
     data_size: dataSize[0],
     avg_cost: avgCost[0] || { avg_cost_zar: 0, max_cost_zar: 0, min_cost_zar: 0 },
     recent,
+    whatsapp: {
+      ...wa,
+      cost_per_msg_usd: TWILIO_COST_PER_MSG_USD,
+      total_cost_usd: waOutbound * TWILIO_COST_PER_MSG_USD,
+      total_cost_zar: waOutbound * TWILIO_COST_PER_MSG_USD * 18.5,
+      today: whatsappToday[0] || { outbound: 0, inbound: 0 },
+      month: whatsappMonth[0] || { outbound: 0, inbound: 0 },
+      daily: whatsappDaily,
+      recent: whatsappRecent,
+    },
   });
 });

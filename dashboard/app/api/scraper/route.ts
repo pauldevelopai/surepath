@@ -4,8 +4,9 @@ import { withAuth } from "@/lib/auth";
 import { spawn } from "child_process";
 import path from "path";
 
-// Track running scraper process
-let scraperProcess: ReturnType<typeof spawn> | null = null;
+// Track running scraper processes — keyed by name (e.g. "pp", "p24", "pp_2")
+const scraperProcesses: Map<string, { proc: ReturnType<typeof spawn>; log: string[]; startedAt: Date }> = new Map();
+// Legacy single-process variables for backwards compat with GET
 let scraperLog: string[] = [];
 
 export const GET = withAuth(async () => {
@@ -35,7 +36,10 @@ export const GET = withAuth(async () => {
     jobs,
     summary,
     totals: totals[0],
-    scraper_running: scraperProcess !== null && !scraperProcess.killed,
+    scraper_running: scraperProcesses.size > 0,
+    scraper_processes: Array.from(scraperProcesses.entries()).map(([name, s]) => ({
+      name, running: !s.proc.killed, started: s.startedAt, log_lines: s.log.length,
+    })),
     scraper_log: scraperLog.slice(-50),
   });
 });
@@ -44,19 +48,24 @@ export const POST = withAuth(async (req: NextRequest) => {
   const { action, suburb, delay, max_pages, refresh, source, province, province_code, start_page } = await req.json();
 
   if (action === "start") {
-    if (scraperProcess && !scraperProcess.killed) {
-      return NextResponse.json({ ok: false, message: "Scraper already running" });
+    // Generate a unique name for this scraper instance
+    const scraperName = source === "pp"
+      ? `pp${province ? '_' + province.substring(0, 10) : ''}`
+      : `p24${suburb ? '_' + suburb.substring(0, 15) : ''}`;
+
+    // Check if same scraper is already running
+    const existing = scraperProcesses.get(scraperName);
+    if (existing && !existing.proc.killed) {
+      return NextResponse.json({ ok: false, message: `Scraper "${scraperName}" already running` });
     }
 
     let args: string[];
     if (source === "pp") {
-      // PrivateProperty scraper
       args = [path.resolve(process.cwd(), "..", "bootstrap", "scrape-pp.js")];
       if (province) args.push("--province", province);
       if (province_code) args.push("--code", String(province_code));
       if (start_page) args.push("--start-page", String(start_page));
     } else {
-      // Property24 scraper
       args = [path.resolve(process.cwd(), "..", "bootstrap", "scrape-p24.js")];
       if (suburb) args.push("--suburb", suburb);
       if (refresh) args.push("--refresh");
@@ -64,40 +73,66 @@ export const POST = withAuth(async (req: NextRequest) => {
     if (delay) args.push("--delay", String(delay));
     if (max_pages) args.push("--max-pages", String(max_pages));
 
-    scraperLog = [`Starting scraper: node ${args.join(" ")}`];
+    const logLines: string[] = [`[${scraperName}] Starting: node ${args.join(" ")}`];
+    scraperLog.push(...logLines);
 
-    scraperProcess = spawn("node", args, {
+    const proc = spawn("node", args, {
       cwd: path.resolve(process.cwd(), ".."),
       env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    scraperProcess.stdout?.on("data", (data: Buffer) => {
-      const lines = data.toString().split("\n").filter(Boolean);
+    scraperProcesses.set(scraperName, { proc, log: logLines, startedAt: new Date() });
+
+    proc.stdout?.on("data", (data: Buffer) => {
+      const lines = data.toString().split("\n").filter(Boolean).map(l => `[${scraperName}] ${l}`);
+      const entry = scraperProcesses.get(scraperName);
+      if (entry) { entry.log.push(...lines); if (entry.log.length > 200) entry.log = entry.log.slice(-200); }
       scraperLog.push(...lines);
-      if (scraperLog.length > 200) scraperLog = scraperLog.slice(-200);
+      if (scraperLog.length > 500) scraperLog = scraperLog.slice(-500);
     });
 
-    scraperProcess.stderr?.on("data", (data: Buffer) => {
-      const lines = data.toString().split("\n").filter(Boolean);
-      scraperLog.push(...lines.map(l => `[ERROR] ${l}`));
+    proc.stderr?.on("data", (data: Buffer) => {
+      const lines = data.toString().split("\n").filter(Boolean).map(l => `[${scraperName}] [ERROR] ${l}`);
+      const entry = scraperProcesses.get(scraperName);
+      if (entry) entry.log.push(...lines);
+      scraperLog.push(...lines);
     });
 
-    scraperProcess.on("close", (code: number) => {
-      scraperLog.push(`Scraper exited with code ${code}`);
-      scraperProcess = null;
+    proc.on("close", (code: number) => {
+      const msg = `[${scraperName}] Exited with code ${code}`;
+      scraperLog.push(msg);
+      scraperProcesses.delete(scraperName);
     });
 
-    return NextResponse.json({ ok: true, message: "Scraper started" });
+    // Detach so it runs independently of the HTTP request
+    proc.unref();
+
+    const running = Array.from(scraperProcesses.keys());
+    return NextResponse.json({ ok: true, message: `Scraper "${scraperName}" started (${running.length} running: ${running.join(", ")})` });
   }
 
   if (action === "stop") {
-    if (scraperProcess && !scraperProcess.killed) {
-      scraperProcess.kill("SIGTERM");
-      scraperLog.push("Scraper stopped by user");
-      scraperProcess = null;
-      return NextResponse.json({ ok: true, message: "Scraper stopped — will resume from where it left off" });
+    const { name } = await req.json().catch(() => ({ name: null }));
+    if (name) {
+      // Stop specific scraper
+      const entry = scraperProcesses.get(name);
+      if (entry && !entry.proc.killed) {
+        entry.proc.kill("SIGTERM");
+        scraperLog.push(`[${name}] Stopped by user`);
+        scraperProcesses.delete(name);
+        return NextResponse.json({ ok: true, message: `Scraper "${name}" stopped` });
+      }
+      return NextResponse.json({ ok: false, message: `Scraper "${name}" not running` });
     }
-    return NextResponse.json({ ok: false, message: "Scraper not running" });
+    // Stop all
+    let stopped = 0;
+    for (const [n, entry] of scraperProcesses) {
+      if (!entry.proc.killed) { entry.proc.kill("SIGTERM"); stopped++; }
+      scraperLog.push(`[${n}] Stopped by user`);
+    }
+    scraperProcesses.clear();
+    return NextResponse.json({ ok: true, message: `Stopped ${stopped} scraper(s)` });
   }
 
   if (action === "reset_blocked") {

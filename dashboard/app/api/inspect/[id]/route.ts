@@ -26,20 +26,20 @@ export const GET = withAuth(async (_req: NextRequest, { params }: { params: Prom
 
   // Crime data with context
   let crimeData = null;
-  if (prop.city) {
+  if (prop.city && prop.suburb) {
     // Get suburb-specific data
-    const incidents = prop.suburb ? await query(
+    const incidents = await query(
       `SELECT incident_type, COUNT(*) AS cnt
        FROM crime_incidents WHERE suburb ILIKE $1 AND city ILIKE $2
        GROUP BY incident_type ORDER BY cnt DESC`,
       [prop.suburb, prop.city]
-    ) : [];
+    );
 
-    const dateRange = prop.suburb ? await query(
+    const dateRange = await query(
       `SELECT MIN(incident_date) AS earliest, MAX(incident_date) AS latest, COUNT(*) AS total
        FROM crime_incidents WHERE suburb ILIKE $1 AND city ILIKE $2`,
       [prop.suburb, prop.city]
-    ) : [{ earliest: null, latest: null, total: 0 }];
+    );
 
     // City-level comparison — all suburbs
     const suburbRank = await query(

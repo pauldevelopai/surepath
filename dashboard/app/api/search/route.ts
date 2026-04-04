@@ -18,6 +18,7 @@ export const GET = withAuth(async (req: NextRequest) => {
       FROM properties
       WHERE address_raw ILIKE $1 OR street_address ILIKE $1 OR description ILIKE $1
         OR building_name ILIKE $1 OR erf_number ILIKE $1
+        OR listing_url ILIKE $1 OR address_normalised ILIKE $1
       LIMIT 20
     `, [term]),
 

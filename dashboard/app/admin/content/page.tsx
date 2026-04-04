@@ -1,5 +1,9 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { formatZAR } from "@/lib/format";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type A = Record<string, any>;
 
 const PILLARS = ["warning", "comparison", "reality_check", "inspection_reveal", "market_signal"];
 
@@ -15,6 +19,16 @@ export default function ContentPage() {
   const [finalUrl, setFinalUrl] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
 
+  // Tease insights from WhatsApp conversations
+  const [insights, setInsights] = useState<A[]>([]);
+  const [selectedInsight, setSelectedInsight] = useState<A | null>(null);
+
+  useEffect(() => {
+    fetch("/api/content?action=insights").then(r => r.json()).then(data => {
+      if (Array.isArray(data.insights)) setInsights(data.insights);
+    });
+  }, []);
+
   async function callApi(action: string, extra: Record<string, unknown> = {}) {
     setLoading(true);
     setMsg("");
@@ -29,10 +43,18 @@ export default function ContentPage() {
   }
 
   async function generateScript() {
-    const json = await callApi("generate_script");
+    const json = await callApi("generate_script", {
+      insight: selectedInsight || undefined,
+    });
     setScript({ hook: json.hook, script: json.script, cta: json.cta });
     setPostId(json.id);
     setCurrentStep(1);
+  }
+
+  async function generateFromInsight(insight: A) {
+    setSelectedInsight(insight);
+    setTopic(`${insight.address} — ${insight.topRiskFlags?.[0]?.substring(0, 80) || insight.nicoTease?.substring(0, 80) || "property risk"}`);
+    setPillar("inspection_reveal");
   }
 
   async function saveScript() {
@@ -71,10 +93,44 @@ export default function ContentPage() {
     currentStep >= step ? "opacity-100" : "opacity-40 pointer-events-none";
 
   return (
-    <div className="max-w-3xl">
-      <h1 className="text-2xl font-bold mb-4">Content Generation</h1>
+    <div className="max-w-4xl">
+      <h1 className="text-2xl font-bold mb-1">Create Video</h1>
+      <p className="text-sm text-gray-500 mb-4">Turn property insights from WhatsApp into short-form reel videos</p>
 
-      {/* Step 0: Script generation */}
+      {/* Tease Insights from WhatsApp */}
+      {insights.length > 0 && (
+        <div className="bg-white border rounded-lg p-4 mb-6">
+          <h2 className="font-bold text-sm mb-2">Property Insights from WhatsApp</h2>
+          <p className="text-xs text-gray-500 mb-3">These are real risk findings from properties analysed via WhatsApp. Click one to turn it into a video script.</p>
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {insights.map((ins, i) => (
+              <div key={i}
+                className={`border rounded p-3 cursor-pointer transition ${selectedInsight?.address === ins.address ? "border-[#E63946] bg-red-50" : "hover:bg-gray-50"}`}
+                onClick={() => generateFromInsight(ins)}>
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="font-medium text-sm">{ins.address}</div>
+                    <div className="text-xs text-gray-500 mt-0.5">{ins.nicoTease?.substring(0, 120)}...</div>
+                  </div>
+                  <div className="text-right shrink-0 ml-3">
+                    {ins.askingPrice && <div className="font-bold text-sm">{formatZAR(ins.askingPrice)}</div>}
+                    <div className="text-[10px] text-gray-400">{ins.topRiskFlags?.length || 0} risk flags</div>
+                  </div>
+                </div>
+                {ins.topRiskFlags?.length > 0 && (
+                  <div className="flex gap-1 mt-1.5 flex-wrap">
+                    {ins.topRiskFlags.slice(0, 2).map((f: string, j: number) => (
+                      <span key={j} className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-[10px]">{f.split(".")[0].substring(0, 60)}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Script generation */}
       <div className="space-y-3 mb-8">
         <div className="flex gap-3">
           <select className="border rounded px-3 py-2 text-sm" value={pillar} onChange={e => setPillar(e.target.value)}>
@@ -82,8 +138,14 @@ export default function ContentPage() {
               <option key={p} value={p}>{p.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}</option>
             ))}
           </select>
-          <input className="flex-1 border rounded px-3 py-2 text-sm" placeholder="Topic (e.g. 'Why R500k houses in Lavender Hill are a trap')" value={topic} onChange={e => setTopic(e.target.value)} />
+          <input className="flex-1 border rounded px-3 py-2 text-sm" placeholder="Topic — or click an insight above to pre-fill" value={topic} onChange={e => setTopic(e.target.value)} />
         </div>
+        {selectedInsight && (
+          <div className="bg-blue-50 border border-blue-200 rounded p-2 text-xs text-blue-800 flex justify-between items-center">
+            <span>Using insight from: <strong>{selectedInsight.address}</strong> — {selectedInsight.topRiskFlags?.length || 0} risk flags will be included in the script</span>
+            <button onClick={() => { setSelectedInsight(null); setTopic(""); }} className="text-blue-500 hover:text-blue-700 text-xs ml-2">Clear</button>
+          </div>
+        )}
         <button onClick={generateScript} disabled={loading || !topic} className="bg-[#E63946] text-white px-6 py-2 rounded font-semibold hover:bg-red-700 disabled:opacity-50">
           {loading && currentStep === 0 ? "Generating..." : "Generate Script"}
         </button>

@@ -1,5 +1,5 @@
 /**
- * Social Listening for Properties
+ * Neighbourhood Pros and Cons for Properties
  *
  * Collects nearby reviews, news, and complaints for a property location.
  *

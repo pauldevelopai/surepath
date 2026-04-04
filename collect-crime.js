@@ -477,8 +477,11 @@ async function collectWithStation(propertyId, prop, station) {
   const stats = await getStationStats(station.id);
   if (!stats) return { error: 'Could not fetch stats' };
 
-  // Delete old crime data for this suburb
-  await pool.query("DELETE FROM crime_incidents WHERE suburb ILIKE $1 AND city ILIKE $2 AND source = 'crimehub'", [prop.suburb, prop.city]);
+  // Use suburb with city fallback (suburb may be null for some areas)
+  const areaName = prop.suburb || prop.city;
+
+  // Delete old crime data for this area
+  await pool.query("DELETE FROM crime_incidents WHERE suburb ILIKE $1 AND city ILIKE $2 AND source = 'crimehub'", [areaName, prop.city]);
 
   // Store latest year data as crime_incidents
   const latestYear = stats.latest_year;
@@ -489,7 +492,7 @@ async function collectWithStation(propertyId, prop, station) {
       await pool.query(
         `INSERT INTO crime_incidents (suburb, city, incident_type, incident_date, source)
          VALUES ($1, $2, $3, $4, 'crimehub')`,
-        [prop.suburb, prop.city, cat.title.toLowerCase().replace(/\s+/g, '_'), `${latestYear}-06-15`]
+        [areaName, prop.city, cat.title.toLowerCase().replace(/\s+/g, '_'), `${latestYear}-06-15`]
       );
 
       // Store count as multiple records or as area_risk_data
@@ -498,12 +501,12 @@ async function collectWithStation(propertyId, prop, station) {
   }
 
   // Store detailed stats in area_risk_data
-  await pool.query("DELETE FROM area_risk_data WHERE suburb ILIKE $1 AND city ILIKE $2 AND risk_type = 'crime_detailed'", [prop.suburb, prop.city]);
+  await pool.query("DELETE FROM area_risk_data WHERE suburb ILIKE $1 AND city ILIKE $2 AND risk_type = 'crime_detailed'", [areaName, prop.city]);
   await pool.query(
     `INSERT INTO area_risk_data (suburb, city, risk_type, risk_score, details, source_name, source_url, data_date)
      VALUES ($1, $2, 'crime_detailed', $3, $4, 'CrimeHub (ISS/SAPS)', $5, $6)`,
     [
-      prop.suburb, prop.city,
+      areaName, prop.city,
       Math.min(10, Math.round(stats.latest_total / 500)),
       JSON.stringify({
         station_name: station.slug.replace(/-/g, ' '),

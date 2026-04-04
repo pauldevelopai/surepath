@@ -11,7 +11,7 @@ const STEPS = [
   "Property resolution", "Deeds lookup", "Resale check", "Image collection",
   "Vision — listing photos", "Vision — Street View", "Vision — satellite",
   "AVM + comparables", "Suburb intelligence", "Building age risk",
-  "Report synthesis", "B2B propagation", "PDF rendering", "Create order", "Complete",
+  "B2B propagation", "PDF rendering", "Complete", "Create order", "Complete",
 ];
 
 const CONFIDENCE_STYLE: Record<string, string> = {
@@ -192,7 +192,7 @@ export default function PropertyDetailPage() {
       { action: "vision", label: "Analysing listing photos" },
       { action: "analyse_streetview", label: "Analysing Street View" },
       { action: "analyse_satellite", label: "Analysing satellite" },
-      { action: "social", label: "Social listening" },
+      { action: "social", label: "Neighbourhood Pros and Cons" },
     ];
 
     const results: string[] = [];
@@ -238,18 +238,27 @@ export default function PropertyDetailPage() {
           section { break-inside: avoid; }
           img { max-width: 100% !important; }
           .print-header { display: block !important; }
-          .max-w-5xl { max-width: 100% !important; }
+          .print-cover { display: flex !important; }
+          .max-w-5xl { max-width: 100% !important; padding: 0 !important; }
+          aside { display: none !important; }
+          main { padding: 0 !important; }
+          .flex.min-h-screen { display: block !important; }
           @page { margin: 12mm; size: A4; }
         }
         .print-header { display: none; }
+        .print-cover { display: none; }
       `}} />
 
       <div className="flex justify-between items-center mb-3 no-print">
         <button onClick={() => router.push("/admin/data/properties")} className="text-sm text-gray-500 hover:text-blue-600">&larr; Properties</button>
         <div className="flex gap-2">
-          <button onClick={() => window.print()}
-            className="bg-[#0D1B2A] text-white px-4 py-2 rounded font-semibold hover:bg-gray-800 flex items-center gap-2 text-sm no-print">
-            Save as PDF
+          <button onClick={async () => {
+              await fetch("/api/export-count", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ property_id: p.id }) });
+              window.print();
+              load(); // refresh to update count
+            }}
+            className="bg-[#0D1B2A] text-white px-4 py-2 rounded font-semibold hover:bg-gray-800 text-sm no-print">
+            Export Page as PDF
           </button>
           <button onClick={runAll} disabled={runAllActive || actionLoading !== null}
             className="bg-[#E63946] text-white px-5 py-2 rounded font-semibold hover:bg-red-700 disabled:opacity-50 flex items-center gap-2">
@@ -260,7 +269,27 @@ export default function PropertyDetailPage() {
         </div>
       </div>
 
-      {/* Print-only header */}
+      {/* Export count */}
+      <div className="text-right text-[10px] text-gray-400 mb-2 no-print">
+        PDF exported {p.pdf_export_count || 0} {(p.pdf_export_count || 0) === 1 ? "time" : "times"}
+      </div>
+
+      {/* Print-only cover page */}
+      <div className="print-cover" style={{ flexDirection: "column", justifyContent: "center", alignItems: "center", minHeight: "90vh", textAlign: "center", pageBreakAfter: "always" }}>
+        <h1 style={{ fontSize: 48, letterSpacing: 8, color: "#0D1B2A", marginBottom: 40 }}>SUREPATH</h1>
+        <div style={{ width: 80, height: 4, background: "#E63946", margin: "0 auto 30px" }} />
+        <div style={{ fontSize: 22, color: "#333", marginBottom: 12 }}>{p.street_address || p.address_normalised || p.address_raw}</div>
+        <div style={{ fontSize: 14, color: "#666" }}>{p.suburb || ""}{p.suburb && p.city ? ", " : ""}{p.city || ""}{p.province ? `, ${p.province}` : ""}</div>
+        <div style={{ fontSize: 14, color: "#666", marginTop: 6 }}>
+          {[p.bedrooms && `${p.bedrooms} bed`, p.bathrooms && `${p.bathrooms} bath`, p.floor_area_sqm && `${p.floor_area_sqm} m²`, p.property_type].filter(Boolean).join(" | ")}
+        </div>
+        {p.asking_price ? <div style={{ fontSize: 28, fontWeight: "bold", marginTop: 20 }}>{formatZAR(p.asking_price)}</div> : null}
+        <div style={{ marginTop: 40, fontSize: 12, color: "#999" }}>Report generated: {new Date().toLocaleDateString("en-ZA", { year: "numeric", month: "long", day: "numeric" })}</div>
+        {p.listing_url ? <div style={{ fontSize: 9, color: "#BBB", marginTop: 8, wordBreak: "break-all" as const }}>Source: {p.listing_url}</div> : null}
+        <div style={{ marginTop: 50, fontSize: 10, color: "#CCC" }}>Confidential Property Intelligence Report</div>
+      </div>
+
+      {/* Print-only header (on subsequent pages) */}
       <div className="print-header" style={{ textAlign: "center", marginBottom: 20 }}>
         <h1 style={{ fontSize: 32, letterSpacing: 6, color: "#0D1B2A" }}>SUREPATH</h1>
         <div style={{ width: 60, height: 3, background: "#E63946", margin: "10px auto" }} />
@@ -297,16 +326,20 @@ export default function PropertyDetailPage() {
         </div>
       </div>
 
-      {/* Unverified warning */}
-      {unverified?.length > 0 && (
-        <div className="mb-4 bg-red-50 border border-red-200 rounded p-3 text-sm text-red-800">
-          <strong>Unverified fields ({unverified.length}):</strong> {unverified.join(", ")}
-        </div>
-      )}
-
-      {actionMsg && (
-        <div className={`mb-4 p-3 rounded text-sm ${actionMsg.ok ? "bg-green-50 text-green-800 border border-green-200" : "bg-red-50 text-red-800 border border-red-200"}`}>
-          {actionMsg.message}
+      {/* Status panel — unverified fields + action messages (hidden in print, shown in left sidebar) */}
+      {(unverified?.length > 0 || actionMsg) && (
+        <div className="no-print fixed left-0 bottom-12 w-56 z-40 space-y-2 p-3" style={{ background: "#0D1B2A" }}>
+          {actionMsg && (
+            <div className={`p-2 rounded text-[10px] ${actionMsg.ok ? "bg-green-900/50 text-green-300 border border-green-700" : "bg-red-900/50 text-red-300 border border-red-700"}`}>
+              {actionMsg.message}
+            </div>
+          )}
+          {unverified?.length > 0 && (
+            <div className="bg-white/5 rounded p-2 text-[10px] text-gray-400">
+              <div className="text-orange-400 font-bold mb-0.5">Unverified ({unverified.length})</div>
+              {unverified.join(", ")}
+            </div>
+          )}
         </div>
       )}
 
@@ -539,19 +572,19 @@ export default function PropertyDetailPage() {
           <div className="flex justify-between items-start mb-2">
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="font-bold text-sm">Social Listening</h2>
-                <FeedbackBtn propertyId={p.id} section="social_listening" />
+                <h2 className="font-bold text-sm">Neighbourhood Pros and Cons</h2>
+                <FeedbackBtn propertyId={p.id} section="neighbourhood" />
               </div>
               <div className="text-[10px] text-gray-400">
-                Reviews from nearby places scanned for noise, traffic, safety, flood, and building concerns —{" "}
+                Neighbourhood pros and cons from nearby reviews — noise, traffic, safety, amenities —{" "}
                 <a href="https://developers.google.com/maps/documentation/places" target="_blank" rel="noreferrer" className="text-blue-500">Google Places API</a>
               </div>
             </div>
-            <CollectBtn action="social" label="Scan Area" ready={data.area_risks?.some((r: A) => r.risk_type === "social_concerns")} />
+            <CollectBtn action="social" label="Scan Neighbourhood" ready={data.area_risks?.some((r: A) => r.risk_type === "social_concerns")} />
           </div>
           {(() => {
             const socialData = data.area_risks?.find((r: A) => r.risk_type === "social_concerns");
-            if (!socialData?.details) return <p className="text-sm text-gray-400">Click Scan Area to search nearby reviews for property-relevant concerns.</p>;
+            if (!socialData?.details) return <p className="text-sm text-gray-400">Click Scan Neighbourhood to find pros and cons from nearby reviews.</p>;
 
             const details = typeof socialData.details === "string" ? JSON.parse(socialData.details) : socialData.details;
             const concerns = details.concerns || [];
@@ -1183,20 +1216,9 @@ export default function PropertyDetailPage() {
             </div>
           </section>
         ) : (
-          <section className="bg-[#0D1B2A] text-white rounded-lg p-6 text-center">
-            <div className="text-gray-400 text-sm">No AI report generated yet</div>
-            <div className="flex gap-3 justify-center mt-3">
-              <div><label className="text-[10px] text-gray-400 block mb-1">Asking price (optional)</label><input className="bg-white/10 border border-white/20 rounded px-3 py-1 text-sm w-36 text-white" value={genPrice} onChange={e => setGenPrice(e.target.value)} /></div>
-              <button onClick={generateReport} disabled={genStatus === "running"} className="bg-[#E63946] text-white px-4 py-2 rounded text-sm font-semibold disabled:opacity-50 mt-auto">{genStatus === "running" ? "Generating..." : "Generate AI Report"}</button>
-            </div>
-            {genStatus === "running" && <div className="mt-3 flex gap-1 flex-wrap">{STEPS.map((l, i) => <div key={i} className={`px-2 py-0.5 rounded text-[10px] ${genStep > i ? "bg-green-100 text-green-800" : genStep === i + 1 ? "bg-blue-100 text-blue-800 font-bold" : "bg-gray-100 text-gray-400"}`}>{genStep > i ? "\u2713" : genStep === i + 1 ? "\u25B6" : ""} {l}</div>)}</div>}
-            {genError && <div className="mt-3 text-sm text-red-400">{genError}</div>}
-            {genResult && (
-              <div className="mt-3 text-green-400 text-sm">
-                <span className="font-bold">{String(genResult.decision)}</span> — {String(genResult.decision_reasoning || "")}
-                <button onClick={() => { load(); setGenResult(null); }} className="block text-[10px] text-green-500 hover:underline mt-1">Refresh page</button>
-              </div>
-            )}
+          <section className="bg-[#0D1B2A] text-white rounded-lg p-6 text-center no-print">
+            <div className="text-gray-400 text-sm">No report generated yet</div>
+            <p className="text-xs text-gray-500 mt-2">Use &quot;Export Page as PDF&quot; above to save this page as a report, or &quot;Run All Processes&quot; to collect all data first.</p>
           </section>
         )}
 

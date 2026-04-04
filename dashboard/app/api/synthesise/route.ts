@@ -18,22 +18,18 @@ export const POST = withAuth(async (req: NextRequest) => {
   const prop = properties[0];
 
   try {
-    // Run synthesis directly — skip the pipeline's resale check
-    const synthesis = await loadModule("synthesis");
+    // Render data-driven PDF directly — no AI synthesis
+    const pdf = await loadModule("pdf");
     const price = asking_price || prop.asking_price || 0;
 
-    const result = await synthesis.synthesiseReport(parseInt(property_id), price);
-
-    // Render PDF
-    const pdf = await loadModule("pdf");
-    const pdfUrl = await pdf.renderReport(result.report_id);
+    const result = await pdf.exportInspectPagePDF(parseInt(property_id), price);
 
     return NextResponse.json({
       ok: true,
-      report_id: result.report_id,
-      decision: result.report.decision,
-      decision_reasoning: result.report.decision_reasoning,
-      pdf_url: pdfUrl,
+      report_id: result.reportId,
+      decision: "INSPECT_FIRST",
+      decision_reasoning: "Data-driven report — review findings and make your own assessment",
+      pdf_url: result.pdfUrl,
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

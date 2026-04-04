@@ -6,7 +6,7 @@ const maps = require('./maps');
 const windeed = require('./windeed');
 const vision = require('./vision');
 const { synthesiseReport } = require('./synthesis');
-const { renderReport } = require('./pdf');
+const { renderReport, renderPropertyPDF, exportInspectPagePDF } = require('./pdf');
 
 const anthropicClient = new Anthropic();
 
@@ -139,9 +139,10 @@ async function extractPrivatePropertyData(url) {
           const ld = JSON.parse(jsonStr);
           const items = ld['@graph'] || [ld];
           for (const item of items) {
-            if (item['@type'] === 'RealEstateListing' && item.about?.address) {
-              const a = item.about.address;
-              address = [a.streetAddress, a.addressLocality, a.addressRegion].filter(Boolean).join(', ');
+            // PP uses @type Residence (not RealEstateListing)
+            const addr = item.about?.address || item.address;
+            if (addr && addr.streetAddress) {
+              address = [addr.streetAddress, addr.addressLocality, addr.addressRegion].filter(Boolean).join(', ');
               if (address) break;
             }
           }
@@ -168,18 +169,64 @@ async function extractPrivatePropertyData(url) {
     // Strip HTML from body for text matching
     const bodyText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
-    // Asking price
+    // Asking price — PP renders price client-side, try Puppeteer
     let askingPrice = null;
-    const priceMatch = bodyText.match(/R\s*([\d\s,]+)/);
-    if (priceMatch) {
-      const parsed = parseInt(priceMatch[1].replace(/[\s,]/g, ''));
-      if (parsed >= 50000) askingPrice = parsed;
+    try {
+      const puppeteer = require('puppeteer');
+      const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+      const page = await browser.newPage();
+      await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36');
+      await page.goto(url, { waitUntil: 'networkidle0', timeout: 20000 });
+      const priceText = await page.evaluate(() => {
+        // Look for price elements
+        const priceEl = document.querySelector('[class*="price"], [class*="Price"], [data-testid*="price"]');
+        if (priceEl) return priceEl.textContent;
+        // Fallback: find any element containing "R" followed by digits
+        const all = document.querySelectorAll('span, div, p, h2, h3');
+        for (const el of all) {
+          const t = el.textContent?.trim() || '';
+          if (/^R\s*[\d\s,]+$/.test(t) && t.replace(/\D/g, '').length >= 6) return t;
+        }
+        return null;
+      });
+      await browser.close();
+      if (priceText) {
+        const parsed = parseInt(priceText.replace(/\D/g, ''));
+        if (parsed >= 50000) askingPrice = parsed;
+      }
+    } catch (err) {
+      console.error(`[pp] Puppeteer price extraction error: ${err.message}`);
     }
 
-    // Bedrooms, bathrooms, floor area
+    // Fallback: static HTML price
+    if (!askingPrice) {
+      const priceMatch = bodyText.match(/R\s*([\d\s,]+)/);
+      if (priceMatch) {
+        const parsed = parseInt(priceMatch[1].replace(/[\s,]/g, ''));
+        if (parsed >= 50000) askingPrice = parsed;
+      }
+    }
+
+    // Bedrooms, bathrooms, floor area — also try JSON-LD additionalProperty
+    let bedrooms = null, bathrooms = null, floorArea = null;
+    if (jsonldMatches) {
+      for (const block of jsonldMatches) {
+        try {
+          const jsonStr = block.replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '');
+          const ld = JSON.parse(jsonStr);
+          const props = ld.additionalProperty || [];
+          for (const p of props) {
+            if (p.name === 'Bedrooms') bedrooms = parseInt(p.value);
+            if (p.name === 'Bathrooms') bathrooms = parseInt(p.value);
+          }
+        } catch {}
+      }
+    }
     const bedsMatch = bodyText.match(/(\d+)\s*Bed/i);
     const bathsMatch = bodyText.match(/(\d+)\s*Bath/i);
     const areaMatch = bodyText.match(/(\d+)\s*m²/);
+    if (!bedrooms && bedsMatch) bedrooms = parseInt(bedsMatch[1]);
+    if (!bathrooms && bathsMatch) bathrooms = parseInt(bathsMatch[1]);
 
     // Property type
     let propertyType = null;
@@ -199,8 +246,8 @@ async function extractPrivatePropertyData(url) {
       photoUrls,
       address,
       askingPrice,
-      bedrooms: bedsMatch ? parseInt(bedsMatch[1]) : null,
-      bathrooms: bathsMatch ? parseInt(bathsMatch[1]) : null,
+      bedrooms: bedrooms || null,
+      bathrooms: bathrooms || null,
       floorAreaSqm: areaMatch ? parseInt(areaMatch[1]) : null,
       propertyType,
       description,
@@ -267,7 +314,7 @@ async function generateTease(extractedData) {
         const message = await anthropicClient.messages.create({
           model: 'claude-sonnet-4-6',
           max_tokens: 150,
-          system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. You've seen a lot of properties and you don't sugarcoat things. Write exactly 2 sentences that tease the most important risk finding about this property without giving away the full detail. The reader is considering buying. Be honest but not alarmist. Do not mention AI. Do not use estate agent language. Do not say 'however' or 'that said'. Write in plain conversational South African English. If there are no risk flags, write 2 honest sentences about what looks reasonable and what a buyer should still verify in person.",
+          system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. You've seen a lot of properties and you don't sugarcoat things. Write exactly 2 sentences about this property for a potential buyer. The reader is considering buying. Be honest but not alarmist. Do not mention AI. Do not use estate agent language. Do not say 'however' or 'that said'. Write in plain conversational South African English. Do not invent problems that aren't in the risk flags — only reference what was actually observed. Do not speculate about hidden issues or rooms not photographed. If there are no risk flags, mention what looks good and recommend the full report for a complete picture.",
           messages: [{
             role: 'user',
             content: `Property: ${extractedData.address || 'unknown address'}. Asking price: R${extractedData.askingPrice ? extractedData.askingPrice.toLocaleString('en-ZA') : 'unknown'}. Top risk flags from photo analysis: ${flagsText}.`,
@@ -382,8 +429,35 @@ async function generateReport(input, askingPrice, phoneNumber) {
     }
 
     // If Windeed didn't create the property, find existing or create new
+    if (!propertyId && input.startsWith('http')) {
+      // First: match by listing_url (clean URL for consistent matching)
+      const cleanInput = input.replace(/[?#].*$/, '').replace(/\/+$/, '');
+      const { rows: byUrl } = await pool.query(
+        "SELECT id FROM properties WHERE listing_url ILIKE $1 OR listing_url ILIKE $2 ORDER BY id DESC LIMIT 1",
+        [`%${cleanInput}%`, `%${cleanInput}/%`]
+      );
+      if (byUrl.length > 0) {
+        propertyId = byUrl[0].id;
+        log(2, `Found existing property ${propertyId} by listing URL`);
+      }
+
+      // Second: match by PP/P24 listing ID in erf_number
+      if (!propertyId) {
+        const ppMatch = input.match(/(T\d+)/);
+        const p24Match = input.match(/\/(\d{6,})(?:\/|$)/);
+        const erfLookup = ppMatch ? `PP_${ppMatch[1]}` : p24Match ? `P24_${p24Match[1]}` : null;
+        if (erfLookup) {
+          const { rows: byErf } = await pool.query('SELECT id FROM properties WHERE erf_number = $1', [erfLookup]);
+          if (byErf.length > 0) {
+            propertyId = byErf[0].id;
+            log(2, `Found existing property ${propertyId} by listing ID ${erfLookup}`);
+          }
+        }
+      }
+    }
+
     if (!propertyId) {
-      // Search for existing property by address match
+      // Third: match by address text
       const { rows: existing } = await pool.query(
         `SELECT id FROM properties WHERE address_raw ILIKE $1 OR address_normalised ILIKE $1 OR street_address ILIKE $1 LIMIT 1`,
         [`%${address}%`]
@@ -417,9 +491,23 @@ async function generateReport(input, askingPrice, phoneNumber) {
     } else if (geo) {
       // Update with geocode data
       await pool.query(
-        `UPDATE properties SET lat = $1, lng = $2, address_normalised = $3, suburb = $4, city = $5, province = $6 WHERE id = $7`,
+        `UPDATE properties SET lat = $1, lng = $2, address_normalised = COALESCE($3, address_normalised), suburb = COALESCE($4, suburb), city = COALESCE($5, city), province = COALESCE($6, province) WHERE id = $7`,
         [geo.lat, geo.lng, geo.formatted_address, geo.suburb, geo.city, geo.province, propertyId]
       );
+    }
+
+    // Record provenance for geocode + listing data
+    const provenance = require('./provenance');
+    if (geo) {
+      const mapsUrl = `https://www.google.com/maps/@${geo.lat},${geo.lng},18z`;
+      await provenance.recordSource(propertyId, 'Google Maps Geocoding API', mapsUrl, 'verified',
+        ['lat', 'lng', 'address_normalised', 'suburb', 'city', 'province']);
+    }
+    if (input.startsWith('http')) {
+      const listingSource = isProperty24URL(input) ? 'Property24 Listing' : isPrivatePropertyURL(input) ? 'PrivateProperty Listing' : 'Listing URL';
+      const listingFields = ['address_raw', 'listing_url'];
+      if (askingPrice) listingFields.push('asking_price');
+      await provenance.recordSource(propertyId, listingSource, input, 'scraped', listingFields);
     }
 
     // ── STEP 03: Resale check ───────────────────────────────────────
@@ -454,7 +542,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
       log(15, 'Resale complete');
       return {
         report_id: existing.id,
-        pdf_url: existing.pdf_url,
+        property_id: propertyId,
         decision: existing.decision,
         decision_reasoning: existing.decision_reasoning,
         was_resale: true,
@@ -463,46 +551,157 @@ async function generateReport(input, askingPrice, phoneNumber) {
 
     log(3, 'No recent report — generating fresh report');
 
+    // ── STEP 03B: Store extracted listing data on property ──────────
+    log('3B', 'Storing listing data on property');
+    {
+      const updates = [];
+      const values = [];
+      let idx = 1;
+      const add = (field, val) => { if (val != null) { updates.push(`${field} = COALESCE($${idx}, ${field})`); values.push(val); idx++; } };
+
+      add('listing_url', input.startsWith('http') ? input : null);
+      add('asking_price', askingPrice || null);
+
+      // PP extraction provides richer data
+      if (isPrivatePropertyURL(input)) {
+        try {
+          const html = await fetchHTML(input);
+          const bodyText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+          const bedsMatch = bodyText.match(/(\d+)\s*Bed/i);
+          const bathsMatch = bodyText.match(/(\d+)\s*Bath/i);
+          const areaMatch = bodyText.match(/(\d+)\s*m²/);
+          const descMatch = html.match(/<[^>]*class="[^"]*(?:description|listing-body)[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i);
+          add('bedrooms', bedsMatch ? parseInt(bedsMatch[1]) : null);
+          add('bathrooms', bathsMatch ? parseInt(bathsMatch[1]) : null);
+          add('floor_area_sqm', areaMatch ? parseInt(areaMatch[1]) : null);
+          add('description', descMatch ? descMatch[1].replace(/<[^>]+>/g, '').trim().substring(0, 2000) : null);
+        } catch (e) { log('3B', `PP detail extraction error (non-fatal): ${e.message}`); }
+      } else if (isProperty24URL(input)) {
+        try {
+          const html = await fetchHTML(input);
+          const bodyText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+          const bedsMatch = bodyText.match(/(\d+)\s*Bed/i);
+          const bathsMatch = bodyText.match(/(\d+)\s*Bath/i);
+          const areaMatch = bodyText.match(/(\d+)\s*m²/);
+          const descMatch = html.match(/<[^>]*class="[^"]*(?:description|listing-body|p24_regularListing)[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i);
+          add('bedrooms', bedsMatch ? parseInt(bedsMatch[1]) : null);
+          add('bathrooms', bathsMatch ? parseInt(bathsMatch[1]) : null);
+          add('floor_area_sqm', areaMatch ? parseInt(areaMatch[1]) : null);
+          add('description', descMatch ? descMatch[1].replace(/<[^>]+>/g, '').trim().substring(0, 2000) : null);
+        } catch (e) { log('3B', `P24 detail extraction error (non-fatal): ${e.message}`); }
+      }
+
+      // Extract suburb from listing URL if geocoder didn't provide one
+      if (input.startsWith('http')) {
+        const { rows: subCheck } = await pool.query('SELECT suburb FROM properties WHERE id = $1', [propertyId]);
+        if (!subCheck[0]?.suburb) {
+          // PP URL format: /for-sale/province/area/town/suburb/street/id
+          const ppParts = input.replace(/.*\/for-sale\//, '').split('/');
+          if (ppParts.length >= 5) {
+            const urlSuburb = ppParts[3].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            const urlCity = ppParts[2].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            add('suburb', urlSuburb);
+            add('city', urlCity);
+            log('3B', `Suburb from listing URL: ${urlSuburb}, ${urlCity}`);
+          }
+          // P24 URL format: /for-sale/suburb/city/province/code/id
+          const p24Parts = input.match(/property24\.com\/for-sale\/([^/]+)\/([^/]+)\/([^/]+)/);
+          if (p24Parts) {
+            const urlSuburb = p24Parts[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            const urlCity = p24Parts[2].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            add('suburb', urlSuburb);
+            add('city', urlCity);
+            log('3B', `Suburb from listing URL: ${urlSuburb}, ${urlCity}`);
+          }
+        }
+      }
+
+      if (updates.length > 0) {
+        values.push(propertyId);
+        await pool.query(`UPDATE properties SET ${updates.join(', ')} WHERE id = $${idx}`, values);
+        log('3B', `Stored ${updates.length} listing fields on property ${propertyId}`);
+
+        // Record provenance for listing-extracted fields
+        const listingFields = updates.map(u => u.split(' ')[0]); // extract field names
+        const listingSource = isPrivatePropertyURL(input) ? 'PrivateProperty Listing' : isProperty24URL(input) ? 'Property24 Listing' : 'Listing';
+        await provenance.recordSource(propertyId, listingSource, input, 'scraped', listingFields);
+      }
+    }
+
     // ── STEP 04: Image collection ───────────────────────────────────
     log(4, 'Collecting images');
 
-    // Store Property24 photos in property_images
-    if (photoUrls.length > 0) {
-      log(4, `Storing ${photoUrls.length} Property24 listing photos`);
+    const fs = require('fs');
+    const path = require('path');
+    const imgDir = path.resolve(__dirname, 'dashboard', 'public', 'property-images');
+    if (!fs.existsSync(imgDir)) fs.mkdirSync(imgDir, { recursive: true });
+
+    function saveImageFile(base64Data, propId, type, ext) {
+      const filename = `${propId}-${type}-${Date.now()}.${ext}`;
+      const filePath = path.join(imgDir, filename);
+      fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+      return `/property-images/${filename}`;
+    }
+
+    // Store listing photos — skip if already have listing photos for this property
+    const { rows: existingListingPhotos } = await pool.query(
+      "SELECT COUNT(*) AS c FROM property_images WHERE property_id = $1 AND image_type = 'listing'", [propertyId]
+    );
+    if (parseInt(existingListingPhotos[0].c) > 0) {
+      log(4, `Already have ${existingListingPhotos[0].c} listing photos — skipping`);
+    } else if (photoUrls.length > 0) {
+      log(4, `Storing ${photoUrls.length} listing photos`);
       for (const url of photoUrls) {
         await pool.query(
           `INSERT INTO property_images (property_id, source, image_url, image_type)
-           VALUES ($1, 'property24', $2, 'listing')`,
-          [propertyId, url]
+           VALUES ($1, $2, $3, 'listing')`,
+          [propertyId, isProperty24URL(input) ? 'property24' : 'privateproperty', url]
         );
       }
     }
 
-    // Street View + Satellite
+    // Street View — skip if already exists
     let streetviewBase64 = null;
     let satelliteBase64 = null;
 
+    const { rows: existingSV } = await pool.query(
+      "SELECT COUNT(*) AS c FROM property_images WHERE property_id = $1 AND source = 'streetview'", [propertyId]
+    );
+    const { rows: existingSat } = await pool.query(
+      "SELECT COUNT(*) AS c FROM property_images WHERE property_id = $1 AND source = 'satellite'", [propertyId]
+    );
+
     if (geo) {
-      log(4, 'Fetching Street View image...');
-      streetviewBase64 = await maps.getStreetView(geo.lat, geo.lng);
-      if (streetviewBase64) {
-        await pool.query(
-          `INSERT INTO property_images (property_id, source, image_url, image_type)
-           VALUES ($1, 'streetview', $2, 'exterior')`,
-          [propertyId, `data:image/jpeg;base64,${streetviewBase64.substring(0, 100)}...`]
-        );
-        log(4, 'Street View image stored');
+      if (parseInt(existingSV[0].c) > 0) {
+        log(4, 'Street View already exists — skipping');
+      } else {
+        log(4, 'Fetching Street View image...');
+        streetviewBase64 = await maps.getStreetView(geo.lat, geo.lng);
+        if (streetviewBase64) {
+          const localUrl = saveImageFile(streetviewBase64, propertyId, 'streetview', 'jpg');
+          await pool.query(
+            `INSERT INTO property_images (property_id, source, image_url, image_type)
+             VALUES ($1, 'streetview', $2, 'exterior')`,
+            [propertyId, localUrl]
+          );
+          log(4, `Street View saved: ${localUrl}`);
+        }
       }
 
-      log(4, 'Fetching satellite image...');
-      satelliteBase64 = await maps.getSatelliteView(geo.lat, geo.lng);
-      if (satelliteBase64) {
-        await pool.query(
-          `INSERT INTO property_images (property_id, source, image_url, image_type)
-           VALUES ($1, 'satellite', $2, 'exterior')`,
-          [propertyId, `data:image/png;base64,${satelliteBase64.substring(0, 100)}...`]
-        );
-        log(4, 'Satellite image stored');
+      if (parseInt(existingSat[0].c) > 0) {
+        log(4, 'Satellite already exists — skipping');
+      } else {
+        log(4, 'Fetching satellite image...');
+        satelliteBase64 = await maps.getSatelliteView(geo.lat, geo.lng);
+        if (satelliteBase64) {
+          const localUrl = saveImageFile(satelliteBase64, propertyId, 'satellite', 'png');
+          await pool.query(
+            `INSERT INTO property_images (property_id, source, image_url, image_type)
+             VALUES ($1, 'satellite', $2, 'exterior')`,
+            [propertyId, localUrl]
+          );
+          log(4, `Satellite saved: ${localUrl}`);
+        }
       }
     } else {
       log(4, 'No coordinates — skipping Street View and satellite');
@@ -511,29 +710,54 @@ async function generateReport(input, askingPrice, phoneNumber) {
     // ── STEP 05: Vision analysis — listing photos ───────────────────
     log(5, 'Vision analysis — listing photos');
 
-    if (photoUrls.length > 0) {
-      const listingVision = await vision.analyseWithHFPrestage(propertyId, photoUrls);
+    // Only analyse photos that don't have vision_analysis yet
+    const { rows: unanalysedPhotos } = await pool.query(
+      "SELECT image_url FROM property_images WHERE property_id = $1 AND image_type = 'listing' AND vision_analysis IS NULL AND image_url LIKE 'http%'",
+      [propertyId]
+    );
+    if (unanalysedPhotos.length > 0) {
+      const urlsToAnalyse = unanalysedPhotos.map(r => r.image_url);
+      log(5, `${urlsToAnalyse.length} unanalysed listing photos (skipping ${photoUrls.length - urlsToAnalyse.length} already done)`);
+      const listingVision = await vision.analyseWithHFPrestage(propertyId, urlsToAnalyse);
       if (listingVision) {
         log(5, `Analysed ${listingVision.analyses.length} listing photos, ${listingVision.aggregated.vision_findings.length} total findings`);
       } else {
         log(5, 'No listing photos analysed (download failures)');
       }
     } else {
-      log(5, 'No listing photos to analyse');
+      log(5, 'All listing photos already analysed — skipping');
     }
 
     // ── STEP 06: Vision analysis — Street View ──────────────────────
     log(6, 'Vision analysis — Street View');
 
-    if (streetviewBase64) {
+    // Check if streetview already has vision_analysis
+    const { rows: svCheck } = await pool.query(
+      "SELECT id, vision_analysis FROM property_images WHERE property_id = $1 AND source = 'streetview' ORDER BY id DESC LIMIT 1",
+      [propertyId]
+    );
+    if (svCheck.length > 0 && svCheck[0].vision_analysis) {
+      log(6, 'Street View already analysed — skipping');
+    } else if (streetviewBase64) {
       const svAnalysis = await vision.analyseStreetView(streetviewBase64);
-      // Store in property_images
       await pool.query(
         `UPDATE property_images SET vision_analysis = $1, analysed_at = NOW()
          WHERE id = (SELECT id FROM property_images WHERE property_id = $2 AND source = 'streetview' ORDER BY id DESC LIMIT 1)`,
         [JSON.stringify(svAnalysis), propertyId]
       );
       log(6, `Street View analysis: ${(svAnalysis.findings || []).length} findings`);
+    } else if (svCheck.length > 0) {
+      // Streetview image exists but wasn't fetched this run — load from file and analyse
+      const svPath = path.resolve(__dirname, 'dashboard', 'public', svCheck[0].image_url?.replace(/^\//, '') || '');
+      if (fs.existsSync(svPath)) {
+        streetviewBase64 = fs.readFileSync(svPath).toString('base64');
+        const svAnalysis = await vision.analyseStreetView(streetviewBase64);
+        await pool.query('UPDATE property_images SET vision_analysis = $1, analysed_at = NOW() WHERE id = $2',
+          [JSON.stringify(svAnalysis), svCheck[0].id]);
+        log(6, `Street View analysis (from existing image): ${(svAnalysis.findings || []).length} findings`);
+      } else {
+        log(6, 'Street View image file not found — skipping');
+      }
     } else {
       log(6, 'No Street View image — skipping');
     }
@@ -541,7 +765,13 @@ async function generateReport(input, askingPrice, phoneNumber) {
     // ── STEP 07: Vision analysis — satellite ────────────────────────
     log(7, 'Vision analysis — satellite');
 
-    if (satelliteBase64) {
+    const { rows: satCheck } = await pool.query(
+      "SELECT id, vision_analysis FROM property_images WHERE property_id = $1 AND source = 'satellite' ORDER BY id DESC LIMIT 1",
+      [propertyId]
+    );
+    if (satCheck.length > 0 && satCheck[0].vision_analysis) {
+      log(7, 'Satellite already analysed — skipping');
+    } else if (satelliteBase64) {
       const satAnalysis = await vision.analyseSatellite(satelliteBase64);
       await pool.query(
         `UPDATE property_images SET vision_analysis = $1, analysed_at = NOW()
@@ -549,6 +779,17 @@ async function generateReport(input, askingPrice, phoneNumber) {
         [JSON.stringify(satAnalysis), propertyId]
       );
       log(7, `Satellite analysis: roof=${satAnalysis.roof_material}, solar=${satAnalysis.solar_installed}, orientation=${satAnalysis.roof_orientation_estimate}`);
+    } else if (satCheck.length > 0) {
+      const satPath = path.resolve(__dirname, 'dashboard', 'public', satCheck[0].image_url?.replace(/^\//, '') || '');
+      if (fs.existsSync(satPath)) {
+        satelliteBase64 = fs.readFileSync(satPath).toString('base64');
+        const satAnalysis = await vision.analyseSatellite(satelliteBase64);
+        await pool.query('UPDATE property_images SET vision_analysis = $1, analysed_at = NOW() WHERE id = $2',
+          [JSON.stringify(satAnalysis), satCheck[0].id]);
+        log(7, `Satellite analysis (from existing image): roof=${satAnalysis.roof_material}, solar=${satAnalysis.solar_installed}, orientation=${satAnalysis.roof_orientation_estimate}`);
+      } else {
+        log(7, 'Satellite image file not found — skipping');
+      }
     } else {
       log(7, 'No satellite image — skipping');
     }
@@ -558,12 +799,18 @@ async function generateReport(input, askingPrice, phoneNumber) {
     {
       const counts = { db_board: 0, ceiling: 0, exterior: 0, plumbing: 0 };
       try {
+        // Only process images that have base vision_analysis but NOT specialist_findings yet
         const { rows: analysedImgs } = await pool.query(
           `SELECT id, image_url, vision_analysis FROM property_images
            WHERE property_id = $1 AND vision_analysis IS NOT NULL
              AND image_url LIKE 'http%'
+             AND (vision_analysis->>'specialist_findings') IS NULL
            ORDER BY id`, [propertyId]
         );
+
+        if (analysedImgs.length === 0) {
+          log('5B', 'All images already have specialist analysis — skipping');
+        }
 
         for (const img of analysedImgs) {
           if (counts.db_board >= 3 && counts.ceiling >= 3 && counts.exterior >= 3 && counts.plumbing >= 3) break;
@@ -572,7 +819,6 @@ async function generateReport(input, askingPrice, phoneNumber) {
           const findingsText = JSON.stringify(va?.findings || []).toLowerCase();
 
           try {
-            // DB Board
             if (photoType === 'db_board' && counts.db_board < 3) {
               const buffer = await vision.downloadImage(img.image_url);
               const result = await vision.analyseDBBoard(buffer.toString('base64'));
@@ -581,7 +827,6 @@ async function generateReport(input, askingPrice, phoneNumber) {
               counts.db_board++;
             }
 
-            // Ceiling
             if ((photoType === 'ceiling' || (va?.findings || []).some(f => f.category === 'ceiling' && (f.severity === 'CRITICAL' || f.severity === 'HIGH'))) && counts.ceiling < 3) {
               const buffer = await vision.downloadImage(img.image_url);
               const result = await vision.analyseCeilingDeep(buffer.toString('base64'));
@@ -590,7 +835,6 @@ async function generateReport(input, askingPrice, phoneNumber) {
               counts.ceiling++;
             }
 
-            // Exterior security
             if (photoType === 'exterior' && counts.exterior < 3) {
               const buffer = await vision.downloadImage(img.image_url);
               const result = await vision.analyseExteriorSecurity(buffer.toString('base64'));
@@ -599,7 +843,6 @@ async function generateReport(input, askingPrice, phoneNumber) {
               counts.exterior++;
             }
 
-            // Plumbing
             if (['bathroom', 'kitchen', 'other'].includes(photoType) &&
                 (findingsText.includes('pipe') || findingsText.includes('geyser') || findingsText.includes('plumbing') ||
                  findingsText.includes('rust') || findingsText.includes('corrosion') || findingsText.includes('tap') || findingsText.includes('basin')) &&
@@ -641,11 +884,127 @@ async function generateReport(input, askingPrice, phoneNumber) {
       }
     }
 
-    // ── STEP 08: AVM + comparables ──────────────────────────────────
-    log(8, 'AVM + comparables — generated by Claude from property data and asking price');
+    // ── STEP 08: Risk data collection ─────────────────────────────────
+    log(8, 'Collecting risk data (water, solar, compliance)');
 
-    // ── STEP 09: Suburb intelligence ────────────────────────────────
-    log(9, 'Suburb intelligence — queried from existing Surepath reports');
+    // Fetch CURRENT property state (after step 3B stored listing data + geocode + suburb from URL)
+    const { rows: propState } = await pool.query(
+      'SELECT water_quality_score, solar_ghi_kwh_year, electrical_coc_required, city, province, suburb, lat, lng FROM properties WHERE id=$1',
+      [propertyId]
+    );
+    const ps = propState[0] || {};
+    const areaSuburb = ps.suburb || '';
+    const areaCity = ps.city || '';
+
+    try {
+      // Water quality — skip if already collected
+      if (ps.water_quality_score != null) {
+        log(8, `Water already collected (${ps.water_quality_score}/10) — skipping`);
+      } else {
+        const collectMunicipal = require('./collect-municipal');
+        const waterResult = await collectMunicipal.collectForProperty(propertyId);
+        if (waterResult?.water_quality_score != null) {
+          log(8, `Water: ${waterResult.water_quality_score}/10, Sewerage: ${waterResult.sewerage_quality_score}/10`);
+        } else {
+          log(8, 'No Blue/Green Drop data for this municipality');
+        }
+      }
+
+      // Solar data — skip if already collected
+      if (ps.solar_ghi_kwh_year != null) {
+        log(8, `Solar already collected (GHI=${ps.solar_ghi_kwh_year}) — skipping`);
+      } else if (geo) {
+        const collectSolar = require('./collect-solar');
+        const solar = await collectSolar.getSolarData(propertyId);
+        if (solar) {
+          log(8, `Solar: GHI=${solar.ghi_kwh_m2_year} kWh/m²/year, PV=${solar.pv_output_kwh_year} kWh/year`);
+        }
+      }
+
+      // Compliance certificates — skip if already set
+      if (ps.electrical_coc_required) {
+        log(8, 'Compliance already applied — skipping');
+      } else {
+        await pool.query('UPDATE properties SET electrical_coc_required=TRUE WHERE id=$1', [propertyId]);
+        if (ps.city === 'Cape Town') await pool.query('UPDATE properties SET plumbing_coc_required=TRUE WHERE id=$1', [propertyId]);
+        if (['Western Cape', 'KwaZulu-Natal'].includes(ps.province)) await pool.query('UPDATE properties SET beetle_cert_required=TRUE WHERE id=$1', [propertyId]);
+        log(8, 'Compliance rules applied');
+      }
+    } catch (err) {
+      log(8, `Risk data error (non-fatal): ${err.message}`);
+    }
+
+    // ── STEP 08B: Crime data ────────────────────────────────────────
+    log('8B', 'Collecting crime statistics');
+
+    if (!areaSuburb) {
+      log('8B', 'No suburb set — skipping crime data (suburb is required for accurate crime stats)');
+    } else {
+      // Skip if crime_detailed already exists for this area
+      const { rows: existingCrime } = await pool.query(
+        "SELECT COUNT(*) AS c FROM area_risk_data WHERE risk_type = 'crime_detailed' AND (suburb ILIKE $1 OR city ILIKE $1) AND city ILIKE $2",
+        [areaSuburb, areaCity]
+      );
+      if (parseInt(existingCrime[0].c) > 0) {
+        log('8B', `Crime data already collected for ${areaSuburb} — skipping`);
+      } else {
+        try {
+          const collectCrime = require('./collect-crime');
+          const crimeResult = await collectCrime.collectForProperty(propertyId);
+          if (crimeResult?.total) {
+            log('8B', `Crime: ${crimeResult.station} — ${crimeResult.total} incidents (${crimeResult.year})`);
+          } else {
+            log('8B', 'No crime data returned');
+          }
+        } catch (err) {
+          log('8B', `Crime data error (non-fatal): ${err.message}`);
+        }
+      }
+    }
+
+    // ── STEP 09: Feature extraction from description ────────────────
+    log(9, 'Extracting features from listing description');
+
+    {
+      const { rows: featCheck } = await pool.query('SELECT description, extracted_features FROM properties WHERE id=$1', [propertyId]);
+      if (featCheck[0]?.extracted_features) {
+        log(9, 'Features already extracted — skipping');
+      } else if (featCheck[0]?.description) {
+        try {
+          const extractor = require('./extract-features');
+          const extResult = await extractor.processProperty(propertyId);
+          log(9, `Extracted ${extResult.fields_updated} fields: ${(extResult.fields || []).join(', ')}`);
+        } catch (err) {
+          log(9, `Feature extraction error (non-fatal): ${err.message}`);
+        }
+      } else {
+        log(9, 'No description available — skipping');
+      }
+    }
+
+    // ── STEP 09B: Neighbourhood Pros and Cons ──────────────────────────────────
+    log('9B', 'Neighbourhood Pros and Cons — scanning nearby reviews');
+
+    // Skip if social_concerns already exists for this area
+    const { rows: existingSocial } = await pool.query(
+      "SELECT COUNT(*) AS c FROM area_risk_data WHERE risk_type = 'social_concerns' AND (suburb ILIKE $1 OR city ILIKE $1) AND city ILIKE $2",
+      [areaSuburb, areaCity]
+    );
+    if (parseInt(existingSocial[0].c) > 0) {
+      log('9B', `Neighbourhood Pros and Cons already done for ${areaSuburb} — skipping`);
+    } else if (geo || (ps.lat && ps.lng)) {
+      try {
+        const collectSocial = require('./collect-social');
+        const socialResult = await collectSocial.collectForProperty(propertyId);
+        if (socialResult) {
+          log('9B', `Scanned ${socialResult.places_scanned} places, ${socialResult.concerns.length} concerns found`);
+        }
+      } catch (err) {
+        log('9B', `Neighbourhood Pros and Cons error (non-fatal): ${err.message}`);
+      }
+    } else {
+      log('9B', 'No coordinates — skipping social listening');
+    }
 
     // ── STEP 10: Building age risk matrix ───────────────────────────
     log(10, 'Building age risk matrix');
@@ -690,30 +1049,48 @@ async function generateReport(input, askingPrice, phoneNumber) {
       log('10B', `BuyerRiskIndex calculation error (non-fatal): ${err.message}`);
     }
 
-    // ── STEP 11: Report synthesis ───────────────────────────────────
-    log(11, 'Report synthesis via Claude Opus');
+    // ── STEP 11: B2B field propagation from vision data ────────────
+    log(11, 'B2B field propagation from vision data');
 
-    const synthesisResult = await synthesiseReport(propertyId, askingPrice);
-    reportId = synthesisResult.report_id;
-    const report = synthesisResult.report;
-    log(11, `Report ${reportId} synthesised: decision=${report.decision}`);
-
-    // Store BuyerRiskIndex
     try {
-      await pool.query('UPDATE property_reports SET buyer_risk_index = $1 WHERE id = $2', [buyerRiskIndex, reportId]);
-    } catch {}
+      const { rows: imgRows2 } = await pool.query(
+        'SELECT vision_analysis FROM property_images WHERE property_id = $1 AND vision_analysis IS NOT NULL',
+        [propertyId]
+      );
+      const allVA = imgRows2.map(r => typeof r.vision_analysis === 'string' ? JSON.parse(r.vision_analysis) : r.vision_analysis);
+      const agg = vision.aggregateFindings(allVA);
 
-    // ── STEP 12: B2B field propagation ──────────────────────────────
-    log(12, 'B2B field propagation to properties table');
+      await pool.query(
+        `UPDATE properties SET
+          roof_material = COALESCE($1, roof_material),
+          solar_installed = COALESCE($2, solar_installed),
+          roof_orientation = COALESCE($3, roof_orientation),
+          security_visible = COALESCE($4, security_visible)
+        WHERE id = $5`,
+        [
+          agg.roof_material !== 'unknown' ? agg.roof_material : null,
+          agg.solar_installed || null,
+          agg.roof_orientation !== 'unclear' ? agg.roof_orientation : null,
+          agg.security_visible || null,
+          propertyId,
+        ]
+      );
+      log(11, `Properties table updated: roof=${agg.roof_material}, solar=${agg.solar_installed}, orientation=${agg.roof_orientation}`);
+    } catch (err) {
+      log(11, `B2B propagation error (non-fatal): ${err.message}`);
+    }
 
-    // Already handled inside synthesiseReport, but log it
-    log(12, 'Properties table updated with vision-derived fields');
+    // ── STEP 12: Create report record ─────────────────────────────
+    log(12, 'Creating report record (PDF exported on-demand from property page)');
 
-    // ── STEP 13: PDF rendering ──────────────────────────────────────
-    log(13, 'PDF rendering');
-
-    const pdfUrl = await renderReport(reportId);
-    log(13, `PDF generated: ${pdfUrl}`);
+    const { rows: reportRows } = await pool.query(
+      `INSERT INTO property_reports (property_id, asking_price, decision, decision_reasoning, status, buyer_risk_index)
+       VALUES ($1, $2, 'INSPECT_FIRST', 'Data-driven report — exported from property page', 'complete', $3)
+       RETURNING id`,
+      [propertyId, askingPrice || 0, buyerRiskIndex]
+    );
+    reportId = reportRows[0].id;
+    log(12, `Report ${reportId} created for property ${propertyId}`);
 
     // ── STEP 14: Create order record ────────────────────────────────
     log(14, 'Creating order record');
@@ -736,9 +1113,9 @@ async function generateReport(input, askingPrice, phoneNumber) {
 
     return {
       report_id: reportId,
-      pdf_url: pdfUrl,
-      decision: report.decision,
-      decision_reasoning: report.decision_reasoning,
+      property_id: propertyId,
+      decision: 'INSPECT_FIRST',
+      decision_reasoning: 'Data-driven report — review findings and make your own assessment',
       was_resale: false,
     };
 

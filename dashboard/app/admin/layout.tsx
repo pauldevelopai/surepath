@@ -4,12 +4,6 @@ import { redirect } from "next/navigation";
 
 const sections = [
   {
-    label: "",
-    items: [
-      { href: "/admin/search", label: "Search" },
-    ],
-  },
-  {
     label: "SALES",
     items: [
       { href: "/admin/sales/orders", label: "Orders" },
@@ -25,7 +19,7 @@ const sections = [
     ],
   },
   {
-    label: "CONTENT",
+    label: "MARKETING",
     items: [
       { href: "/admin/content", label: "Create Video" },
     ],

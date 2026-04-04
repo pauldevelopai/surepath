@@ -430,7 +430,7 @@ export const POST = withAuth(async (req: NextRequest, { params }: { params: Prom
           data: result,
         });
       } catch (e: unknown) {
-        return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Social listening failed" });
+        return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Neighbourhood scan failed" });
       }
     }
 

@@ -43,6 +43,22 @@ export const GET = withAuth(async () => {
     results.google_satellite = { status: mapsKey ? "configured" : "down", message: mapsKey ? "Key set — enable Maps Static API" : "Not configured" };
   }
 
+  // Twilio WhatsApp
+  const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+  const twilioToken = process.env.TWILIO_AUTH_TOKEN;
+  if (twilioSid && twilioToken) {
+    try {
+      const twilio = (await import("twilio")).default;
+      const client = twilio(twilioSid, twilioToken);
+      const account = await client.api.accounts(twilioSid).fetch();
+      results.twilio = { status: account.status === "active" ? "ok" : "configured", message: `WhatsApp: ${process.env.TWILIO_WHATSAPP_NUMBER || "no number"} — ${account.status}` };
+    } catch (err: unknown) {
+      results.twilio = { status: "down", message: (err instanceof Error ? err.message : "").substring(0, 80), action: "https://console.twilio.com" };
+    }
+  } else {
+    results.twilio = { status: "not_configured", message: "No Twilio credentials", action: "https://console.twilio.com" };
+  }
+
   // Other services — check if keys are configured
   results.windeed = { status: process.env.WINDEED_API_KEY ? "configured" : "not_configured", message: process.env.WINDEED_API_KEY ? "Key set" : "No key — optional" };
   results.elevenlabs = { status: process.env.ELEVENLABS_API_KEY ? "configured" : "not_configured", message: process.env.ELEVENLABS_API_KEY ? "Key set" : "No key — optional" };

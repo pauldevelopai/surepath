@@ -22,7 +22,7 @@ export const GET = withAuth(async (req: NextRequest) => {
   let idx = 1;
 
   if (search) {
-    sql += ` AND (p.address_raw ILIKE $${idx} OR p.erf_number ILIKE $${idx} OR p.suburb ILIKE $${idx})`;
+    sql += ` AND (p.address_raw ILIKE $${idx} OR p.erf_number ILIKE $${idx} OR p.suburb ILIKE $${idx} OR p.city ILIKE $${idx} OR p.listing_url ILIKE $${idx} OR p.address_normalised ILIKE $${idx} OR p.street_address ILIKE $${idx})`;
     params.push(`%${search}%`);
     idx++;
   }

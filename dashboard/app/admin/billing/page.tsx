@@ -21,7 +21,7 @@ export default function BillingPage() {
   }, []);
 
   if (!data) return <p className="text-gray-500">Loading...</p>;
-  const { totals, today, month, by_service, by_endpoint, daily, by_property, data_size, avg_cost, recent } = data;
+  const { totals, today, month, by_service, by_endpoint, daily, by_property, data_size, avg_cost, recent, whatsapp } = data;
 
   return (
     <div>
@@ -89,6 +89,78 @@ export default function BillingPage() {
           ))}
         </div>
       </div>
+
+      {/* WhatsApp / Twilio */}
+      {whatsapp && (
+        <div className="bg-white border rounded-lg p-4 mb-6">
+          <h2 className="font-bold text-sm mb-3">WhatsApp / Twilio</h2>
+          <div className="grid grid-cols-5 gap-3 mb-4">
+            {[
+              { label: "Total Messages", val: whatsapp.total_messages, sub: `${whatsapp.outbound} sent · ${whatsapp.inbound} received` },
+              { label: "Twilio Cost", val: fZAR(whatsapp.total_cost_zar), sub: fUSD(whatsapp.total_cost_usd) },
+              { label: "Today", val: `${whatsapp.today?.outbound || 0} sent`, sub: `${whatsapp.today?.inbound || 0} received` },
+              { label: "This Month", val: `${whatsapp.month?.outbound || 0} sent`, sub: `${whatsapp.month?.inbound || 0} received` },
+              { label: "Unique Users", val: whatsapp.unique_users, sub: whatsapp.with_media ? `${whatsapp.with_media} with media` : "" },
+            ].map(c => (
+              <div key={c.label} className="bg-gray-50 rounded p-3">
+                <div className="text-[9px] text-gray-500 uppercase tracking-wide">{c.label}</div>
+                <div className="text-lg font-bold mt-0.5">{c.val}</div>
+                <div className="text-[10px] text-gray-400">{c.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Daily WhatsApp chart */}
+          {whatsapp.daily?.length > 0 && (
+            <div className="mb-4">
+              <div className="text-xs text-gray-500 mb-1">Daily messages (30 days)</div>
+              <div className="flex items-end gap-1 h-16">
+                {(() => {
+                  const byDay: Record<string, { inbound: number; outbound: number }> = {};
+                  for (const d of whatsapp.daily) {
+                    if (!byDay[d.day]) byDay[d.day] = { inbound: 0, outbound: 0 };
+                    byDay[d.day][d.direction as "inbound" | "outbound"] += Number(d.cnt);
+                  }
+                  const days = Object.entries(byDay);
+                  const max = Math.max(...days.map(d => d[1].inbound + d[1].outbound), 1);
+                  return days.map(([day, val], i) => (
+                    <div key={i} className="flex-1 flex flex-col justify-end" title={`${day}: ${val.outbound} sent, ${val.inbound} received`}>
+                      <div className="bg-green-500 rounded-t" style={{ height: `${(val.outbound / max) * 100}%`, minHeight: val.outbound > 0 ? "2px" : "0" }} />
+                      <div className="bg-blue-400" style={{ height: `${(val.inbound / max) * 100}%`, minHeight: val.inbound > 0 ? "2px" : "0" }} />
+                    </div>
+                  ));
+                })()}
+              </div>
+              <div className="flex gap-3 mt-1 text-[9px] text-gray-400">
+                <span><span className="inline-block w-2 h-2 bg-green-500 rounded mr-0.5" /> Sent</span>
+                <span><span className="inline-block w-2 h-2 bg-blue-400 rounded mr-0.5" /> Received</span>
+              </div>
+            </div>
+          )}
+
+          {/* Recent messages */}
+          {whatsapp.recent?.length > 0 && (
+            <>
+              <div className="text-xs text-gray-500 mb-1">Recent messages</div>
+              <table className="w-full text-xs">
+                <thead><tr className="text-left text-gray-500"><th className="pb-1">Time</th><th className="pb-1">Dir</th><th className="pb-1">Phone</th><th className="pb-1">Message</th></tr></thead>
+                <tbody>
+                  {whatsapp.recent.map((m: A, i: number) => (
+                    <tr key={i} className="border-t">
+                      <td className="py-1 text-gray-400 whitespace-nowrap">{formatDate(m.created_at)}</td>
+                      <td className="py-1"><span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${m.direction === "outbound" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}`}>{m.direction === "outbound" ? "OUT" : "IN"}</span></td>
+                      <td className="py-1 font-mono text-gray-500">{m.phone_number?.replace("+27", "0")}</td>
+                      <td className="py-1 text-gray-600 max-w-md truncate">{m.body?.substring(0, 80) || (m.media_url ? "[PDF]" : "—")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+
+          <div className="text-[9px] text-gray-400 mt-3">Twilio pricing: ~$0.005/outbound message (WhatsApp Business). Inbound messages are free.</div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-6 mb-6">
         {/* Cost by service */}
@@ -210,12 +282,12 @@ export default function BillingPage() {
             <div className="text-gray-400 mt-1">40K free geocodes/month</div>
           </div>
           <div>
-            <div className="text-gray-400 font-bold mb-1">Estimated per property</div>
-            <div>Vision (1 photo, Haiku): ~$0.001 (R0.02)</div>
-            <div>Vision (10 photos, Haiku): ~$0.005 (R0.09)</div>
-            <div>Full report synthesis: ~$0.002 (R0.04)</div>
-            <div>Geocode + Street View + Satellite: $0.014 (R0.26)</div>
-            <div className="text-yellow-400 font-bold mt-1">Total per property: ~$0.02 (R0.37)</div>
+            <div className="text-gray-400 font-bold mb-1">Twilio WhatsApp</div>
+            <div>Outbound message: ~$0.005 (R0.09)</div>
+            <div>Inbound message: free</div>
+            <div>Media (PDF): ~$0.005 (R0.09)</div>
+            <div className="text-gray-400 mt-1">~4 messages per report flow</div>
+            <div className="text-gray-400">WhatsApp cost per report: ~$0.02 (R0.37)</div>
           </div>
         </div>
         <div className="text-[9px] text-gray-500 mt-2">Exchange rate: $1 = R{ZAR_RATE}. Prices as of April 2026. Actual costs depend on token usage.</div>

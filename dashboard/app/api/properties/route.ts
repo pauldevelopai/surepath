@@ -34,7 +34,7 @@ export const GET = withAuth(async (req: NextRequest) => {
   let idx = 1;
 
   if (search) {
-    sql += ` AND (p.address_raw ILIKE $${idx} OR p.erf_number ILIKE $${idx} OR p.suburb ILIKE $${idx} OR p.city ILIKE $${idx})`;
+    sql += ` AND (p.address_raw ILIKE $${idx} OR p.erf_number ILIKE $${idx} OR p.suburb ILIKE $${idx} OR p.city ILIKE $${idx} OR p.listing_url ILIKE $${idx} OR p.address_normalised ILIKE $${idx} OR p.street_address ILIKE $${idx})`;
     params.push(`%${search}%`);
     idx++;
   }
@@ -44,7 +44,7 @@ export const GET = withAuth(async (req: NextRequest) => {
   if (hasCoords === "true") sql += ` AND p.lat IS NOT NULL`;
   if (hasCoords === "false") sql += ` AND p.lat IS NULL`;
 
-  sql += " ORDER BY p.created_at DESC LIMIT 500";
+  sql += " ORDER BY p.created_at DESC LIMIT 2000";
 
   const rows = await query(sql, params);
   return NextResponse.json(rows);
