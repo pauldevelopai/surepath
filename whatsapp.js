@@ -167,7 +167,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
           '',
           'The full Surepath report includes deeds history, crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
           '',
-          'Reply *1* to get the full report (R149) or *2* to pass on this one.',
+          'Reply *1* to get the full report (R149), or send a different listing link.',
         ].join('\n');
 
         await sendWhatsApp(from, message);
@@ -175,16 +175,35 @@ async function runTeaseAsync(from, phoneNumber, url) {
       }
     }
 
-    // ── CHECK: Property exists in DB — generate tease from stored findings ──
+    // ── CHECK: Property exists in DB with vision data — generate tease from stored findings ──
     const { rows: existingProps } = await pool.query(
       'SELECT id, address_raw, address_normalised, asking_price, bedrooms, bathrooms FROM properties WHERE listing_url = $1 ORDER BY id DESC LIMIT 1',
       [url]
     );
 
-    if (existingProps.length > 0) {
+    // Only use cached path if property has vision analysis (meaning it's been fully processed)
+    const { rows: visionCheck } = existingProps.length > 0
+      ? await pool.query('SELECT COUNT(*) AS c FROM property_images WHERE property_id = $1 AND vision_analysis IS NOT NULL', [existingProps[0].id])
+      : [{ c: '0' }];
+
+    if (existingProps.length > 0 && parseInt(visionCheck[0].c) > 0) {
       const p = existingProps[0];
       const propertyId = p.id;
-      console.log(`[tease] Found existing property ${propertyId} for URL — generating tease from stored findings`);
+      console.log(`[tease] Found existing property ${propertyId} with ${visionCheck[0].c} analysed photos — using stored findings`);
+
+      // Refresh property data from listing in case it's stale
+      try {
+        const freshData = isPP ? await extractPrivatePropertyData(url) : null;
+        if (freshData?.address) {
+          await pool.query(
+            `UPDATE properties SET address_raw = COALESCE($1, address_raw), asking_price = COALESCE($2, asking_price), bedrooms = COALESCE($3, bedrooms), bathrooms = COALESCE($4, bathrooms) WHERE id = $5`,
+            [freshData.address, freshData.askingPrice, freshData.bedrooms, freshData.bathrooms, propertyId]
+          );
+          // Re-fetch updated data
+          const { rows: refreshed } = await pool.query('SELECT address_raw, address_normalised, asking_price, bedrooms, bathrooms FROM properties WHERE id = $1', [propertyId]);
+          if (refreshed.length > 0) Object.assign(p, refreshed[0]);
+        }
+      } catch (e) { console.error(`[tease] Refresh error (non-fatal): ${e.message}`); }
 
       // Gather top risk flags from stored vision analysis
       const { rows: imgFindings } = await pool.query(
@@ -247,7 +266,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
         '',
         'The full Surepath report includes deeds history, crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
         '',
-        'Reply *1* to get the full report (R149) or *2* to pass on this one.',
+        'Reply *1* to get the full report (R149), or send a different listing link.',
       ].join('\n');
 
       await sendWhatsApp(from, message);
@@ -417,10 +436,74 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
     const url = extractURL(body);
     const hasListingURL = url && (isProperty24URL(url) || isPrivatePropertyURL(url));
 
-    // ── GLOBAL: Reset commands work from ANY state ──────────────
+    // ── If generating/scraping, don't reset — give progress update instead ──
+    if (state === 'generating' || state === 'scraping') {
+      let progressMsg = '';
+
+      if (state === 'scraping') {
+        const scrapeMsgs = [
+          'Still pulling the listing data — give me a moment.',
+          'Almost there — just finishing up the property preview.',
+          'Working on it — analysing the listing photos now.',
+        ];
+        progressMsg = scrapeMsgs[Math.floor(Math.random() * scrapeMsgs.length)];
+      } else if (conv?.input_data) {
+        // Check actual progress from DB
+        try {
+          const cleanUrl = conv.input_data.replace(/[?#].*$/, '').replace(/\/+$/, '');
+          const { rows: prop } = await pool.query('SELECT id FROM properties WHERE listing_url ILIKE $1 ORDER BY id DESC LIMIT 1', [`%${cleanUrl}%`]);
+          if (prop.length > 0) {
+            const { rows: imgCheck } = await pool.query(
+              'SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE vision_analysis IS NOT NULL) AS done FROM property_images WHERE property_id = $1',
+              [prop[0].id]
+            );
+            const total = parseInt(imgCheck[0].total);
+            const done = parseInt(imgCheck[0].done);
+            const elapsed = Math.round((Date.now() - new Date(conv.updated_at).getTime()) / 60000);
+
+            if (done > 0 && done >= total) {
+              progressMsg = 'Almost done — just compiling the final report now.';
+            } else if (done > 0) {
+              const msgs = [
+                `Still working — checked ${done} of ${total} photos so far.`,
+                `Making progress — ${done}/${total} photos analysed. Hang tight.`,
+                `${done} out of ${total} photos done — won't be long now.`,
+              ];
+              progressMsg = msgs[Math.floor(Math.random() * msgs.length)];
+            } else if (total > 0) {
+              const msgs = [
+                `Found ${total} photos — running the analysis now.`,
+                `Got ${total} listing photos to check. This is the thorough part.`,
+                `Working through ${total} photos — this takes a few minutes but it's worth it.`,
+              ];
+              progressMsg = msgs[Math.floor(Math.random() * msgs.length)];
+            } else {
+              const msgs = [
+                'Still collecting property data — photos, location, risk factors.',
+                `Report has been running for about ${elapsed || 1} minute${elapsed !== 1 ? 's' : ''} — still going.`,
+                'Pulling data from multiple sources — crime stats, infrastructure, compliance.',
+              ];
+              progressMsg = msgs[Math.floor(Math.random() * msgs.length)];
+            }
+          } else {
+            progressMsg = 'Your report is being generated — still setting up the property profile.';
+          }
+        } catch {
+          progressMsg = 'Still working on your report — I\'ll send it as soon as it\'s ready.';
+        }
+      } else {
+        progressMsg = 'Still working on your report — I\'ll send it as soon as it\'s ready.';
+      }
+
+      await sendWhatsApp(from, progressMsg);
+      res.type('text/xml').send('<Response></Response>');
+      return;
+    }
+
+    // ── GLOBAL: Reset commands work from awaiting/tease states only ──
     const isReset = ['start again', 'reset', 'new', 'new property', 'start over', 'restart', 'cancel', 'menu', 'hi', 'hello', 'hey'].includes(normalised);
 
-    if (isReset && state !== 'awaiting_property') {
+    if (isReset && state !== 'awaiting_property' && state !== 'report_ready') {
       await upsertConversation(phoneNumber, { state: 'awaiting_property' });
       await sendWhatsApp(from,
         "No problem — let's start fresh.\n\nSend me a PrivateProperty or Property24 listing link and I'll give you a quick risk preview before you decide on the full report."
@@ -481,19 +564,55 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
       }
 
       case 'generating':
+      case 'scraping':
       case 'payment_pending': {
-        await sendWhatsApp(from,
-          "Your report is being generated — I'll send it as soon as it's ready. Usually 10-15 minutes.\n\nIn the meantime, you can paste another listing link and I'll queue a preview on that one too."
-        );
-        // If they sent a new URL, the global handler above already caught it
+        // Handled above before the switch — this is a fallback
+        await sendWhatsApp(from, "Still working on your report — I'll send it as soon as it's ready.");
         break;
       }
 
       case 'report_ready': {
-        await sendWhatsApp(from,
-          "Your report was delivered above ☝️\n\nGot questions about what I found? Ask away — or send me a new listing link to check another property."
-        );
-        await upsertConversation(phoneNumber, { state: 'awaiting_property' });
+        // Resend the report if they ask
+        if (['1', 'resend', 'send again', 'report', 'pdf', 'send report', 'send pdf', 'again'].includes(normalised)) {
+          try {
+            const cleanUrl = (conv.input_data || '').replace(/[?#].*$/, '').replace(/\/+$/, '');
+            const { rows: prop } = await pool.query('SELECT id FROM properties WHERE listing_url ILIKE $1 ORDER BY id DESC LIMIT 1', [`%${cleanUrl}%`]);
+            if (prop.length > 0) {
+              await sendWhatsApp(from, 'Generating your report PDF now...');
+              const { exportInspectPagePDF } = require('./pdf');
+              const pdfResult = await exportInspectPagePDF(prop[0].id, conv.asking_price, { source: 'whatsapp', phoneNumber });
+              let pdfUrl = pdfResult.pdfUrl;
+              if (pdfUrl && pdfUrl.startsWith('/reports/')) {
+                const serverHost = process.env.SERVER_HOST || 'localhost:3000';
+                const proto = serverHost.includes('ngrok') || serverHost.includes('surepath.co.za') ? 'https' : 'http';
+                pdfUrl = `${proto}://${serverHost}${pdfUrl}`;
+              }
+              if (pdfUrl) {
+                try {
+                  await sendWhatsApp(from, '*Your Surepath Report*\n\nIf you have questions, reply here. To check another property, send a new listing link.', pdfUrl);
+                } catch {
+                  await new Promise(r => setTimeout(r, 5000));
+                  try {
+                    await sendWhatsApp(from, '*Your Surepath Report*', pdfUrl);
+                  } catch {
+                    await sendWhatsApp(from, `Download your report: ${pdfUrl}`);
+                  }
+                }
+              }
+            } else {
+              await sendWhatsApp(from, "I can't find that property — send the listing link again and I'll generate a fresh report.");
+              await upsertConversation(phoneNumber, { state: 'awaiting_property' });
+            }
+          } catch (err) {
+            console.error(`[resend] Error: ${err.message}`);
+            await sendWhatsApp(from, 'Something went wrong resending the report. Send the listing link again to try from scratch.');
+            await upsertConversation(phoneNumber, { state: 'awaiting_property' });
+          }
+        } else {
+          await sendWhatsApp(from,
+            "Your report was sent above. Reply *1* to resend it, or send a new listing link to check another property."
+          );
+        }
         break;
       }
 
@@ -611,59 +730,66 @@ async function runPipelineAsync(order, conv) {
 
     console.log(`[pipeline] Starting for ${phoneNumber}: "${input}", R${askingPrice}`);
 
-    // Check if property already exists with data — skip pipeline if so
+    // Check if property already has COMPLETE data — only skip pipeline if everything is done
     let propertyId = null;
     if (input && input.startsWith('http')) {
       const cleanInput = input.replace(/[?#].*$/, '').replace(/\/+$/, '');
       const { rows: existing } = await pool.query(
-        'SELECT id FROM properties WHERE listing_url ILIKE $1 ORDER BY id DESC LIMIT 1',
+        'SELECT id, lat, suburb FROM properties WHERE listing_url ILIKE $1 ORDER BY id DESC LIMIT 1',
         [`%${cleanInput}%`]
       );
       if (existing.length > 0) {
-        // Check if it has vision analysis (meaning data collection is complete)
-        const { rows: imgCheck } = await pool.query(
-          'SELECT COUNT(*) AS c FROM property_images WHERE property_id = $1 AND vision_analysis IS NOT NULL',
-          [existing[0].id]
-        );
-        if (parseInt(imgCheck[0].c) > 0) {
-          propertyId = existing[0].id;
-          console.log(`[pipeline] Property ${propertyId} already has data — skipping pipeline, exporting PDF directly`);
+        const pid = existing[0].id;
+        const hasCoords = !!existing[0].lat;
+        const hasSuburb = !!existing[0].suburb;
+
+        // Check: all listing photos analysed, streetview exists, satellite exists
+        const { rows: imgCheck } = await pool.query(`
+          SELECT
+            COUNT(*) FILTER (WHERE image_type = 'listing') AS total_listing,
+            COUNT(*) FILTER (WHERE image_type = 'listing' AND vision_analysis IS NOT NULL) AS analysed_listing,
+            COUNT(*) FILTER (WHERE source = 'streetview') AS has_streetview,
+            COUNT(*) FILTER (WHERE source = 'satellite') AS has_satellite
+          FROM property_images WHERE property_id = $1
+        `, [pid]);
+
+        const totalListing = parseInt(imgCheck[0].total_listing);
+        const analysedListing = parseInt(imgCheck[0].analysed_listing);
+        const hasStreetview = parseInt(imgCheck[0].has_streetview) > 0;
+        const hasSatellite = parseInt(imgCheck[0].has_satellite) > 0;
+        const allPhotosAnalysed = totalListing > 0 && analysedListing >= totalListing;
+
+        const isComplete = hasCoords && hasSuburb && hasStreetview && hasSatellite && allPhotosAnalysed;
+
+        if (isComplete) {
+          propertyId = pid;
+          console.log(`[pipeline] Property ${pid} fully complete — skipping pipeline, exporting PDF directly`);
+        } else {
+          console.log(`[pipeline] Property ${pid} incomplete — coords:${hasCoords} suburb:${hasSuburb} sv:${hasStreetview} sat:${hasSatellite} photos:${analysedListing}/${totalListing} — running pipeline`);
         }
       }
     }
 
     if (!propertyId) {
-      // Full pipeline — collect all data, with progress updates
-      await sendWhatsApp(phoneNumber, '1/4 — Collecting property data and photos...').catch(() => {});
-
+      // Full pipeline — collect all data
       const result = await generateReport(input, askingPrice, phoneNumber);
       propertyId = result.property_id;
 
-      // If this was triggered by PayFast, update the original order
       if (order.id) {
         await pool.query(
           'UPDATE orders SET report_id = $1, report_delivered_at = NOW() WHERE id = $2',
           [result.report_id, order.id]
         );
       }
-
-      await sendWhatsApp(phoneNumber, '3/4 — Data collection complete. Generating your PDF report...').catch(() => {});
-    } else {
-      await sendWhatsApp(phoneNumber, 'Property data already on file — generating your PDF report...').catch(() => {});
     }
 
-    await upsertConversation(phoneNumber, { state: 'report_ready' });
-
-    // Export the inspect page as a fresh PDF (always current data)
-    console.log(`[pipeline] Exporting inspect page PDF for property ${propertyId}...`);
+    // Export the inspect page as a fresh PDF
+    await sendWhatsApp(phoneNumber, 'Generating your PDF report now...').catch(() => {});
 
     const { exportInspectPagePDF } = require('./pdf');
-    const pdfResult = await exportInspectPagePDF(propertyId, askingPrice);
+    const pdfResult = await exportInspectPagePDF(propertyId, askingPrice, { source: 'whatsapp', phoneNumber });
 
-    // Update report with PDF URL
-    if (pdfResult.pdfUrl && pdfResult.reportId) {
-      await pool.query('UPDATE property_reports SET pdf_url = $1 WHERE id = $2', [pdfResult.pdfUrl, pdfResult.reportId]);
-    }
+    await upsertConversation(phoneNumber, { state: 'report_ready' });
 
     // Make PDF URL publicly accessible for Twilio to fetch
     let publicPdfUrl = pdfResult.pdfUrl;
@@ -679,20 +805,51 @@ async function runPipelineAsync(order, conv) {
 
     if (publicPdfUrl) {
       console.log(`[pipeline] Sending PDF: ${publicPdfUrl}`);
-      await sendWhatsApp(phoneNumber, reportMsg, publicPdfUrl);
+      try {
+        await sendWhatsApp(phoneNumber, reportMsg, publicPdfUrl);
+        console.log(`[pipeline] Report delivered to ${phoneNumber}`);
+      } catch (sendErr) {
+        // PDF send failed (ngrok fetch issue) — retry once after a short delay
+        console.error(`[pipeline] PDF send failed: ${sendErr.message} — retrying in 5s`);
+        await new Promise(r => setTimeout(r, 5000));
+        try {
+          await sendWhatsApp(phoneNumber, reportMsg, publicPdfUrl);
+          console.log(`[pipeline] Report delivered on retry to ${phoneNumber}`);
+        } catch (retryErr) {
+          // Send as link instead
+          console.error(`[pipeline] PDF retry failed: ${retryErr.message} — sending as link`);
+          await sendWhatsApp(phoneNumber, reportMsg + `\n\nDownload your report: ${publicPdfUrl}`);
+        }
+      }
     } else {
-      console.log(`[pipeline] No PDF — sending message only`);
       await sendWhatsApp(phoneNumber, reportMsg);
     }
-
-    console.log(`[pipeline] Report ${result.report_id} delivered to ${phoneNumber}`);
 
   } catch (err) {
     console.error(`[pipeline] Failed for ${phoneNumber}:`, err);
 
-    await sendWhatsApp(phoneNumber,
-      'Something went wrong generating your report. Our team has been notified and will sort this out within the hour. Sorry about that.'
-    );
+    // Check if the report was actually generated despite the error
+    const cleanUrl = (conv?.input_data || '').replace(/[?#].*$/, '').replace(/\/+$/, '');
+    const { rows: checkReport } = await pool.query(
+      "SELECT pr.pdf_url FROM property_reports pr JOIN properties p ON p.id = pr.property_id WHERE p.listing_url ILIKE $1 AND pr.status = 'complete' AND pr.pdf_url IS NOT NULL ORDER BY pr.created_at DESC LIMIT 1",
+      [`%${cleanUrl}%`]
+    ).catch(() => ({ rows: [] }));
+
+    if (checkReport.length > 0 && checkReport[0].pdf_url) {
+      let rescueUrl = checkReport[0].pdf_url;
+      if (rescueUrl.startsWith('/reports/')) {
+        const serverHost = process.env.SERVER_HOST || 'localhost:3000';
+        const proto = serverHost.includes('ngrok') || serverHost.includes('surepath.co.za') ? 'https' : 'http';
+        rescueUrl = `${proto}://${serverHost}${rescueUrl}`;
+      }
+      await sendWhatsApp(phoneNumber,
+        `*Your Surepath Report is Ready*\n\nDownload your report: ${rescueUrl}\n\nIf you have questions, reply here. To check another property, send a new listing link.`
+      );
+    } else {
+      await sendWhatsApp(phoneNumber,
+        'Something went wrong generating your report. Our team has been notified and will sort this out within the hour. Sorry about that.'
+      );
+    }
   }
 }
 

@@ -118,10 +118,19 @@ export default function PropertyDetailPage() {
 
   if (!data) return <p className="text-gray-500 p-6">Loading...</p>;
 
-  const { property: p, sources, unverified_fields: unverified, report: r, images, deeds: d, crime } = data;
+  const { property: p, sources, unverified_fields: unverified, report: r, images, deeds: d, crime, pdf_exports: pdfExports } = data;
 
   // Helpers
   const src = (field: string) => sources?.[field] || null;
+  // Get the most recent update date for a set of fields
+  const sectionUpdated = (...fields: string[]) => {
+    let latest: string | null = null;
+    for (const f of fields) {
+      const s = sources?.[f];
+      if (s?.date && (!latest || s.date > latest)) latest = s.date;
+    }
+    return latest ? new Date(latest).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : null;
+  };
   const hasCoords = !!p.lat;
   const streetviewImg = images?.find((i: A) => i.source === "streetview");
   const satelliteImg = images?.find((i: A) => i.source === "satellite");
@@ -234,6 +243,8 @@ export default function PropertyDetailPage() {
       <style dangerouslySetInnerHTML={{ __html: `
         @media print {
           .no-print, button, input, select, textarea, [class*="hover:bg"] { display: none !important; }
+          /* Hide empty sections and UI prompts in print */
+          .print-hide-empty:has(.text-gray-400:only-child) { display: none !important; }
           body { background: white !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
           section { break-inside: avoid; }
           img { max-width: 100% !important; }
@@ -269,9 +280,30 @@ export default function PropertyDetailPage() {
         </div>
       </div>
 
-      {/* Export count */}
-      <div className="text-right text-[10px] text-gray-400 mb-2 no-print">
-        PDF exported {p.pdf_export_count || 0} {(p.pdf_export_count || 0) === 1 ? "time" : "times"}
+      {/* Export history */}
+      <div className="flex justify-between items-start mb-2 no-print">
+        <div className="text-[10px] text-gray-400">
+          PDF exported {p.pdf_export_count || 0} {(p.pdf_export_count || 0) === 1 ? "time" : "times"}
+          {pdfExports?.length > 0 && (
+            <span className="ml-2 text-gray-300">
+              — last: {formatDate(pdfExports[0].created_at)} via {pdfExports[0].source}{pdfExports[0].phone_number ? ` (${pdfExports[0].phone_number.replace("+27", "0")})` : ""}
+            </span>
+          )}
+        </div>
+        {pdfExports?.length > 1 && (
+          <details className="text-[10px] text-gray-400">
+            <summary className="cursor-pointer hover:text-gray-600">Export history</summary>
+            <div className="mt-1 bg-gray-50 rounded p-2 border text-[9px] absolute right-6 z-30 w-72">
+              {pdfExports.map((e: A, i: number) => (
+                <div key={i} className="flex justify-between py-0.5 border-b border-gray-100 last:border-0">
+                  <span>{formatDate(e.created_at)}</span>
+                  <span className={e.source === "whatsapp" ? "text-green-600" : "text-blue-600"}>{e.source}{e.phone_number ? ` · ${e.phone_number.replace("+27", "0")}` : ""}</span>
+                  {e.file_size_bytes && <span className="text-gray-300">{(e.file_size_bytes / 1024 / 1024).toFixed(1)}MB</span>}
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
       </div>
 
       {/* Print-only cover page */}
@@ -350,7 +382,7 @@ export default function PropertyDetailPage() {
           <div className="flex justify-between items-start mb-2">
             <div>
               <h2 className="font-bold text-sm">Geocoding</h2>
-              <div className="text-[10px] text-gray-400"><a href="https://developers.google.com/maps/documentation/geocoding" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Google Maps Geocoding API</a></div>
+              <div className="text-[10px] text-gray-400"><a href="https://developers.google.com/maps/documentation/geocoding" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Google Maps Geocoding API</a>{sectionUpdated("lat", "lng", "address_normalised") && <span className="ml-2 text-gray-300">Updated: {sectionUpdated("lat", "lng", "address_normalised")}</span>}</div>
             </div>
             <CollectBtn action="geocode" label="Geocode" ready={hasCoords} />
           </div>
@@ -462,6 +494,7 @@ export default function PropertyDetailPage() {
           <div className="flex justify-between items-start mb-2">
             <div>
               <h2 className="font-bold text-sm">Vision Analysis ({findings.length} findings)</h2>
+              {sectionUpdated("roof_material", "security_visible") && <span className="text-[9px] text-gray-300 ml-2">Updated: {sectionUpdated("roof_material", "security_visible")}</span>}
               <div className="text-[10px] text-gray-400"><a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Anthropic Claude</a> &middot; estimated &middot; ~R1.35</div>
             </div>
             <button onClick={() => collect("vision")} disabled={actionLoading === "vision"}
@@ -645,6 +678,7 @@ export default function PropertyDetailPage() {
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="font-bold text-sm">Infrastructure &amp; Environmental Risk</h2>
+                {sectionUpdated("solar_ghi_kwh_year", "water_quality_score") && <div className="text-[9px] text-gray-300">Updated: {sectionUpdated("solar_ghi_kwh_year", "water_quality_score")}</div>}
                 <FeedbackBtn propertyId={p.id} section="infrastructure" />
               </div>
               <div className="text-[10px] text-gray-400">
@@ -812,6 +846,7 @@ export default function PropertyDetailPage() {
         {/* ── LISTING DATA ── */}
         <section className="bg-white border rounded-lg p-4">
           <h2 className="font-bold text-sm">Listing Data</h2>
+          {sectionUpdated("listing_url", "erf_number", "suburb", "city") && <div className="text-[9px] text-gray-300">Updated: {sectionUpdated("listing_url", "erf_number", "suburb", "city")}</div>}
           <div className="text-[10px] text-gray-400 mb-2">Every field linked to its exact source page</div>
           <div className="grid grid-cols-2 gap-x-6">
             <Datum label="Listing Number" value={p.listing_number} source={src("listing_number")} />
@@ -841,6 +876,7 @@ export default function PropertyDetailPage() {
         {/* ── PROPERTY FEATURES (from listing) ── */}
         <section className="bg-white border rounded-lg p-4">
           <h2 className="font-bold text-sm">Property Features</h2>
+          {sectionUpdated("bedrooms", "bathrooms", "floor_area_sqm", "asking_price") && <div className="text-[9px] text-gray-300">Updated: {sectionUpdated("bedrooms", "bathrooms", "floor_area_sqm", "asking_price")}</div>}
           <div className="text-[10px] text-gray-400 mb-2">From listing structured data</div>
           <div className="grid grid-cols-3 gap-x-6">
             {p.bedrooms != null && <Datum label="Bedrooms" value={p.bedrooms} source={src("bedrooms")} />}
@@ -1190,37 +1226,27 @@ export default function PropertyDetailPage() {
           );
         })()}
 
-        {/* ── REPORT ── */}
-        {hasReport ? (
-          <section className="bg-[#0D1B2A] text-white rounded-lg p-6">
-            <div className="text-[10px] text-gray-400 mb-1">
-              Generated by <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">Claude API</a> &middot; All values are AI estimates, not verified facts &middot; {formatDate(r.created_at)}
-            </div>
-            <div className={`text-3xl font-bold ${r.decision === "BUY" ? "text-green-400" : r.decision === "NEGOTIATE" ? "text-yellow-400" : r.decision === "WALK_AWAY" ? "text-red-400" : "text-orange-400"}`}>{r.decision}</div>
-            <p className="text-gray-300 mt-1 text-sm">{r.decision_reasoning}</p>
-            {/* Real verified data only */}
-            <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-white/10 text-sm">
-              {p.solar_ghi_kwh_year && (
-                <div>
-                  <div className="text-gray-400 text-[10px]">Solar Irradiance (PVGIS verified)</div>
-                  <div className="font-bold">{Number(p.solar_ghi_kwh_year).toFixed(0)} kWh/m²/year</div>
-                  <div className="text-[10px] text-gray-500">PV output: {Number(p.solar_pv_output_kwh_year).toFixed(0)} kWh/year per 1kWp</div>
-                </div>
-              )}
-              {p.suburb_crime_score != null && p.suburb_crime_score > 0 && (
-                <div>
-                  <div className="text-gray-400 text-[10px]">Crime Score (CrimeHub/SAPS verified)</div>
-                  <div className="font-bold">{p.suburb_crime_score}/10</div>
-                </div>
-              )}
-            </div>
-          </section>
-        ) : (
-          <section className="bg-[#0D1B2A] text-white rounded-lg p-6 text-center no-print">
-            <div className="text-gray-400 text-sm">No report generated yet</div>
-            <p className="text-xs text-gray-500 mt-2">Use &quot;Export Page as PDF&quot; above to save this page as a report, or &quot;Run All Processes&quot; to collect all data first.</p>
-          </section>
-        )}
+        {/* ── DATA SUMMARY FOOTER ── */}
+        <section className="bg-[#0D1B2A] text-white rounded-lg p-6">
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            {p.solar_ghi_kwh_year && (
+              <div>
+                <div className="text-gray-400 text-[10px]">Solar Irradiance (PVGIS verified)</div>
+                <div className="font-bold">{Number(p.solar_ghi_kwh_year).toFixed(0)} kWh/m²/year</div>
+                <div className="text-[10px] text-gray-500">PV output: {Number(p.solar_pv_output_kwh_year).toFixed(0)} kWh/year per 1kWp</div>
+              </div>
+            )}
+            {p.suburb_crime_score != null && p.suburb_crime_score > 0 && (
+              <div>
+                <div className="text-gray-400 text-[10px]">Crime Score (CrimeHub/SAPS verified)</div>
+                <div className="font-bold">{p.suburb_crime_score}/10</div>
+              </div>
+            )}
+          </div>
+          <div className="text-[9px] text-gray-500 mt-4 pt-3 border-t border-white/10">
+            All findings are risk indicators from data sources listed above. This report does not replace a professional building inspection or valuation. Verify all findings on-site with qualified professionals.
+          </div>
+        </section>
 
         {/* Print footer */}
         <div className="print-header" style={{ textAlign: "center", marginTop: 30, fontSize: 9, color: "#888" }}>

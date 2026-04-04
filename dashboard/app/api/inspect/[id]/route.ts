@@ -127,6 +127,12 @@ export const GET = withAuth(async (_req: NextRequest, { params }: { params: Prom
     report._linked_findings = linkedFindings;
   }
 
+  // PDF export history
+  const pdfExports = await query(
+    "SELECT id, source, phone_number, file_size_bytes, created_at FROM pdf_exports WHERE property_id = $1 ORDER BY created_at DESC LIMIT 20",
+    [id]
+  );
+
   return NextResponse.json({
     property: prop,
     sources: prop.data_sources || {},
@@ -137,5 +143,6 @@ export const GET = withAuth(async (_req: NextRequest, { params }: { params: Prom
     deeds: deeds[0] || null,
     crime: crimeData,
     service_providers: serviceProviders,
+    pdf_exports: pdfExports,
   });
 });

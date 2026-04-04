@@ -1155,9 +1155,12 @@ async function renderPropertyPDF(propertyId, askingPrice) {
  *
  * @param {number} propertyId
  * @param {number|null} askingPrice
+ * @param {{ source?: string, phoneNumber?: string }} options
  * @returns {{ reportId: number, pdfUrl: string }}
  */
-async function exportInspectPagePDF(propertyId, askingPrice) {
+async function exportInspectPagePDF(propertyId, askingPrice, options = {}) {
+  const exportSource = options.source || 'api';
+  const exportPhone = options.phoneNumber || null;
   console.log(`[pdf] Exporting inspect page for property ${propertyId}...`);
 
   const jwt = require('jsonwebtoken');
@@ -1205,8 +1208,12 @@ async function exportInspectPagePDF(propertyId, askingPrice) {
   await browser.close();
   console.log(`[pdf] Inspect page PDF rendered: ${pdfBuffer.length} bytes`);
 
-  // Increment export count
+  // Increment export count and log the export
   await pool.query('UPDATE properties SET pdf_export_count = COALESCE(pdf_export_count, 0) + 1 WHERE id = $1', [propertyId]);
+  await pool.query(
+    'INSERT INTO pdf_exports (property_id, source, phone_number, file_size_bytes) VALUES ($1, $2, $3, $4)',
+    [propertyId, exportSource, exportPhone, pdfBuffer.length]
+  ).catch(err => console.error(`[pdf] Export log error: ${err.message}`));
 
   // Create report record
   const { rows: propRows } = await pool.query('SELECT erf_number, asking_price FROM properties WHERE id = $1', [propertyId]);
