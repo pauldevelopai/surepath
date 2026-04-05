@@ -874,8 +874,16 @@ async function generateReport(input, askingPrice, phoneNumber) {
       return `/property-images/${filename}`;
     }
 
-    // Store listing photos — always add, ON CONFLICT preserves existing analysis
-    if (photoUrls.length > 0) {
+    // Store listing photos — skip entirely if property already has photos
+    const { rows: existingPhotoCheck } = await pool.query(
+      "SELECT COUNT(*) AS c FROM property_images WHERE property_id = $1 AND source IN ('property24', 'privateproperty')",
+      [propertyId]
+    );
+    const existingPhotoCount = parseInt(existingPhotoCheck[0].c);
+
+    if (existingPhotoCount > 0) {
+      log(4, `Already have ${existingPhotoCount} listing photos — keeping existing set`);
+    } else if (photoUrls.length > 0) {
       const validPhotos = photoUrls.filter(url => {
         const lower = url.toLowerCase();
         if (lower.includes('.gif') || lower.includes('.svg')) return false;

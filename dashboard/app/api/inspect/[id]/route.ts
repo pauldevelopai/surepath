@@ -105,20 +105,52 @@ export const GET = withAuth(async (_req: NextRequest, { params }: { params: Prom
     [prop.city]
   ) : [];
 
-  // Build findings from per-image vision_analysis — each finding linked to its source photo
+  // Build findings from per-image vision_analysis — deduplicated and filtered
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const linkedFindings: Record<string, any>[] = [];
-  const seenObs = new Set<string>();
+  const rawFindings: Record<string, any>[] = [];
   for (const img of images) {
     if (!img.vision_analysis?.findings) continue;
     const photoUrl = img.image_url?.startsWith("http") ? img.image_url : null;
     for (const f of img.vision_analysis.findings) {
       if (!f.observation) continue;
-      const key = f.observation.toLowerCase();
-      if (seenObs.has(key)) continue;
-      seenObs.add(key);
-      linkedFindings.push({ ...f, source_photo: photoUrl });
+      rawFindings.push({ ...f, source_photo: photoUrl });
     }
+  }
+
+  // Smart dedup: normalize observation text to catch similar findings
+  function findingKey(obs: string) {
+    const normalized = obs.toLowerCase()
+      .replace(/photos?\s*\d+[\s,and]*/gi, '')
+      .replace(/\b(first|second|third|fourth|fifth|third|another|same|also|again|similar)\b/gi, '')
+      .replace(/\b(confirmation|confirmed|visible|detected|present|appears?|noted|observed)\b/gi, '')
+      .replace(/\b(recommend|should|may|could|cannot|possible|probable|potential|risk of)\b/gi, '')
+      .replace(/\b(from this|at this|in this|under|available|current|conditions?|resolution|distance|angle)\b/gi, '')
+      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return normalized.substring(0, 50);
+  }
+
+  const skipPatterns = [
+    /not suitable for property inspection/i,
+    /no structural defects.*building elements.*inspectable/i,
+    /domestic cat/i,
+    /road bicycle stored/i,
+    /cannot be meaningfully assessed/i,
+    /no residential property exterior is visible/i,
+    /ceiling not visible in frame/i,
+  ];
+
+  const linkedFindings: Record<string, any>[] = [];
+  const seenKeys = new Set<string>();
+  for (const fi of rawFindings) {
+    if (skipPatterns.some(p => p.test(fi.observation))) continue;
+    if (fi.severity === 'LOW' && (!fi.estimated_repair_cost_zar || fi.estimated_repair_cost_zar.max === 0) &&
+        /no\s+(visible|confirmed|active|defect|crack|stain|sag|leak|damage)/i.test(fi.observation)) continue;
+    const key = findingKey(fi.observation);
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    linkedFindings.push(fi);
   }
 
   // Use linked findings if we have them, otherwise fall back to report findings

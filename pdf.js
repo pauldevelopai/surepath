@@ -632,23 +632,89 @@ function buildDataHTML(property, images, deeds, areaRisks, crimeData, nicoTease)
   const listingPhotos = images.filter(i => i.source !== 'streetview' && i.source !== 'satellite' && i.image_url && i.image_url.startsWith('http'));
 
   // Build deduplicated findings from per-image vision analysis
-  const findings = [];
-  const seenObs = new Set();
+  const rawFindings = [];
   for (const img of images) {
     const va = typeof img.vision_analysis === 'string' ? JSON.parse(img.vision_analysis) : img.vision_analysis;
     if (!va?.findings) continue;
     const photoUrl = img.image_url?.startsWith('http') ? img.image_url : null;
     for (const fi of va.findings) {
       if (!fi.observation) continue;
-      const key = fi.observation.toLowerCase();
-      if (seenObs.has(key)) continue;
-      seenObs.add(key);
-      findings.push({ ...fi, source_photo: photoUrl, photo_type: va.photo_type || fi.category || 'other' });
+      rawFindings.push({ ...fi, source_photo: photoUrl, photo_type: va.photo_type || fi.category || 'other' });
     }
   }
 
-  // Sort by severity
+  // Smart dedup: extract core topic words and group similar observations
+  function findingKey(obs) {
+    // Extract the key subject of the finding
+    const normalized = obs.toLowerCase()
+      .replace(/photos?\s*\d+[\s,and]*/gi, '')
+      .replace(/\b(first|second|third|fourth|fifth|third|another|same|also|again|similar)\b/gi, '')
+      .replace(/\b(confirmation|confirmed|visible|detected|present|appears?|noted|observed)\b/gi, '')
+      .replace(/\b(recommend|should|may|could|cannot|possible|probable|potential|risk of)\b/gi, '')
+      .replace(/\b(from this|at this|in this|under|available|current|conditions?|resolution|distance|angle)\b/gi, '')
+      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    // Take first 50 chars — enough to identify the core issue, short enough to catch variants
+    return normalized.substring(0, 50);
+  }
+
+  // Topic dedup: group findings about the same subject, keep highest severity
+  const topicPatterns = [
+    { topic: 'moss_wall_moisture', pattern: /moss.wall|plant.wall|living.wall|living.green|living.moss/i },
+    { topic: 'bedroom3_extension', pattern: /bedroom.3.*guestroom|guestroom.*offset|add.on.*structure|unauthorised.*construction|irregular.footprint/i },
+    { topic: 'flat_roof_waterproofing', pattern: /flat.roof.*waterproof|bare.aggregate|screed.finish|waterproofing.membrane|torch.on/i },
+    { topic: 'ceiling_condition', pattern: /ceiling.*no.sag|ceiling.*intact|ceiling.*no.*active.*leak|ceiling.*mold.*bloom|ceiling.*stain/i },
+    { topic: 'walls_no_cracks', pattern: /walls.*no.*crack|walls.*good.*cosmetic|walls.*acceptable|painted.*plaster.*no.*crack/i },
+    { topic: 'floor_plan_layout', pattern: /floor.plan.*overlay|floor.plan.*shows|layout.*shows/i },
+  ];
+
+  // Also filter out non-findings (cats, bicycles, "not suitable for inspection")
+  const skipPatterns = [
+    /not suitable for property inspection/i,
+    /no structural defects.*building elements.*inspectable/i,
+    /domestic cat/i,
+    /road bicycle stored/i,
+    /cannot be meaningfully assessed/i,
+    /no residential property exterior is visible/i,
+    /ceiling not visible in frame/i,
+  ];
+
+  const findings = [];
+  const seenKeys = new Set();
+  const seenTopics = new Map(); // topic → best finding (highest severity)
   const sevOrder = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'COSMETIC'];
+
+  for (const fi of rawFindings) {
+    if (skipPatterns.some(p => p.test(fi.observation))) continue;
+    if (fi.severity === 'LOW' && (!fi.estimated_repair_cost_zar || fi.estimated_repair_cost_zar.max === 0) &&
+        /no\s+(visible|confirmed|active|defect|crack|stain|sag|leak|damage)/i.test(fi.observation)) continue;
+
+    // Check topic-based dedup first — keep highest severity per topic
+    const matchedTopic = topicPatterns.find(tp => tp.pattern.test(fi.observation));
+    if (matchedTopic) {
+      const existing = seenTopics.get(matchedTopic.topic);
+      if (existing) {
+        // Keep the higher severity one
+        if (sevOrder.indexOf(fi.severity) < sevOrder.indexOf(existing.severity)) {
+          // New one is more severe — replace
+          const idx = findings.indexOf(existing);
+          if (idx >= 0) findings[idx] = fi;
+          seenTopics.set(matchedTopic.topic, fi);
+        }
+        continue; // skip this duplicate topic
+      }
+      seenTopics.set(matchedTopic.topic, fi);
+    }
+
+    // Text-based dedup
+    const key = findingKey(fi.observation);
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    findings.push(fi);
+  }
+
+  // Sort by severity
   findings.sort((a, b) => sevOrder.indexOf(a.severity) - sevOrder.indexOf(b.severity));
 
   // Group by category

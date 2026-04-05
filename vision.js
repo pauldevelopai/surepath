@@ -340,14 +340,15 @@ async function analysePropertyImages(imageUrls, propertyId) {
     console.log(`  Batch ${i + 1}/${batches.length} (${batches[i].length} images)...`);
     const batchResults = await analyseBatch(batches[i]);
 
-    // Pair results with their image metadata
-    for (let j = 0; j < batchResults.length; j++) {
+    // Ensure every image in the batch gets a result — even if parse failed
+    for (let j = 0; j < batches[i].length; j++) {
       const imgIndex = i * BATCH_SIZE + j;
+      const result = batchResults[j] || { photo_type: 'unknown', findings: [], _parse_failed: true };
       if (imgIndex < images.length) {
-        batchResults[j]._source_url = images[imgIndex].url;
+        result._source_url = images[imgIndex].url;
       }
+      allAnalyses.push(result);
     }
-    allAnalyses.push(...batchResults);
   }
 
   // Step 4: Store each image + findings in property_images
@@ -742,13 +743,15 @@ async function analyseWithHFPrestage(propertyId, imageUrls) {
     console.log(`  Batch ${i + 1}/${batches.length} (${batches[i].length} images)...`);
     const batchResults = await analyseBatch(batches[i], hfBatches[i]);
 
-    for (let j = 0; j < batchResults.length; j++) {
+    // Ensure every image in the batch gets a result — even if parse failed
+    for (let j = 0; j < batches[i].length; j++) {
       const imgIndex = i * BATCH_SIZE + j;
+      const result = batchResults[j] || { photo_type: 'unknown', findings: [], _parse_failed: true };
       if (imgIndex < images.length) {
-        batchResults[j]._source_url = images[imgIndex].url;
+        result._source_url = images[imgIndex].url;
       }
+      allAnalyses.push(result);
     }
-    allAnalyses.push(...batchResults);
   }
 
   // Step 4: Store results in database
