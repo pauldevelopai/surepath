@@ -1017,26 +1017,72 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
 
       case 'tease_sent': {
         if (['yes', 'ja', '1', 'buy', 'full report', 'yes please', 'yep', 'sure', 'ok', 'okay', 'do it', 'go ahead', 'lets go', "let's go"].includes(normalised)) {
-          // Reply immediately — don't make them wait
-          await sendWhatsApp(from, "Generating your full report now — I'll send it as soon as it's ready. ⏳");
+          const REPORT_PRICE = 149;
+          const PAYMENT_ENABLED = !!(PAYFAST_MERCHANT_ID && PAYFAST_MERCHANT_KEY && process.env.PAYMENT_ENABLED === 'true');
 
-          await upsertConversation(phoneNumber, {
-            state: 'generating',
-            asking_price: conv.asking_price || null,
-          });
+          if (PAYMENT_ENABLED) {
+            // Create order and send payment link
+            try {
+              const { rows: orderRows } = await pool.query(
+                'INSERT INTO orders (phone_number, price_zar, payment_status) VALUES ($1, $2, $3) RETURNING id',
+                [phoneNumber, REPORT_PRICE, 'pending']
+              );
+              const orderId = orderRows[0].id;
+              const payUrl = generatePayFastURL(orderId, REPORT_PRICE);
 
-          // Pipeline creates the property, runs all processes, and exports the PDF
-          runPipelineAsync({ phone_number: phoneNumber }, conv);
+              await upsertConversation(phoneNumber, {
+                state: 'payment_pending',
+                asking_price: conv.asking_price || null,
+              });
+
+              await sendWhatsApp(from, [
+                `The full Surepath report for this property is *R${REPORT_PRICE}*.`,
+                '',
+                'It includes:',
+                '• Deeds history & ownership',
+                '• Crime statistics for the area',
+                '• All photo risk analysis findings',
+                '• Repair cost estimates',
+                '• Infrastructure & compliance data',
+                '• Security & community intelligence',
+                '• Purchase decision recommendation',
+                '',
+                `Pay securely here: ${payUrl}`,
+                '',
+                'Once payment is confirmed, your report will be generated and sent here automatically.',
+              ].join('\n'));
+            } catch (err) {
+              console.error(`[payfast] Order creation failed: ${err.message}`);
+              await sendWhatsApp(from, 'Something went wrong setting up the payment. Please try again or contact us.');
+            }
+          } else {
+            // Payment disabled — generate report directly (dev/test mode)
+            await sendWhatsApp(from, "Generating your full report now — I'll send it as soon as it's ready. ⏳");
+
+            await upsertConversation(phoneNumber, {
+              state: 'generating',
+              asking_price: conv.asking_price || null,
+            });
+
+            runPipelineAsync({ phone_number: phoneNumber }, conv);
+          }
 
         } else {
-          await sendWhatsApp(from, `Reply *1* for the full report, or paste a new listing link to check a different property.`);
+          await sendWhatsApp(from, `Reply *1* for the full report (R149), or paste a new listing link to check a different property.`);
         }
         break;
       }
 
-      case 'generating':
-      case 'scraping':
       case 'payment_pending': {
+        if (hasListingURL) break; // handled by the global URL handler above
+        await sendWhatsApp(from,
+          "I'm waiting for your payment to come through. Once it's confirmed, your report will be generated automatically.\n\nIf you've already paid, give it a minute — PayFast sometimes takes a moment to confirm.\n\nTo check a different property, send a new listing link."
+        );
+        break;
+      }
+
+      case 'generating':
+      case 'scraping': {
         // Handled above before the switch — this is a fallback
         await sendWhatsApp(from, "Still working on your report — I'll send it as soon as it's ready.");
         break;
