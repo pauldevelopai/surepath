@@ -31,7 +31,7 @@ export const GET = withAuth(async (req: NextRequest) => {
   const whereSQL = whereClauses.length > 0 ? "WHERE " + whereClauses.join(" AND ") : "";
 
   const fromJoin = `FROM properties p
-    LEFT JOIN property_reports pr ON pr.property_id = p.id AND pr.status = 'complete'`;
+    LEFT JOIN LATERAL (SELECT * FROM property_reports WHERE property_id = p.id AND status = 'complete' ORDER BY created_at DESC LIMIT 1) pr ON true`;
 
   const countResult = await query(`SELECT COUNT(DISTINCT p.id) AS total ${fromJoin} ${whereSQL}`, params);
   const total = parseInt(countResult[0]?.total) || 0;

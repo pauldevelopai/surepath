@@ -27,6 +27,14 @@ const SECURITY_KEYWORDS = [
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 // ─── Google Places API text search (fallback) ────────────────────────
 
 async function placesTextSearch(query, lat, lng, radius) {
@@ -49,7 +57,7 @@ async function placesTextSearch(query, lat, lng, radius) {
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': key,
-        'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.reviews,places.types,places.websiteUri,places.nationalPhoneNumber',
+        'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.reviews,places.types,places.websiteUri,places.nationalPhoneNumber,places.location',
       },
     }, (res) => {
       let data = '';
@@ -225,9 +233,15 @@ async function searchSecurityCompaniesGoogle(lat, lng, suburb, city) {
       .slice(0, 3)
       .map(r => r.text.substring(0, 150));
 
+    // Calculate distance from property
+    const distKm = p.location?.latitude && p.location?.longitude
+      ? Math.round(haversineKm(lat, lng, p.location.latitude, p.location.longitude) * 10) / 10
+      : null;
+
     return {
       name: p.displayName?.text || 'Unknown',
       address: p.formattedAddress || null,
+      distance_km: distKm,
       rating: p.rating || null,
       review_count: p.userRatingCount || 0,
       phone: p.nationalPhoneNumber || null,
@@ -281,8 +295,13 @@ async function searchCPFGoogle(lat, lng, suburb, city) {
   const fbMatch = (best.websiteUri || '' + ' ' + allText).match(/(?:https?:\/\/)?(?:www\.)?facebook\.com\/[^\s"')]+/i);
   if (fbMatch) facebookUrl = fbMatch[0].startsWith('http') ? fbMatch[0] : 'https://' + fbMatch[0];
 
+  const cpfDistKm = best.location?.latitude && best.location?.longitude
+    ? Math.round(haversineKm(lat, lng, best.location.latitude, best.location.longitude) * 10) / 10
+    : null;
+
   return {
     name: best.displayName?.text || null,
+    distance_km: cpfDistKm,
     contact_phone: best.nationalPhoneNumber || null,
     contact_email: null,
     facebook_url: facebookUrl,
@@ -326,8 +345,13 @@ async function searchNHWGoogle(lat, lng, suburb, city) {
   const fbMatch = (best.websiteUri || '' + ' ' + allText).match(/(?:https?:\/\/)?(?:www\.)?facebook\.com\/[^\s"')]+/i);
   if (fbMatch) facebookUrl = fbMatch[0].startsWith('http') ? fbMatch[0] : 'https://' + fbMatch[0];
 
+  const nhwDistKm = best.location?.latitude && best.location?.longitude
+    ? Math.round(haversineKm(lat, lng, best.location.latitude, best.location.longitude) * 10) / 10
+    : null;
+
   return {
     name: best.displayName?.text || null,
+    distance_km: nhwDistKm,
     contact_info: best.nationalPhoneNumber || null,
     facebook_url: facebookUrl,
     activity_level: activityLevel,

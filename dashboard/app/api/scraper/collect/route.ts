@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { withAuth } from "@/lib/auth";
-import path from "path";
-import { spawn } from "child_process";
 
-const projectRoot = path.resolve(process.cwd(), "..");
+/* eslint-disable @typescript-eslint/no-require-imports */
+const path = require("path");
+const cp = require("child_process");
+/* eslint-enable @typescript-eslint/no-require-imports */
+
+function getProjectRoot(): string { return path.resolve(process.cwd(), ".."); }
+function spawn(cmd: string, args: string[], opts: Record<string, unknown>) { return cp.spawn(cmd, args, opts); }
 
 /**
  * Run a backend collection script as a child process.
@@ -13,8 +17,8 @@ const projectRoot = path.resolve(process.cwd(), "..");
 function runScript(scriptCode: string): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
     const child = spawn("node", ["-e", scriptCode], {
-      cwd: projectRoot,
-      env: { ...process.env, NODE_PATH: projectRoot },
+      cwd: getProjectRoot(),
+      env: { ...process.env, NODE_PATH: getProjectRoot() },
       timeout: 120000,
     });
     let stdout = "", stderr = "";

@@ -619,7 +619,7 @@ async function renderReportBuffer(reportId) {
  * Build HTML report directly from collected data — no AI synthesis needed.
  * Shows all property data, vision findings, deeds, crime, risk with sources.
  */
-function buildDataHTML(property, images, deeds, areaRisks, crimeData) {
+function buildDataHTML(property, images, deeds, areaRisks, crimeData, nicoTease) {
   const p = property;
   images = images || [];
   areaRisks = areaRisks || [];
@@ -846,6 +846,13 @@ function buildDataHTML(property, images, deeds, areaRisks, crimeData) {
   </div>
 </div>
 
+${nicoTease ? `
+<div style="background:#F0F4F8;border-left:4px solid #0D1B2A;padding:14px 18px;margin:16px 0;border-radius:0 6px 6px 0">
+  <div style="font-size:11px;color:#888;margin-bottom:4px;font-weight:bold">Nico's Quick Take</div>
+  <div style="font-size:13px;color:#333;line-height:1.6;font-style:italic">"${nicoTease}"</div>
+</div>
+` : ''}
+
 <!-- RED FLAGS -->
 ${redFlags.length > 0 ? `
 <h2 style="color:#E63946">Red Flags (${redFlags.length})</h2>
@@ -1036,10 +1043,11 @@ ${sec ? `
 ${sec.security_companies?.length > 0 ? `
 <h3 style="margin-top:8px;color:#0D1B2A">Security Companies in the Area</h3>
 <table>
-  <thead><tr><th>Company</th><th style="text-align:center">Rating</th><th style="text-align:center">Reviews</th><th style="text-align:center">Armed Response</th></tr></thead>
-  <tbody>${sec.security_companies.slice(0, 8).map(c => `
+  <thead><tr><th>Company</th><th style="text-align:center">Distance</th><th style="text-align:center">Rating</th><th style="text-align:center">Reviews</th><th style="text-align:center">Armed Response</th></tr></thead>
+  <tbody>${sec.security_companies.slice(0, 5).map(c => `
     <tr>
       <td><strong>${c.name}</strong>${c.phone ? `<br><span style="font-size:10px;color:#555">${c.phone}</span>` : ''}</td>
+      <td style="text-align:center;font-size:11px">${c.distance_km != null ? c.distance_km + ' km' : '—'}</td>
       <td style="text-align:center">${c.rating ? c.rating.toFixed(1) + '/5' : '—'}</td>
       <td style="text-align:center">${c.review_count || 0}</td>
       <td style="text-align:center;color:${c.armed_response ? '#27AE60' : '#888'}">${c.armed_response ? 'Yes' : '—'}</td>
@@ -1052,7 +1060,7 @@ ${sec.security_companies?.length > 0 ? `
   <div style="flex:1;background:#f8f9fa;border-radius:8px;padding:12px">
     <h3 style="margin:0 0 6px 0;color:#0D1B2A;font-size:13px">Community Policing Forum (CPF)</h3>
     ${sec.cpf?.name ? `
-      <p style="margin:4px 0"><strong>${sec.cpf.name}</strong></p>
+      <p style="margin:4px 0"><strong>${sec.cpf.name}</strong>${sec.cpf.distance_km != null ? ` <span style="font-size:10px;color:#888">(${sec.cpf.distance_km} km)</span>` : ''}</p>
       ${sec.cpf.contact_phone ? `<p style="margin:2px 0;font-size:11px">Phone: ${sec.cpf.contact_phone}</p>` : ''}
       ${sec.cpf.website_url ? `<p style="margin:2px 0;font-size:11px">Web: ${sec.cpf.website_url}</p>` : ''}
       ${sec.cpf.facebook_url ? `<p style="margin:2px 0;font-size:11px">Facebook: ${sec.cpf.facebook_url}</p>` : ''}
@@ -1063,7 +1071,7 @@ ${sec.security_companies?.length > 0 ? `
   <div style="flex:1;background:#f8f9fa;border-radius:8px;padding:12px">
     <h3 style="margin:0 0 6px 0;color:#0D1B2A;font-size:13px">Neighbourhood Watch</h3>
     ${sec.neighbourhood_watch?.name ? `
-      <p style="margin:4px 0"><strong>${sec.neighbourhood_watch.name}</strong></p>
+      <p style="margin:4px 0"><strong>${sec.neighbourhood_watch.name}</strong>${sec.neighbourhood_watch.distance_km != null ? ` <span style="font-size:10px;color:#888">(${sec.neighbourhood_watch.distance_km} km)</span>` : ''}</p>
       ${sec.neighbourhood_watch.contact_info ? `<p style="margin:2px 0;font-size:11px">Contact: ${sec.neighbourhood_watch.contact_info}</p>` : ''}
       ${sec.neighbourhood_watch.facebook_url ? `<p style="margin:2px 0;font-size:11px">Facebook: ${sec.neighbourhood_watch.facebook_url}</p>` : ''}
       <p style="margin:4px 0;font-size:11px;color:${sec.neighbourhood_watch.activity_level === 'active' ? '#27AE60' : sec.neighbourhood_watch.activity_level === 'moderate' ? '#F39C12' : '#888'}">Activity: ${sec.neighbourhood_watch.activity_level}</p>
@@ -1230,7 +1238,7 @@ ${listingPhotos.slice(0, 12).map(img => `
     ${p.dolomite_risk ? '<tr><td>Geological risk</td><td>Council for Geoscience</td><td>Verified</td></tr>' : ''}
     ${cd ? '<tr><td>Crime statistics</td><td>CrimeHub — SAPS official data</td><td>Verified</td></tr>' : ''}
     ${p.solar_ghi_kwh_year ? '<tr><td>Solar irradiance</td><td>Global Solar Atlas / PVGIS</td><td>Verified</td></tr>' : ''}
-    ${areaRisks.filter(ar => ar.risk_type !== 'crime_detailed').map(ar => `<tr><td>${ar.risk_type.replace(/_/g, ' ')}</td><td>${ar.source_name}</td><td>${ar.risk_level || 'N/A'}</td></tr>`).join('')}
+    ${areaRisks.filter(ar => !['crime_detailed', 'water_quality', 'sewerage_quality', 'security_community', 'social_concerns'].includes(ar.risk_type)).map(ar => `<tr><td>${ar.risk_type.replace(/_/g, ' ')}</td><td>${ar.source_name}</td><td>${ar.risk_level || 'N/A'}</td></tr>`).join('')}
   </tbody>
 </table>
 
@@ -1300,8 +1308,21 @@ async function renderPropertyPDF(propertyId, askingPrice) {
   );
   const reportId = reportRows[0].id;
 
+  // Fetch Nico tease if available (from WhatsApp conversation)
+  let nicoTease = null;
+  try {
+    const { rows: teaseRows } = await pool.query(
+      "SELECT tease_data FROM conversations WHERE listing_url ILIKE $1 OR input_data ILIKE $1 ORDER BY updated_at DESC LIMIT 1",
+      [`%${property.listing_url?.replace(/.*\//, '') || propertyId}%`]
+    );
+    if (teaseRows[0]?.tease_data) {
+      const td = typeof teaseRows[0].tease_data === 'string' ? JSON.parse(teaseRows[0].tease_data) : teaseRows[0].tease_data;
+      nicoTease = td.nicoTease || null;
+    }
+  } catch {}
+
   // Build HTML and render PDF
-  const html = buildDataHTML(property, images, deeds, areaRisks, crimeData);
+  const html = buildDataHTML(property, images, deeds, areaRisks, crimeData, nicoTease);
 
   const browser = await puppeteer.launch({
     headless: true,

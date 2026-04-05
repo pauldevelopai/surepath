@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { withAuth } from "@/lib/auth";
-import { spawn, execSync } from "child_process";
-import path from "path";
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+const cp = require("child_process");
+const path = require("path");
+/* eslint-enable @typescript-eslint/no-require-imports */
+
+function getProjectDir(): string { return path.resolve(process.cwd(), ".."); }
+function scriptPath(name: string): string { return path.join(getProjectDir(), "bootstrap", name); }
+function spawn(cmd: string, args: string[], opts: Record<string, unknown>) { return cp.spawn(cmd, args, opts); }
+function execSync(cmd: string, opts?: Record<string, unknown>) { return cp.execSync(cmd, opts); }
 
 // Track running scraper processes — keyed by name (e.g. "pp", "p24", "pp_2")
 const scraperProcesses: Map<string, { proc: ReturnType<typeof spawn>; log: string[]; startedAt: Date }> = new Map();
@@ -52,11 +60,11 @@ export const POST = withAuth(async (req: NextRequest) => {
     // Determine scraper name and command based on source
     let scraperName: string;
     let args: string[];
-    const projectDir = path.resolve(process.cwd(), "..");
+    const projectDir = getProjectDir();
 
     if (source === "pp") {
       scraperName = "pp";
-      args = [path.resolve(projectDir, "bootstrap", "scrape-pp.js")];
+      args = [scriptPath("scrape-pp.js")];
       if (province) args.push("--province", province);
       if (province_code) args.push("--code", String(province_code));
       args.push("--start-page", String(start_page || 1));
@@ -113,34 +121,19 @@ export const POST = withAuth(async (req: NextRequest) => {
       `];
     } else if (source === "discovery") {
       scraperName = "discovery";
-      args = [path.resolve(projectDir, "bootstrap", "scrape-pp.js"), "--max-pages", "20", "--delay", "2"];
-    } else if (source === "security") {
-      scraperName = "security";
-      args = ["-e", `
-        require('dotenv').config();
-        const pool = require('./db');
-        const collectSecurity = require('./collect-security');
-        function withTimeout(fn, ms) { return Promise.race([fn(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]); }
-        (async () => {
-          const { rows } = await pool.query(
-            "SELECT DISTINCT ON (p.suburb, p.city) p.id, p.suburb, p.city FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL AND p.lat IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'security_community') ORDER BY p.suburb, p.city, p.created_at DESC LIMIT 20"
-          );
-          console.log('Security: ' + rows.length + ' suburbs to process');
-          let ok = 0, skip = 0;
-          for (const prop of rows) {
-            try {
-              const r = await withTimeout(() => collectSecurity.collectForProperty(prop.id), 30000);
-              if (r) { console.log('OK: ' + prop.suburb + ', ' + prop.city + ' — ' + r.security_companies_count + ' companies, CPF: ' + (r.cpf_found ? 'yes' : 'no') + ', sentiment: ' + r.sentiment_overall); ok++; }
-              else { console.log('SKIP: ' + prop.suburb + ' — no data'); skip++; }
-            } catch (e) { console.log('SKIP: ' + prop.suburb + ' — ' + e.message); skip++; }
-          }
-          console.log('=== Security complete: ' + ok + ' OK, ' + skip + ' skipped ===');
-          await pool.end();
-        })();
-      `];
+      args = [scriptPath("scrape-pp.js"), "--max-pages", "20", "--delay", "2"];
+    } else if (source === "saps") {
+      scraperName = "saps";
+      args = [scriptPath("scrape-saps-stations.js"), "--delay", "2"];
+    } else if (source === "assist247") {
+      scraperName = "assist247";
+      args = [scriptPath("scrape-assist247.js"), "--delay", "3"];
+    } else if (source === "procompare") {
+      scraperName = "procompare";
+      args = [scriptPath("scrape-procompare.js"), "--delay", "3"];
     } else {
       scraperName = `p24${suburb ? '_' + suburb.substring(0, 15) : ''}`;
-      args = [path.resolve(projectDir, "bootstrap", "scrape-p24.js")];
+      args = [scriptPath("scrape-p24.js")];
       if (suburb) args.push("--suburb", suburb);
       if (refresh) args.push("--refresh");
       if (delay) args.push("--delay", String(delay));
@@ -166,7 +159,7 @@ export const POST = withAuth(async (req: NextRequest) => {
     scraperLog.push(...logLines);
 
     const proc = spawn("node", args, {
-      cwd: path.resolve(process.cwd(), ".."),
+      cwd: getProjectDir(),
       env: { ...process.env, FORCE_COLOR: "0" },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
@@ -236,9 +229,9 @@ export const POST = withAuth(async (req: NextRequest) => {
   }
 
   if (action === "build_training") {
-    const buildPath = path.resolve(process.cwd(), "..", "bootstrap", "build-training-data.js");
+    const buildPath = scriptPath("build-training-data.js");
     const proc = spawn("node", ["-e", `require('dotenv').config();require('${buildPath.replace(/'/g, "\\'")}').then?.(()=>process.exit(0))`], {
-      cwd: path.resolve(process.cwd(), ".."),
+      cwd: getProjectDir(),
       env: { ...process.env },
     });
 

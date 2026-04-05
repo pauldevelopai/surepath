@@ -145,8 +145,15 @@ function scanReviews(places) {
         });
       }
 
-      // Capture positive reviews about the AREA (safe, quiet, family-friendly)
-      if (review.rating >= 4 && (text.includes('safe') || text.includes('quiet') || text.includes('peaceful') || text.includes('family') || text.includes('beautiful area') || text.includes('great neighbourhood') || text.includes('great neighborhood'))) {
+      // Capture positive reviews about the AREA
+      const positiveKeywords = [
+        'safe', 'quiet', 'peaceful', 'family', 'friendly', 'clean', 'beautiful',
+        'great area', 'great neighbourhood', 'great neighborhood', 'lovely area',
+        'nice area', 'well maintained', 'walkable', 'convenient', 'close to',
+        'good school', 'park', 'green', 'nature', 'mountain', 'view', 'beach',
+        'love this area', 'recommend', 'best', 'fantastic location', 'perfect location',
+      ];
+      if (review.rating >= 4 && positiveKeywords.some(kw => text.includes(kw))) {
         positives.push({
           place: place.displayName?.text,
           review_text: review.text.text.substring(0, 200),

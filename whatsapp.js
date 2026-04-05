@@ -176,21 +176,12 @@ async function runTeaseAsync(from, phoneNumber, url) {
     }
 
     // ── CHECK: Property exists in DB with vision data — generate tease from stored findings ──
-    // Only match if the listing_url is the SAME type as the input (PP URL for PP, P24 URL for P24)
-    // This prevents stale cross-referenced records from being picked up
-    const { rows: existingProps } = isP24
-      ? await pool.query(
-          `SELECT id, address_raw, address_normalised, asking_price, bedrooms, bathrooms FROM properties
-           WHERE listing_url = $1 AND listing_url LIKE '%privateproperty%'
-           ORDER BY id DESC LIMIT 1`,
-          [url]
-        )
-      : await pool.query(
-          `SELECT id, address_raw, address_normalised, asking_price, bedrooms, bathrooms FROM properties
-           WHERE listing_url = $1
-           ORDER BY id DESC LIMIT 1`,
-          [url]
-        );
+    const { rows: existingProps } = await pool.query(
+      `SELECT id, address_raw, address_normalised, asking_price, bedrooms, bathrooms FROM properties
+       WHERE listing_url = $1
+       ORDER BY id DESC LIMIT 1`,
+      [url]
+    );
     // For P24 URLs, also check if a PP record was cross-referenced from this P24 URL
     if (existingProps.length === 0 && isP24) {
       const { rows: crossRef } = await pool.query(
@@ -229,7 +220,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
 
       // Gather top risk flags from stored vision analysis
       const { rows: imgFindings } = await pool.query(
-        "SELECT vision_analysis FROM property_images WHERE property_id = $1 AND vision_analysis IS NOT NULL LIMIT 6",
+        "SELECT vision_analysis FROM property_images WHERE property_id = $1 AND vision_analysis IS NOT NULL AND vision_analysis::text != '{}' AND jsonb_array_length(COALESCE(vision_analysis->'findings', '[]'::jsonb)) > 0",
         [propertyId]
       );
 
@@ -256,7 +247,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
         const resp = await client.messages.create({
           model: 'claude-sonnet-4-6',
           max_tokens: 150,
-          system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Be honest but never alarmist or discouraging. NEVER say the buyer is 'buying blind', NEVER suggest the report is inadequate, NEVER mention missing data or street view. Do not invent problems — only reference risk flags that were actually provided. If there are no risk flags, comment positively on the property details (size, location, bedrooms, price) and say the full Surepath report will cover deeds, crime stats, and structural risks. Do not mention AI. Do not use estate agent language. Write in plain conversational South African English. Your job is to give an honest preview that makes the buyer want the full report.",
+          system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Be honest but never alarmist or discouraging. NEVER say the buyer is 'buying blind', NEVER suggest the report is inadequate, NEVER mention missing data or street view. Do not invent problems — only reference risk flags that were actually provided. If there are no risk flags, comment positively on the property details (size, location, bedrooms, price). Do NOT mention the full report, Surepath, deeds, crime stats, or what the report covers — that information is added separately after your text. Do not mention AI. Do not use estate agent language. Write in plain conversational South African English. Focus only on what you can observe about this specific property.",
           messages: [{ role: 'user', content: `Property: ${address}. Asking price: R${p.asking_price ? Number(p.asking_price).toLocaleString('en-ZA') : 'unknown'}. Risk flags: ${flagsText}.` }],
         });
         nicoTease = resp.content[0].text;
@@ -585,7 +576,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
           const p = matchProps[0];
           // Re-run the existing property tease logic (same as the cached-property path above)
           const { rows: imgFindings } = await pool.query(
-            "SELECT vision_analysis FROM property_images WHERE property_id = $1 AND vision_analysis IS NOT NULL LIMIT 6",
+            "SELECT vision_analysis FROM property_images WHERE property_id = $1 AND vision_analysis IS NOT NULL AND vision_analysis::text != '{}' AND jsonb_array_length(COALESCE(vision_analysis->'findings', '[]'::jsonb)) > 0",
             [matchedPropertyId]
           );
           const topRiskFlags = [];
@@ -618,7 +609,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
             const client = new Anthropic();
             const resp = await client.messages.create({
               model: 'claude-sonnet-4-6', max_tokens: 150,
-              system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Be honest but never alarmist or discouraging. NEVER say the buyer is \"buying blind\", NEVER suggest the report is inadequate, NEVER mention missing data or street view. Do not invent problems — only reference risk flags that were actually provided. If there are no risk flags, comment positively on the property details (size, location, bedrooms, price) and say the full Surepath report will cover deeds, crime stats, and structural risks. Do not mention AI. Do not use estate agent language. Write in plain conversational South African English. Your job is to give an honest preview that makes the buyer want the full report.",
+              system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Be honest but never alarmist or discouraging. NEVER say the buyer is \"buying blind\", NEVER suggest the report is inadequate, NEVER mention missing data or street view. Do not invent problems — only reference risk flags that were actually provided. If there are no risk flags, comment positively on the property details (size, location, bedrooms, price). Do NOT mention the full report, Surepath, deeds, crime stats, or what the report covers — that information is added separately after your text. Do not mention AI. Do not use estate agent language. Write in plain conversational South African English. Focus only on what you can observe about this specific property.",
               messages: [{ role: 'user', content: `Property: ${address}. ${propertyDetails}. Asking price: R${p.asking_price ? Number(p.asking_price).toLocaleString('en-ZA') : 'unknown'}. Risk flags: ${flagsText}.` }],
             });
             nicoTease = resp.content[0].text;
@@ -797,7 +788,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
           await pool.query(
             `INSERT INTO property_images (property_id, source, image_url, image_type)
              SELECT id, $2, $3, 'listing' FROM properties WHERE erf_number = $1
-             ON CONFLICT DO NOTHING`,
+             ON CONFLICT (property_id, image_url) DO NOTHING`,
             [erfNumber, source, photoUrl]
           ).catch(() => {});
         }
@@ -1260,29 +1251,29 @@ async function runPipelineAsync(order, conv) {
         const hasCoords = !!existing[0].lat;
         const hasSuburb = !!existing[0].suburb;
 
-        // Check: all listing photos analysed, streetview exists, satellite exists
+        // Check completeness: all photos analysed, streetview, satellite
         const { rows: imgCheck } = await pool.query(`
           SELECT
-            COUNT(*) FILTER (WHERE image_type = 'listing') AS total_listing,
-            COUNT(*) FILTER (WHERE image_type = 'listing' AND vision_analysis IS NOT NULL) AS analysed_listing,
+            COUNT(*) FILTER (WHERE source NOT IN ('streetview','satellite')) AS total_photos,
+            COUNT(*) FILTER (WHERE source NOT IN ('streetview','satellite') AND vision_analysis IS NOT NULL) AS analysed_photos,
             COUNT(*) FILTER (WHERE source = 'streetview') AS has_streetview,
             COUNT(*) FILTER (WHERE source = 'satellite') AS has_satellite
           FROM property_images WHERE property_id = $1
         `, [pid]);
 
-        const totalListing = parseInt(imgCheck[0].total_listing);
-        const analysedListing = parseInt(imgCheck[0].analysed_listing);
+        const totalPhotos = parseInt(imgCheck[0].total_photos);
+        const analysedPhotos = parseInt(imgCheck[0].analysed_photos);
         const hasStreetview = parseInt(imgCheck[0].has_streetview) > 0;
         const hasSatellite = parseInt(imgCheck[0].has_satellite) > 0;
-        const allPhotosAnalysed = totalListing > 0 && analysedListing >= totalListing;
+        const allPhotosAnalysed = totalPhotos > 0 && analysedPhotos >= totalPhotos;
 
         const isComplete = hasCoords && hasSuburb && hasStreetview && hasSatellite && allPhotosAnalysed;
 
         if (isComplete) {
           propertyId = pid;
-          console.log(`[pipeline] Property ${pid} fully complete — skipping pipeline, exporting PDF directly`);
+          console.log(`[pipeline] Property ${pid} fully complete (${analysedPhotos}/${totalPhotos} photos, sv:${hasStreetview}, sat:${hasSatellite}) — exporting PDF directly`);
         } else {
-          console.log(`[pipeline] Property ${pid} incomplete — coords:${hasCoords} suburb:${hasSuburb} sv:${hasStreetview} sat:${hasSatellite} photos:${analysedListing}/${totalListing} — running pipeline`);
+          console.log(`[pipeline] Property ${pid} incomplete — coords:${hasCoords} suburb:${hasSuburb} sv:${hasStreetview} sat:${hasSatellite} photos:${analysedPhotos}/${totalPhotos} — running pipeline`);
         }
       }
     }

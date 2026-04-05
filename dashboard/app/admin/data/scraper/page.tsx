@@ -8,7 +8,9 @@ const SCRAPERS = [
   { id: "pp", label: "PrivateProperty", desc: "Newest listings first, all provinces", color: "bg-blue-600", hover: "hover:bg-blue-700" },
   { id: "crime", label: "Crime Data", desc: "CrimeHub / SAPS — all police stations", color: "bg-red-700", hover: "hover:bg-red-800" },
   { id: "solar", label: "Solar Data", desc: "PVGIS — satellite-measured irradiance", color: "bg-yellow-600", hover: "hover:bg-yellow-700" },
-  { id: "security", label: "Security & Community", desc: "Security companies, CPF, neighbourhood watch", color: "bg-emerald-700", hover: "hover:bg-emerald-800" },
+  { id: "saps", label: "SAPS Stations", desc: "~1,154 police stations + CPF contacts — saps.gov.za", color: "bg-slate-700", hover: "hover:bg-slate-800" },
+  { id: "assist247", label: "Assist247", desc: "Security companies mapped to suburbs — assist247.co.za", color: "bg-teal-700", hover: "hover:bg-teal-800" },
+  { id: "procompare", label: "Procompare", desc: "Security companies with ratings — procompare.co.za", color: "bg-cyan-700", hover: "hover:bg-cyan-800" },
 ];
 
 export default function ScraperPage() {
@@ -80,10 +82,12 @@ export default function ScraperPage() {
 
   // Pending and done counts per scraper
   const counts: Record<string, { pending: number; done: number; unit: string }> = {
-    pp:        { pending: (s.pp_universe || 0) - (s.pp_total || totals.pp_properties || 0), done: s.pp_total || totals.pp_properties || 0, unit: "listings" },
-    crime:     { pending: s.crime_pending || 0,  done: s.crime_total || 0,                      unit: "suburbs" },
-    solar:     { pending: s.solar_pending || 0,  done: s.solar_total || 0,                      unit: "properties" },
-    security:  { pending: s.security_pending || 0, done: s.security_total || 0,                 unit: "suburbs" },
+    pp:         { pending: (s.pp_universe || 0) - (s.pp_total || totals.pp_properties || 0), done: s.pp_total || totals.pp_properties || 0, unit: "listings" },
+    crime:      { pending: s.crime_pending || 0,   done: s.crime_total || 0,                     unit: "suburbs" },
+    solar:      { pending: s.solar_pending || 0,   done: s.solar_total || 0,                     unit: "properties" },
+    saps:       { pending: (1154 - (s.saps_total || 0)), done: s.saps_total || 0,                unit: "stations" },
+    assist247:  { pending: 0,                       done: s.assist247_suburbs || 0,               unit: "suburbs" },
+    procompare: { pending: 0,                       done: s.procompare_companies || 0,            unit: "companies" },
   };
 
   return (

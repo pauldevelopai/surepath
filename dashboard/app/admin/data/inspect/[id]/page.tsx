@@ -420,6 +420,14 @@ export default function PropertyDetailPage() {
         )}
       </div>
 
+      {/* Nico's Quick Take */}
+      {data.nico_tease && (
+        <div className="bg-slate-50 border-l-4 border-slate-800 rounded-r-lg p-4 mt-4">
+          <div className="text-[10px] text-gray-400 font-bold mb-1">Nico&apos;s Quick Take</div>
+          <div className="text-sm text-gray-700 italic leading-relaxed">&ldquo;{data.nico_tease}&rdquo;</div>
+        </div>
+      )}
+
       {/* Status panel — unverified fields + action messages (hidden in print, shown in left sidebar) */}
       {(unverified?.length > 0 || actionMsg) && (
         <div className="no-print fixed left-0 bottom-12 w-56 z-40 space-y-2 p-3" style={{ background: "#0D1B2A" }}>
@@ -702,11 +710,15 @@ export default function PropertyDetailPage() {
                 </div>
                 {concerns.length > 0 && (() => {
                   // Filter to area-relevant concerns (safety, noise, infrastructure — not hotel/restaurant service)
-                  const areaKeywords = new Set(['unsafe', 'crime', 'robbery', 'stolen', 'break-in', 'mugging', 'noise', 'noisy', 'loud', 'traffic', 'flood', 'flooding', 'loadshedding', 'load shedding', 'power cut', 'sewage', 'pollution', 'construction']);
-                  const relevant = concerns
-                    .filter((c: A) => (c.keywords || []).some((k: string) => areaKeywords.has(k)))
-                    .slice(0, 5);
-                  const shown = relevant.length > 0 ? relevant : concerns.slice(0, 5);
+                  // Deduplicate by place name, then show top 5
+                  const seen = new Set<string>();
+                  const deduped = concerns.filter((c: A) => {
+                    const key = (c.place || '') + (c.keywords || []).join(',');
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                  });
+                  const shown = deduped.slice(0, 5);
                   return (
                   <div className="space-y-2 mb-3">
                     <h3 className="text-xs font-bold text-orange-700">Area concerns from nearby reviews ({shown.length} of {concerns.length})</h3>
@@ -778,14 +790,15 @@ export default function PropertyDetailPage() {
                 {/* Security companies */}
                 {companies.length > 0 && (
                   <div>
-                    <h3 className="text-xs font-bold mb-1">Security Companies ({companies.length})</h3>
+                    <h3 className="text-xs font-bold mb-1">Security Companies (top {Math.min(5, companies.length)} of {companies.length})</h3>
                     <div className="space-y-2">
-                      {companies.map((co: A, i: number) => (
+                      {companies.slice(0, 5).map((co: A, i: number) => (
                         <div key={i} className="bg-gray-50 rounded p-2 text-xs">
                           <div className="flex justify-between items-start">
                             <div>
                               <span className="font-bold">{co.name}</span>
                               {co.armed_response && <span className="ml-1.5 bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[9px] font-bold">ARMED RESPONSE</span>}
+                              {co.distance_km != null && <span className="ml-1.5 text-gray-400 text-[9px]">{co.distance_km} km away</span>}
                             </div>
                             <div className="flex gap-2 items-center shrink-0">
                               {co.rating && <span className="text-yellow-600 font-bold">{co.rating} ★</span>}
@@ -812,7 +825,7 @@ export default function PropertyDetailPage() {
                     <h3 className="font-bold mb-1">Community Policing Forum (CPF)</h3>
                     {cpf.name ? (
                       <div>
-                        <div className="font-medium">{cpf.name}</div>
+                        <div className="font-medium">{cpf.name}{cpf.distance_km != null && <span className="text-gray-400 font-normal text-[9px] ml-1">({cpf.distance_km} km)</span>}</div>
                         <div className={`text-[10px] ${cpf.activity_level === "active" ? "text-green-600" : cpf.activity_level === "moderate" ? "text-yellow-600" : "text-gray-400"}`}>
                           Activity: {cpf.activity_level}
                         </div>
@@ -829,7 +842,7 @@ export default function PropertyDetailPage() {
                     <h3 className="font-bold mb-1">Neighbourhood Watch</h3>
                     {nhw.name ? (
                       <div>
-                        <div className="font-medium">{nhw.name}</div>
+                        <div className="font-medium">{nhw.name}{nhw.distance_km != null && <span className="text-gray-400 font-normal text-[9px] ml-1">({nhw.distance_km} km)</span>}</div>
                         <div className={`text-[10px] ${nhw.activity_level === "active" ? "text-green-600" : nhw.activity_level === "moderate" ? "text-yellow-600" : "text-gray-400"}`}>
                           Activity: {nhw.activity_level}
                         </div>
@@ -1012,7 +1025,7 @@ export default function PropertyDetailPage() {
             <h2 className="font-bold text-sm">Area Risk Intelligence</h2>
             <div className="text-[10px] text-gray-400 mb-2">Suburb and city level risk data from government sources</div>
             <div className="space-y-1">
-              {data.area_risks.map((r: A, i: number) => (
+              {data.area_risks.filter((r: A) => !["water_quality", "sewerage_quality", "crime_detailed", "social_concerns", "security_community"].includes(r.risk_type)).map((r: A, i: number) => (
                 <div key={i} className="flex justify-between items-center text-sm bg-gray-50 rounded p-2">
                   <div>
                     <span className="capitalize font-medium">{r.risk_type.replace(/_/g, " ")}</span>

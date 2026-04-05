@@ -112,14 +112,19 @@ Rules: Never confirm asbestos — flag indicators only. SA terminology. ZAR cost
 Return ONLY valid JSON. No markdown fences.`;
 
 const SATELLITE_PROMPT = `You are a certified property inspector with 20 years of South African experience.
-Analyse this satellite/aerial image of a property. Focus specifically on:
-- Roof material classification (corrugated cement, IBR steel, concrete tiles, clay tiles)
-- Solar panels visible on roof
-- Outbuildings, extensions, or structures not on original plans
+Analyse this satellite/aerial image of a property IN DETAIL. Give at least 5-8 specific findings. Focus on:
+- Roof material classification (corrugated cement, IBR steel, concrete tiles, clay tiles, flat/membrane)
+- Roof condition: patching, discolouration, ponding areas, debris, vegetation growth
+- Solar panels visible on roof (count panels if visible, estimate system size)
+- Outbuildings, extensions, or structures not on original plans — measure relative to main building
 - Roof orientation estimate for solar viability (north-facing is ideal in SA)
-- Pool, garden structures, parking
-- NEGATIVES nearby: railway lines or rail corridors (noise, vibration — severity HIGH), informal settlements/shack areas with dense irregular roofing (safety, property value — severity HIGH), industrial zones, landfill sites, power substations, highway proximity
-- POSITIVES nearby: parks, green belts, sports fields, nature reserves, river/dam (not flood risk), well-spaced residential plots, mountain backdrop
+- Pool (condition: green/clean, covered/uncovered), garden structures, parking areas
+- Property boundary: walls, fencing, open boundaries, shared walls with neighbours
+- Stand coverage: what percentage of the stand is built vs garden/open
+- Access: driveways, pedestrian paths, number of entrances visible
+- Neighbouring properties: condition relative to subject property, density
+- NEGATIVES nearby: railway lines or rail corridors (noise, vibration — severity HIGH), informal settlements/shack areas with dense irregular roofing (safety, property value — severity HIGH), industrial zones, landfill sites, power substations, highway proximity, construction sites
+- POSITIVES nearby: parks, green belts, sports fields, nature reserves, river/dam (not flood risk), well-spaced residential plots, mountain backdrop, schools, commercial amenities
 
 Return structured JSON:
 {
@@ -207,7 +212,10 @@ function parseVisionResponse(text) {
   }
 
   try {
-    return JSON.parse(cleaned);
+    let parsed = JSON.parse(cleaned);
+    // If Claude returns an array, take the first element
+    if (Array.isArray(parsed)) parsed = parsed[0] || {};
+    return parsed;
   } catch (e) {
     // Fix common JSON issues from Claude: trailing commas, unescaped quotes in strings
     let fixed = cleaned
@@ -217,7 +225,9 @@ function parseVisionResponse(text) {
       .replace(/\n/g, ' ');                      // newlines in strings
 
     try {
-      return JSON.parse(fixed);
+      let parsed = JSON.parse(fixed);
+      if (Array.isArray(parsed)) parsed = parsed[0] || {};
+      return parsed;
     } catch {
       // Last resort: return a minimal valid response so pipeline doesn't crash
       console.error('[vision] JSON parse failed, returning empty analysis. First 200 chars:', cleaned.substring(0, 200));
@@ -266,7 +276,7 @@ async function analyseBatch(images, hfResults) {
 
   const message = await client.messages.create({
     model: VISION_MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: getEnhancedPrompt(),
     messages: [{ role: 'user', content }],
   });
@@ -385,7 +395,7 @@ async function analysePropertyImages(imageUrls, propertyId) {
 async function analyseStreetView(imageBase64) {
   const message = await client.messages.create({
     model: VISION_MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: STREETVIEW_PROMPT,
     messages: [{
       role: 'user',
@@ -411,7 +421,7 @@ async function analyseStreetView(imageBase64) {
 async function analyseSatellite(imageBase64) {
   const message = await client.messages.create({
     model: VISION_MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: SATELLITE_PROMPT,
     messages: [{
       role: 'user',
@@ -832,7 +842,7 @@ Return ONLY valid JSON. No markdown fences.`;
 async function analyseDBBoard(imageBase64) {
   const message = await client.messages.create({
     model: VISION_MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: DB_BOARD_PROMPT,
     messages: [{
       role: 'user',
@@ -892,7 +902,7 @@ Return ONLY valid JSON. No markdown fences.`;
 async function analyseCeilingDeep(imageBase64) {
   const message = await client.messages.create({
     model: VISION_MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: CEILING_PROMPT,
     messages: [{
       role: 'user',
@@ -962,7 +972,7 @@ Return ONLY valid JSON. No markdown fences.`;
 async function analyseExteriorSecurity(imageBase64) {
   const message = await client.messages.create({
     model: VISION_MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: SECURITY_PROMPT,
     messages: [{
       role: 'user',
@@ -1032,7 +1042,7 @@ Return ONLY valid JSON. No markdown fences.`;
 async function analysePlumbing(imageBase64) {
   const message = await client.messages.create({
     model: VISION_MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: PLUMBING_PROMPT,
     messages: [{
       role: 'user',
@@ -1083,7 +1093,7 @@ No markdown fences.`;
 async function analyseTemporalChange(currentBase64, historicalBase64) {
   const message = await client.messages.create({
     model: VISION_MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: TEMPORAL_PROMPT,
     messages: [{
       role: 'user',

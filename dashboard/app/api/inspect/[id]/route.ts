@@ -133,6 +133,19 @@ export const GET = withAuth(async (_req: NextRequest, { params }: { params: Prom
     [id]
   );
 
+  // Nico tease from WhatsApp conversation
+  let nicoTease = null;
+  try {
+    const teaseRows = await query(
+      "SELECT tease_data FROM conversations WHERE listing_url ILIKE $1 OR input_data ILIKE $1 ORDER BY updated_at DESC LIMIT 1",
+      [`%${prop.listing_url?.split('/').pop() || id}%`]
+    );
+    if (teaseRows[0]?.tease_data) {
+      const td = typeof teaseRows[0].tease_data === 'string' ? JSON.parse(teaseRows[0].tease_data) : teaseRows[0].tease_data;
+      nicoTease = td.nicoTease || null;
+    }
+  } catch {}
+
   return NextResponse.json({
     property: prop,
     sources: prop.data_sources || {},
@@ -144,5 +157,6 @@ export const GET = withAuth(async (_req: NextRequest, { params }: { params: Prom
     crime: crimeData,
     service_providers: serviceProviders,
     pdf_exports: pdfExports,
+    nico_tease: nicoTease,
   });
 });

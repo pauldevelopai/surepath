@@ -223,7 +223,7 @@ async function storeListing(listing, meta, listingUrl) {
     if (imgId && photosSeen.has(imgId)) continue;
     if (imgId) photosSeen.add(imgId);
     await pool.query(
-      "INSERT INTO property_images (property_id, source, image_url, image_type) VALUES ($1, 'privateproperty', $2, 'listing')",
+      "INSERT INTO property_images (property_id, source, image_url, image_type) VALUES ($1, 'privateproperty', $2, 'listing') ON CONFLICT (property_id, image_url) DO NOTHING",
       [propertyId, url]
     );
     photoCount++;

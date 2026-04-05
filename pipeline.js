@@ -317,7 +317,7 @@ async function generateTease(extractedData) {
           const message = await anthropicClient.messages.create({
             model: 'claude-sonnet-4-6',
             max_tokens: 150,
-            system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Be honest but never alarmist or discouraging. NEVER say the buyer is 'buying blind', NEVER suggest the report is inadequate, NEVER mention missing data or street view. Do not invent problems — only reference risk flags that were actually provided. If there are no risk flags, comment positively on the property details (size, location, bedrooms, price) and say the full Surepath report will cover deeds, crime stats, and structural risks. Do not mention AI. Do not use estate agent language. Write in plain conversational South African English. Your job is to give an honest preview that makes the buyer want the full report.",
+            system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Be honest but never alarmist or discouraging. NEVER say the buyer is 'buying blind', NEVER suggest the report is inadequate, NEVER mention missing data or street view. Do not invent problems — only reference risk flags that were actually provided. If there are no risk flags, comment positively on the property details (size, location, bedrooms, price). Do NOT mention the full report, Surepath, deeds, crime stats, or what the report covers — that information is added separately after your text. Do not mention AI. Do not use estate agent language. Write in plain conversational South African English. Focus only on what you can observe about this specific property.",
             messages: [{
               role: 'user',
               content: `Property: ${extractedData.address || 'unknown address'}. Asking price: R${extractedData.askingPrice ? extractedData.askingPrice.toLocaleString('en-ZA') : 'unknown'}. Top risk flags from photo analysis: ${flagsText}.`,
@@ -347,7 +347,7 @@ async function generateTease(extractedData) {
         const resp = await anthropicClient.messages.create({
           model: 'claude-sonnet-4-6',
           max_tokens: 150,
-          system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Focus on the property details — size, price, location, what makes it interesting. NEVER say you haven't seen photos. NEVER mention missing data. Do not mention AI. Write in plain conversational South African English. End with why the full Surepath report would be valuable for this specific property.",
+          system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Focus on the property details — size, price, location, what makes it interesting. NEVER say you haven't seen photos. NEVER mention missing data. Do NOT mention the full report, Surepath, deeds, crime stats, or what the report covers. Do not mention AI. Write in plain conversational South African English.",
           messages: [{ role: 'user', content: `Property: ${bedsStr} property at ${locationStr}. Asking ${priceStr}.` }],
         });
         nicoTease = resp.content[0].text;
@@ -759,32 +759,20 @@ async function generateReport(input, askingPrice, phoneNumber) {
 
     if (recentReports.length > 0) {
       const existing = recentReports[0];
-      log(3, `Recent report found: ID ${existing.id} — skipping to resale delivery`);
+      log(3, `Recent report found: ID ${existing.id} (reusing collected data, regenerating PDF with latest format)`);
 
-      // STEP 14 — Create resale order
-      log(14, 'Creating resale order');
-      await pool.query(
-        `INSERT INTO orders (property_id, report_id, phone_number, price_zar, was_resale, payment_status)
-         VALUES ($1, $2, $3, 149, TRUE, 'pending')`,
-        [propertyId, existing.id, phoneNumber]
-      );
-
+      // Track resale
       await pool.query(
         'UPDATE property_reports SET times_sold = times_sold + 1 WHERE id = $1',
         [existing.id]
       );
 
-      log(15, 'Resale complete');
-      return {
-        report_id: existing.id,
-        property_id: propertyId,
-        decision: existing.decision,
-        decision_reasoning: existing.decision_reasoning,
-        was_resale: true,
-      };
+      // Don't skip — fall through to regenerate the PDF with latest data and formatting
+      // But the pipeline steps will skip anything already collected (photos, vision, crime, etc.)
+      // This gives us an updated PDF without re-running expensive collection steps
+    } else {
+      log(3, 'No recent report — generating fresh report');
     }
-
-    log(3, 'No recent report — generating fresh report');
 
     // ── STEP 03B: Store extracted listing data on property ──────────
     log('3B', 'Storing listing data on property');
@@ -898,7 +886,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
       for (const url of validPhotos) {
         await pool.query(
           `INSERT INTO property_images (property_id, source, image_url, image_type)
-           VALUES ($1, $2, $3, 'listing')`,
+           VALUES ($1, $2, $3, 'listing') ON CONFLICT (property_id, image_url) DO NOTHING`,
           [propertyId, isProperty24URL(input) ? 'property24' : 'privateproperty', url]
         );
       }
@@ -925,7 +913,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
           const localUrl = saveImageFile(streetviewBase64, propertyId, 'streetview', 'jpg');
           await pool.query(
             `INSERT INTO property_images (property_id, source, image_url, image_type)
-             VALUES ($1, 'streetview', $2, 'exterior')`,
+             VALUES ($1, 'streetview', $2, 'exterior') ON CONFLICT (property_id, image_url) DO NOTHING`,
             [propertyId, localUrl]
           );
           log(4, `Street View saved: ${localUrl}`);
@@ -941,7 +929,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
           const localUrl = saveImageFile(satelliteBase64, propertyId, 'satellite', 'png');
           await pool.query(
             `INSERT INTO property_images (property_id, source, image_url, image_type)
-             VALUES ($1, 'satellite', $2, 'exterior')`,
+             VALUES ($1, 'satellite', $2, 'exterior') ON CONFLICT (property_id, image_url) DO NOTHING`,
             [propertyId, localUrl]
           );
           log(4, `Satellite saved: ${localUrl}`);
@@ -1199,6 +1187,18 @@ async function generateReport(input, askingPrice, phoneNumber) {
       );
       if (parseInt(existingCrime[0].c) > 0) {
         log('8B', `Crime data already collected for ${areaSuburb} — skipping`);
+        // Ensure crime score is propagated to this property
+        try {
+          const { rows: crimeScore } = await pool.query("SELECT suburb_crime_score FROM properties WHERE id = $1", [propertyId]);
+          if (!crimeScore[0]?.suburb_crime_score) {
+            const { rows: cd } = await pool.query("SELECT details FROM area_risk_data WHERE risk_type = 'crime_detailed' AND (suburb ILIKE $1 OR city ILIKE $1) AND city ILIKE $2 LIMIT 1", [areaSuburb, areaCity]);
+            if (cd[0]?.details?.total_latest) {
+              const score = Math.min(10, Math.round(cd[0].details.total_latest / 500));
+              await pool.query("UPDATE properties SET suburb_crime_score = $1 WHERE id = $2", [score, propertyId]);
+              log('8B', `Propagated crime score: ${score}/10`);
+            }
+          }
+        } catch {}
       } else {
         try {
           const collectCrime = require('./collect-crime');
@@ -1221,7 +1221,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
       const { rows: featCheck } = await pool.query('SELECT description, extracted_features FROM properties WHERE id=$1', [propertyId]);
       if (featCheck[0]?.extracted_features) {
         log(9, 'Features already extracted — skipping');
-      } else if (featCheck[0]?.description) {
+      } else if (featCheck[0]?.description && featCheck[0].description.length > 10) {
         try {
           const extractor = require('./extract-features');
           const extResult = await extractor.processProperty(propertyId);
