@@ -725,6 +725,10 @@ function buildDataHTML(property, images, deeds, areaRisks, crimeData) {
   const securityRisk = areaRisks.find(r => r.risk_type === 'security_community');
   const sec = securityRisk?.details ? (typeof securityRisk.details === 'string' ? JSON.parse(securityRisk.details) : securityRisk.details) : null;
 
+  // Neighbourhood Pros & Cons
+  const socialRisk = areaRisks.find(r => r.risk_type === 'social_concerns');
+  const social = socialRisk?.details ? (typeof socialRisk.details === 'string' ? JSON.parse(socialRisk.details) : socialRisk.details) : null;
+
   // Satellite analysis
   const satVA = satellite ? (typeof satellite.vision_analysis === 'string' ? JSON.parse(satellite.vision_analysis) : satellite.vision_analysis) : null;
 
@@ -812,6 +816,36 @@ function buildDataHTML(property, images, deeds, areaRisks, crimeData) {
 </div>
 <div class="page-break"></div>
 
+<!-- QUICK SUMMARY -->
+<div style="background:#F8F9FA;border-radius:8px;padding:20px;margin-bottom:20px">
+  <h2 style="margin:0 0 12px 0">Report Summary</h2>
+  <div style="display:flex;gap:12px;margin-bottom:16px">
+    <div style="flex:1;text-align:center;padding:12px;background:white;border-radius:6px;border:1px solid #E5E7EB">
+      <div style="font-size:24px;font-weight:bold;color:${redFlags.length > 0 ? '#E63946' : '#27AE60'}">${redFlags.length}</div>
+      <div style="font-size:10px;color:#888;text-transform:uppercase">Red Flags</div>
+    </div>
+    <div style="flex:1;text-align:center;padding:12px;background:white;border-radius:6px;border:1px solid #E5E7EB">
+      <div style="font-size:24px;font-weight:bold;color:#0D1B2A">${findings.length}</div>
+      <div style="font-size:10px;color:#888;text-transform:uppercase">Findings</div>
+    </div>
+    <div style="flex:1;text-align:center;padding:12px;background:white;border-radius:6px;border:1px solid #E5E7EB">
+      <div style="font-size:24px;font-weight:bold;color:#0D1B2A">${listingPhotos.length + (svSrc ? 1 : 0) + (satSrc ? 1 : 0)}</div>
+      <div style="font-size:10px;color:#888;text-transform:uppercase">Photos Analysed</div>
+    </div>
+    <div style="flex:1;text-align:center;padding:12px;background:white;border-radius:6px;border:1px solid #E5E7EB">
+      <div style="font-size:24px;font-weight:bold;color:${totalRepairMax > 0 ? '#F39C12' : '#27AE60'}">${totalRepairMax > 0 ? formatZAR(totalRepairMax) : 'R0'}</div>
+      <div style="font-size:10px;color:#888;text-transform:uppercase">Est. Repair Cost</div>
+    </div>
+  </div>
+  <div style="font-size:11px;color:#555;line-height:1.6">
+    <strong>What we checked:</strong>
+    ${listingPhotos.length} listing photo${listingPhotos.length !== 1 ? 's' : ''}${svSrc ? ', street view' : ''}${satSrc ? ', satellite imagery' : ''}${d ? ', deeds office records' : ''}${cd ? ', crime statistics' : ''}${p.solar_ghi_kwh_year ? ', solar potential' : ''}${p.water_quality_score != null ? ', water quality' : ''}${sec ? ', security & community' : ''}.
+    ${redFlags.length > 0
+      ? `<span style="color:#E63946"><strong>${redFlags.length} issue${redFlags.length !== 1 ? 's' : ''} require${redFlags.length === 1 ? 's' : ''} attention</strong> — see Red Flags below.</span>`
+      : '<span style="color:#27AE60"><strong>No critical issues found</strong> across all checks.</span>'}
+  </div>
+</div>
+
 <!-- RED FLAGS -->
 ${redFlags.length > 0 ? `
 <h2 style="color:#E63946">Red Flags (${redFlags.length})</h2>
@@ -832,6 +866,8 @@ ${svVA?.findings?.length > 0 ? `
 <h3 style="color:#0D1B2A;margin-top:12px">Street View Analysis</h3>
 ${svVA.findings.map(f => `<div style="background:#F8F9FA;padding:8px 12px;margin-bottom:4px;border-radius:4px">${severityBadge(f.severity || 'LOW')} <span style="margin-left:8px">${f.observation}</span></div>`).join('')}
 ` : ''}
+${svVA?.nearby_negatives?.length > 0 ? `<div style="margin-top:8px">${svVA.nearby_negatives.map(n => `<span style="display:inline-block;background:#FFEBEE;color:#E63946;font-size:10px;font-weight:bold;padding:3px 8px;border-radius:4px;margin:2px 4px 2px 0">⚠ ${n}</span>`).join('')}</div>` : ''}
+${svVA?.nearby_positives?.length > 0 ? `<div style="margin-top:4px">${svVA.nearby_positives.map(n => `<span style="display:inline-block;background:#E8F5E9;color:#27AE60;font-size:10px;font-weight:bold;padding:3px 8px;border-radius:4px;margin:2px 4px 2px 0">✓ ${n}</span>`).join('')}</div>` : ''}
 
 <!-- SATELLITE ANALYSIS -->
 ${satVA ? `
@@ -842,6 +878,8 @@ ${satVA ? `
   <tr><td><strong>Solar Panels</strong></td><td>${satVA.solar_installed ? 'Visible' : 'None visible'}</td></tr>
   <tr><td><strong>Asbestos Indicators</strong></td><td>${satVA.asbestos_indicators ? 'Present — further inspection recommended' : 'None detected'}</td></tr>
 </table>
+${satVA?.nearby_negatives?.length > 0 ? `<div style="margin-top:8px">${satVA.nearby_negatives.map(n => `<span style="display:inline-block;background:#FFEBEE;color:#E63946;font-size:10px;font-weight:bold;padding:3px 8px;border-radius:4px;margin:2px 4px 2px 0">⚠ ${n}</span>`).join('')}</div>` : ''}
+${satVA?.nearby_positives?.length > 0 ? `<div style="margin-top:4px">${satVA.nearby_positives.map(n => `<span style="display:inline-block;background:#E8F5E9;color:#27AE60;font-size:10px;font-weight:bold;padding:3px 8px;border-radius:4px;margin:2px 4px 2px 0">✓ ${n}</span>`).join('')}</div>` : ''}
 ` : ''}
 <div class="page-break"></div>
 
@@ -960,6 +998,37 @@ ${cd.categories?.length > 0 ? `
 <div style="font-size:10px;color:#888;margin-top:4px">Source: SAPS Annual Statistics</div>
 ` : ''}`}
 
+<!-- NEIGHBOURHOOD PROS & CONS -->
+${social && (social.concerns?.length > 0 || social.positives?.length > 0) ? `
+<h2>Neighbourhood Pros &amp; Cons — ${p.suburb || p.city}</h2>
+<p style="font-size:10px;color:#888;margin-bottom:10px">Based on ${social.places_scanned || 0} nearby businesses and their reviews</p>
+<div style="display:flex;gap:16px">
+  ${social.positives?.length > 0 ? `
+  <div style="flex:1">
+    <h3 style="color:#27AE60;font-size:12px;margin:0 0 8px 0">What Locals Like</h3>
+    ${social.positives.slice(0, 5).map(p => `
+      <div style="margin-bottom:8px;padding:8px;background:#f0fdf4;border-radius:6px;font-size:11px">
+        <div style="font-weight:bold;color:#27AE60;margin-bottom:2px">${p.place || 'Local review'}</div>
+        <div style="color:#333">"${(p.review_text || '').substring(0, 120)}${(p.review_text || '').length > 120 ? '...' : ''}"</div>
+      </div>
+    `).join('')}
+  </div>
+  ` : ''}
+  ${social.concerns?.length > 0 ? `
+  <div style="flex:1">
+    <h3 style="color:#E63946;font-size:12px;margin:0 0 8px 0">Concerns Raised</h3>
+    ${social.concerns.slice(0, 5).map(c => `
+      <div style="margin-bottom:8px;padding:8px;background:#fff5f5;border-radius:6px;font-size:11px">
+        <div style="font-weight:bold;color:#E63946;margin-bottom:2px">${c.place || 'Local review'} ${c.keywords?.length ? `<span style="font-weight:normal;color:#888">(${c.keywords.join(', ')})</span>` : ''}</div>
+        <div style="color:#333">"${(c.review_text || '').substring(0, 120)}${(c.review_text || '').length > 120 ? '...' : ''}"</div>
+      </div>
+    `).join('')}
+  </div>
+  ` : ''}
+</div>
+<div style="font-size:10px;color:#888;margin-top:4px">Source: Google Places — nearby business reviews</div>
+` : ''}
+
 <!-- SECURITY & COMMUNITY -->
 ${sec ? `
 <h2>Security &amp; Community — ${p.suburb || p.city}</h2>
@@ -1012,8 +1081,50 @@ ${sec.sentiment ? `
 <div style="font-size:10px;color:#888;margin-top:4px">Source: Google Places — Security & Community Intelligence</div>
 ` : ''}
 
+<!-- SOLAR POTENTIAL -->
+${p.solar_ghi_kwh_year ? (() => {
+  const ghi = Number(p.solar_ghi_kwh_year);
+  const pvOut = p.solar_pv_output_kwh_year ? Number(p.solar_pv_output_kwh_year) : null;
+  const rating = ghi >= 2000 ? 'Outstanding' : ghi >= 1800 ? 'Excellent' : ghi >= 1600 ? 'Good' : ghi >= 1400 ? 'Moderate' : 'Below Average';
+  const ratingColor = ghi >= 1800 ? '#27AE60' : ghi >= 1600 ? '#F39C12' : '#E63946';
+  const system5kw = pvOut ? Math.round(pvOut * 5) : null;
+  const monthlySavings = system5kw ? Math.round((system5kw / 12) * 2.50) : null;
+  const hasSolar = p.solar_installed || false;
+  const hasSolarGeyser = p.has_solar_geyser || false;
+  return `
+<h2>Solar Potential</h2>
+<div style="display:flex;gap:16px;margin-bottom:12px">
+  <div style="flex:1;background:#FFFDE7;border-radius:8px;padding:12px;text-align:center">
+    <div style="font-size:10px;color:#888;text-transform:uppercase">Solar Irradiance (GHI)</div>
+    <div style="font-size:28px;font-weight:bold;color:${ratingColor}">${ghi.toFixed(0)}</div>
+    <div style="font-size:11px;color:#333">kWh/m²/year — <strong style="color:${ratingColor}">${rating}</strong></div>
+  </div>
+  ${pvOut ? `
+  <div style="flex:1;background:#FFFDE7;border-radius:8px;padding:12px;text-align:center">
+    <div style="font-size:10px;color:#888;text-transform:uppercase">5kWp System Output</div>
+    <div style="font-size:28px;font-weight:bold;color:#F39C12">${system5kw.toLocaleString()}</div>
+    <div style="font-size:11px;color:#333">kWh/year estimated</div>
+  </div>
+  ` : ''}
+  ${monthlySavings ? `
+  <div style="flex:1;background:#FFFDE7;border-radius:8px;padding:12px;text-align:center">
+    <div style="font-size:10px;color:#888;text-transform:uppercase">Est. Monthly Saving</div>
+    <div style="font-size:28px;font-weight:bold;color:#27AE60">R${monthlySavings.toLocaleString()}</div>
+    <div style="font-size:11px;color:#333">at R2.50/kWh (Eskom)</div>
+  </div>
+  ` : ''}
+</div>
+<table>
+  ${hasSolar ? '<tr><td><strong>Solar Panels</strong></td><td style="color:#27AE60;font-weight:bold">Visible on satellite imagery</td></tr>' : ''}
+  ${hasSolarGeyser ? '<tr><td><strong>Solar Geyser</strong></td><td style="color:#27AE60;font-weight:bold">Listed in property features</td></tr>' : ''}
+  <tr><td><strong>What this means</strong></td><td style="font-size:11px">South Africa receives ${ghi >= 1800 ? 'some of the best' : ghi >= 1600 ? 'excellent' : 'good'} solar irradiance globally. ${system5kw ? `A standard 5kWp rooftop system at this location would generate approximately ${system5kw.toLocaleString()} kWh/year, offsetting a significant portion of household electricity costs.` : ''} ${ghi >= 2000 ? 'This property is in a premium solar zone.' : ''}</td></tr>
+</table>
+<div style="font-size:10px;color:#888;margin-top:4px">Source: EU PVGIS — satellite-measured solar radiation data (not estimated)</div>
+`;
+})() : ''}
+
 <!-- INFRASTRUCTURE & RISK -->
-${(p.water_quality_score != null || p.dolomite_risk || p.flood_zone || p.solar_ghi_kwh_year) ? `
+${(p.water_quality_score != null || p.dolomite_risk || p.flood_zone) ? `
 <h2>Infrastructure &amp; Environmental Risk</h2>
 <table>
   ${p.water_quality_score != null ? `<tr><td><strong>Water Quality</strong></td><td>${p.water_quality_score}/10 ${p.water_quality_score >= 8 ? '— Good' : p.water_quality_score >= 5 ? '— Moderate' : '— Poor'}</td></tr>` : ''}
@@ -1022,8 +1133,6 @@ ${(p.water_quality_score != null || p.dolomite_risk || p.flood_zone || p.solar_g
   ${p.mining_subsidence_risk ? `<tr><td><strong>Mining Subsidence</strong></td><td>${p.mining_subsidence_risk}</td></tr>` : ''}
   ${p.flood_zone ? `<tr><td><strong>Flood Zone</strong></td><td>Yes — ${p.flood_zone_type || 'check municipal records'}</td></tr>` : ''}
   ${p.heritage_site ? `<tr><td><strong>Heritage Area</strong></td><td>Yes — renovation restrictions apply</td></tr>` : ''}
-  ${p.solar_ghi_kwh_year ? `<tr><td><strong>Solar Irradiance (GHI)</strong></td><td>${Number(p.solar_ghi_kwh_year).toFixed(0)} kWh/m²/year</td></tr>` : ''}
-  ${p.solar_pv_output_kwh_year ? `<tr><td><strong>PV Output (1kWp)</strong></td><td>${Number(p.solar_pv_output_kwh_year).toFixed(0)} kWh/year</td></tr>` : ''}
 </table>
 ` : ''}
 
@@ -1044,6 +1153,50 @@ ${negPoints.length > 0 ? `
 <h2>Negotiation Leverage</h2>
 ${negPoints.map(n => `<div class="np">${n}</div>`).join('')}
 ` : ''}
+
+<!-- PURCHASE DECISION -->
+<div class="page-break"></div>
+${(() => {
+  const critical = findings.filter(f => f.severity === 'CRITICAL').length;
+  const high = findings.filter(f => f.severity === 'HIGH').length;
+  const medium = findings.filter(f => f.severity === 'MEDIUM').length;
+  const hasDolomite = p.dolomite_risk === 'CRITICAL' || p.dolomite_risk === 'HIGH';
+  const hasFlood = !!p.flood_zone;
+  const highCrime = p.suburb_crime_score >= 8;
+  const photoCount = listingPhotos.length + (svSrc ? 1 : 0) + (satSrc ? 1 : 0);
+
+  let decision, decisionColor, decisionBg, reasoning;
+  if (critical > 0 || hasDolomite) {
+    decision = 'WALK AWAY';
+    decisionColor = '#E63946';
+    decisionBg = '#FFEBEE';
+    reasoning = 'This property has ' + critical + ' critical issue' + (critical !== 1 ? 's' : '') + ' that could pose serious structural or safety risks. ' + (hasDolomite ? 'The dolomite/sinkhole risk adds significant geological uncertainty. ' : '') + 'These issues typically involve substantial remediation costs and may affect insurability and resale value.';
+  } else if (high > 2 || totalRepairMax > 200000 || (hasFlood && high > 0)) {
+    decision = 'INSPECT FIRST';
+    decisionColor = '#F39C12';
+    decisionBg = '#FFF8E1';
+    reasoning = 'We found ' + high + ' high-severity issue' + (high !== 1 ? 's' : '') + ' and estimated repairs of up to ' + formatZAR(totalRepairMax) + '. ' + (hasFlood ? 'The property is in a flood zone. ' : '') + 'Before making an offer, get a professional building inspector on site to verify these findings and provide accurate repair quotes.';
+  } else if (high > 0 || medium > 3 || totalRepairMax > 50000 || highCrime) {
+    decision = 'NEGOTIATE';
+    decisionColor = '#F39C12';
+    decisionBg = '#FFF8E1';
+    reasoning = 'The property has some issues worth noting — ' + high + ' high and ' + medium + ' medium findings' + (totalRepairMax > 0 ? ', with estimated repairs up to ' + formatZAR(totalRepairMax) : '') + '. ' + (highCrime ? 'Crime in this area is above average. ' : '') + 'These are points to raise in your negotiation. Consider factoring repair costs into your offer.';
+  } else {
+    decision = 'BUY';
+    decisionColor = '#27AE60';
+    decisionBg = '#E8F5E9';
+    reasoning = 'No major structural concerns were identified across ' + findings.length + ' findings from ' + photoCount + ' images. ' + (p.suburb_crime_score ? 'Crime score for ' + (p.suburb || 'the area') + ' is ' + p.suburb_crime_score + '/10. ' : '') + 'Standard due diligence applies — confirm all findings with an on-site inspection before finalising your purchase.';
+  }
+
+  return '<div style="text-align:center;padding:40px 20px">' +
+    '<div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:2px;margin-bottom:12px">Purchase Decision</div>' +
+    '<div style="display:inline-block;background:' + decisionBg + ';border:3px solid ' + decisionColor + ';border-radius:12px;padding:24px 48px;margin-bottom:20px">' +
+    '<div style="font-size:36px;font-weight:bold;color:' + decisionColor + ';letter-spacing:2px">' + decision + '</div>' +
+    '</div>' +
+    '<p style="font-size:13px;color:#333;max-width:600px;margin:20px auto;line-height:1.7">' + reasoning + '</p>' +
+    (totalRepairMax > 0 ? '<p style="font-size:12px;color:#666;margin-top:12px">Total estimated repair range: <strong>' + formatZAR(totalRepairMin) + ' – ' + formatZAR(totalRepairMax) + '</strong></p>' : '') +
+    '</div>';
+})()}
 
 <!-- LISTING PHOTOS -->
 ${listingPhotos.length > 0 ? `

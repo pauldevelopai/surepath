@@ -6,6 +6,8 @@ import { propertyTitle, propertySubtitle } from "@/lib/property-title";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type P = Record<string, any>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type A = Record<string, any>;
 
 export default function PropertiesPage() {
   const router = useRouter();
@@ -27,6 +29,7 @@ export default function PropertiesPage() {
   const [page, setPage] = useState(1);
   const [totalRows, setTotalRows] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [globalStats, setGlobalStats] = useState<A>({});
 
   // Load saved sort on mount
   useEffect(() => {
@@ -55,6 +58,7 @@ export default function PropertiesPage() {
       setRows(filtered);
       setTotalRows(data.total || 0);
       setTotalPages(data.totalPages || 1);
+      if (data.stats) setGlobalStats(data.stats);
     }).finally(() => setLoading(false));
   }
 
@@ -153,13 +157,9 @@ export default function PropertiesPage() {
     <span title={label} className={`inline-block w-2 h-2 rounded-full ${ok ? "bg-green-500" : "bg-gray-300"}`} />
   );
 
-  // Summary stats (page-level counts for ratios, totalRows for overall)
-  const pageCount = rows.length;
-  const withCoords = rows.filter(r => r.lat).length;
-  const withPhotos = rows.filter(r => parseInt(r.photo_count) > 0).length;
-  const withAnalysis = rows.filter(r => parseInt(r.analysed_count) > 0).length;
-  const withReports = rows.filter(r => r.report_id).length;
-  const withDeeds = rows.filter(r => parseInt(r.has_deeds) > 0).length;
+  // Global stats across ALL properties
+  const gs = globalStats;
+  const gsTotal = gs.total || totalRows;
 
   return (
     <div>
@@ -219,12 +219,12 @@ export default function PropertiesPage() {
       {/* Summary cards */}
       <div className="grid grid-cols-6 gap-3 mb-2">
         {[
-          { label: "Properties", val: totalRows, color: "text-[#0D1B2A]" },
-          { label: "Geocoded", val: `${withCoords}/${pageCount}`, color: withCoords === pageCount ? "text-green-600" : "text-yellow-600" },
-          { label: "With Photos", val: `${withPhotos}/${pageCount}`, color: withPhotos > 0 ? "text-green-600" : "text-red-500" },
-          { label: "Vision Done", val: `${withAnalysis}/${pageCount}`, color: withAnalysis > 0 ? "text-green-600" : "text-gray-400" },
-          { label: "Reports", val: `${withReports}/${pageCount}`, color: withReports > 0 ? "text-green-600" : "text-gray-400" },
-          { label: "Deeds Data", val: `${withDeeds}/${pageCount}`, color: withDeeds > 0 ? "text-green-600" : "text-gray-400" },
+          { label: "Properties", val: gsTotal.toLocaleString(), color: "text-[#0D1B2A]" },
+          { label: "Geocoded", val: `${(gs.geocoded || 0).toLocaleString()}/${gsTotal.toLocaleString()}`, color: gs.geocoded === gsTotal ? "text-green-600" : "text-yellow-600" },
+          { label: "With Photos", val: `${(gs.with_photos || 0).toLocaleString()}/${gsTotal.toLocaleString()}`, color: gs.with_photos > 0 ? "text-green-600" : "text-red-500" },
+          { label: "Vision Done", val: `${(gs.vision_done || 0).toLocaleString()}/${gsTotal.toLocaleString()}`, color: gs.vision_done > 0 ? "text-green-600" : "text-gray-400" },
+          { label: "Reports", val: `${(gs.with_reports || 0).toLocaleString()}/${gsTotal.toLocaleString()}`, color: gs.with_reports > 0 ? "text-green-600" : "text-gray-400" },
+          { label: "Deeds Data", val: `${(gs.with_deeds || 0).toLocaleString()}/${gsTotal.toLocaleString()}`, color: gs.with_deeds > 0 ? "text-green-600" : "text-gray-400" },
         ].map(c => (
           <div key={c.label} className="bg-white border rounded p-3 text-center">
             <div className={`text-xl font-bold ${c.color}`}>{String(c.val)}</div>

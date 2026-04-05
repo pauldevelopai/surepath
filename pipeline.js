@@ -538,14 +538,87 @@ async function generateReport(input, askingPrice, phoneNumber) {
         }
       }
 
-      // Fallback: use P24 OG data directly
+      // Fallback: no PP match — use Puppeteer to get P24 photos (customer is paying)
       if (!ppResolved) {
-        const extracted = extractProperty24Data(html);
-        photoUrls = ogImage ? [ogImage, ...extracted.photoUrls] : extracted.photoUrls;
         address = ogTitle
           ? ogTitle.replace(/\s*[-–|]\s*Property24.*$/i, '').replace(/\s+for\s+sale\s+in\s+/i, ' in ').replace(/\s+in\s+in\s+/i, ' in ')
-          : extracted.address;
-        log(1, `No PP match — using P24 data: ${photoUrls.length} photos, address: "${address}"`);
+          : extractProperty24Data(html).address;
+
+        log(1, `No PP match — scraping P24 photos with Puppeteer`);
+        try {
+          const puppeteer = require('puppeteer');
+          const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+          const p24Page = await browser.newPage();
+          await p24Page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36');
+          await p24Page.goto(input, { waitUntil: 'networkidle0', timeout: 25000 });
+
+          const p24Data = await p24Page.evaluate(() => {
+            const r = { photos: [] };
+            const seen = new Set();
+            const pageHtml = document.documentElement.innerHTML;
+
+            // Find all prop24 CDN image IDs
+            const idMatches = pageHtml.match(/images\.prop24\.com\/(\d+)/g) || [];
+            for (const m of idMatches) {
+              const id = m.match(/(\d+)$/)?.[1];
+              if (id && !seen.has(id) && parseInt(id) > 300000000) {
+                seen.add(id);
+                r.photos.push('https://images.prop24.com/' + id + '/Ensure1280x720');
+              }
+            }
+
+            // Also check img/data-src elements
+            document.querySelectorAll('img[src], img[data-src]').forEach(el => {
+              const src = el.src || el.dataset?.src || '';
+              if ((src.includes('property24') || src.includes('prop24') || src.includes('imgix')) && !src.includes('logo') && !src.includes('icon')) {
+                const idMatch = src.match(/(\d{9,})/);
+                if (idMatch && !seen.has(idMatch[1])) {
+                  seen.add(idMatch[1]);
+                  r.photos.push('https://images.prop24.com/' + idMatch[1] + '/Ensure1280x720');
+                }
+              }
+            });
+
+            // Price
+            const allEls = document.querySelectorAll('*');
+            for (const el of allEls) {
+              const t = el.textContent?.trim() || '';
+              if (/^R\s*[\d\s,]+$/.test(t)) {
+                const p = parseInt(t.replace(/\\D/g, ''));
+                if (p >= 100000 && p <= 500000000) { r.price = p; break; }
+              }
+            }
+
+            // Beds/baths
+            const body = document.body.innerText;
+            const bedsM = body.match(/(\d+)\s*Bed/i);
+            const bathsM = body.match(/(\d+)\s*Bath/i);
+            r.bedrooms = bedsM ? parseInt(bedsM[1]) : null;
+            r.bathrooms = bathsM ? parseInt(bathsM[1]) : null;
+
+            // Street address
+            try {
+              document.querySelectorAll('script[type="application/ld+json"]').forEach(el => {
+                const ld = JSON.parse(el.innerHTML);
+                if (ld.address?.streetAddress) r.streetAddress = ld.address.streetAddress;
+              });
+            } catch {}
+
+            return r;
+          });
+
+          await browser.close();
+
+          photoUrls = p24Data.photos.length > 0 ? p24Data.photos : (ogImage ? [ogImage] : []);
+          if (!askingPrice && p24Data.price) askingPrice = p24Data.price;
+          if (p24Data.streetAddress) {
+            address = `${p24Data.streetAddress}, ${address}`;
+          }
+          log(1, `P24 Puppeteer: ${photoUrls.length} photos, price: R${askingPrice || '?'}, address: "${address}"`);
+        } catch (err) {
+          log(1, `P24 Puppeteer failed: ${err.message} — using OG image only`);
+          photoUrls = ogImage ? [ogImage] : [];
+        }
       }
 
       if (!address) {

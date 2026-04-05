@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { withAuth } from "@/lib/auth";
-import { spawn } from "child_process";
+import { spawn, execSync } from "child_process";
 import path from "path";
 
 // Track running scraper processes — keyed by name (e.g. "pp", "p24", "pp_2")
@@ -65,24 +65,25 @@ export const POST = withAuth(async (req: NextRequest) => {
       args.push("--no-stop");
     } else if (source === "crime") {
       scraperName = "crime";
-      // Run collect-crime inline script that processes properties missing crime data
       args = ["-e", `
         require('dotenv').config();
         const pool = require('./db');
         const { collectForProperty } = require('./collect-crime');
+        function withTimeout(fn, ms) { return Promise.race([fn(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]); }
         (async () => {
           const { rows } = await pool.query(
-            "SELECT p.id, p.suburb, p.city FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'crime_detailed') ORDER BY p.created_at DESC LIMIT 50"
+            "SELECT DISTINCT ON (p.suburb, p.city) p.id, p.suburb, p.city FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'crime_detailed') ORDER BY p.suburb, p.city, p.created_at DESC LIMIT 30"
           );
-          console.log('Crime: ' + rows.length + ' properties to process');
+          console.log('Crime: ' + rows.length + ' suburbs to process');
+          let ok = 0, skip = 0;
           for (const prop of rows) {
             try {
-              const r = await collectForProperty(prop.id);
-              if (r?.station) console.log('OK: ' + prop.suburb + ' → ' + r.station + ' (' + r.total + ' incidents)');
-              else console.log('SKIP: ' + prop.suburb + ' — ' + (r?.error || 'no data'));
-            } catch (e) { console.log('ERROR: ' + prop.suburb + ' — ' + e.message); }
+              const r = await withTimeout(() => collectForProperty(prop.id), 15000);
+              if (r?.station) { console.log('OK: ' + prop.suburb + ', ' + prop.city + ' → ' + r.station); ok++; }
+              else { console.log('SKIP: ' + prop.suburb + ' — ' + (r?.error || 'no data')); skip++; }
+            } catch (e) { console.log('SKIP: ' + prop.suburb + ' — ' + e.message); skip++; }
           }
-          console.log('=== Crime collection complete ===');
+          console.log('=== Crime complete: ' + ok + ' OK, ' + skip + ' skipped ===');
           await pool.end();
         })();
       `];
@@ -112,8 +113,31 @@ export const POST = withAuth(async (req: NextRequest) => {
       `];
     } else if (source === "discovery") {
       scraperName = "discovery";
-      // Use the scrape-pp.js with a small page count for quick discovery
       args = [path.resolve(projectDir, "bootstrap", "scrape-pp.js"), "--max-pages", "20", "--delay", "2"];
+    } else if (source === "security") {
+      scraperName = "security";
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const collectSecurity = require('./collect-security');
+        function withTimeout(fn, ms) { return Promise.race([fn(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]); }
+        (async () => {
+          const { rows } = await pool.query(
+            "SELECT DISTINCT ON (p.suburb, p.city) p.id, p.suburb, p.city FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL AND p.lat IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'security_community') ORDER BY p.suburb, p.city, p.created_at DESC LIMIT 20"
+          );
+          console.log('Security: ' + rows.length + ' suburbs to process');
+          let ok = 0, skip = 0;
+          for (const prop of rows) {
+            try {
+              const r = await withTimeout(() => collectSecurity.collectForProperty(prop.id), 30000);
+              if (r) { console.log('OK: ' + prop.suburb + ', ' + prop.city + ' — ' + r.security_companies_count + ' companies, CPF: ' + (r.cpf_found ? 'yes' : 'no') + ', sentiment: ' + r.sentiment_overall); ok++; }
+              else { console.log('SKIP: ' + prop.suburb + ' — no data'); skip++; }
+            } catch (e) { console.log('SKIP: ' + prop.suburb + ' — ' + e.message); skip++; }
+          }
+          console.log('=== Security complete: ' + ok + ' OK, ' + skip + ' skipped ===');
+          await pool.end();
+        })();
+      `];
     } else {
       scraperName = `p24${suburb ? '_' + suburb.substring(0, 15) : ''}`;
       args = [path.resolve(projectDir, "bootstrap", "scrape-p24.js")];
@@ -123,10 +147,19 @@ export const POST = withAuth(async (req: NextRequest) => {
       if (max_pages) args.push("--max-pages", String(max_pages));
     }
 
-    // Check if same scraper is already running
+    // Check if same scraper is already running (in-memory check)
     const existing = scraperProcesses.get(scraperName);
     if (existing && !existing.proc.killed) {
       return NextResponse.json({ ok: false, message: `"${scraperName}" already running` });
+    }
+    // Also check system processes (survives Next.js hot reload)
+    if (scraperName === "pp") {
+      try {
+        const ps = execSync("ps aux | grep 'scrape-pp.js' | grep -v grep", { encoding: "utf8" });
+        if (ps.trim()) {
+          return NextResponse.json({ ok: false, message: `PP scraper already running (system process)` });
+        }
+      } catch { /* no process found — OK to start */ }
     }
 
     const logLines: string[] = [`[${scraperName}] Starting: node ${args.join(" ")}`];

@@ -84,12 +84,14 @@ Analyse this Google Street View image of a property exterior. Focus specifically
 - Damp staining, efflorescence (white salt deposits = possible rising damp), mold indicators
 - Boundary walls and security features
 - Security observations: boundary wall type and height, electric fence, burglar bars, security gate, CCTV, motion lights, perimeter type
+- NEGATIVES nearby: railway lines (noise, vibration, safety risk — severity HIGH), informal settlements/shack areas (safety, property value risk — severity HIGH), industrial buildings, power lines, busy roads, construction sites
+- POSITIVES nearby: parks, green spaces, tree-lined streets, mountain/sea views, schools, well-maintained neighbourhood
 
 Return structured JSON:
 {
   "photo_type": "exterior",
   "findings": [{
-    "category": "roof|walls|damp|electrical|plumbing|ceiling|structure|extension",
+    "category": "roof|walls|damp|electrical|plumbing|ceiling|structure|extension|environment",
     "observation": "exact description with crack classification or damp type as specified above",
     "confidence": "CONFIRMED_VISIBLE|PROBABLE|POSSIBLE|NOT_DETECTABLE",
     "severity": "CRITICAL|HIGH|MEDIUM|LOW|COSMETIC",
@@ -101,10 +103,12 @@ Return structured JSON:
   "roof_orientation_estimate": "north|south|east|west|unclear",
   "asbestos_indicators": false,
   "security_visible": false,
-  "security_observations": ["array of observed security features or gaps"]
+  "security_observations": ["array of observed security features or gaps"],
+  "nearby_negatives": ["railway line", "informal settlement", etc - only if visible],
+  "nearby_positives": ["park/green space", "tree-lined street", etc - only if visible]
 }
 
-Rules: Never confirm asbestos — flag indicators only. SA terminology. ZAR costs.
+Rules: Never confirm asbestos — flag indicators only. SA terminology. ZAR costs. Railway lines and informal settlements are ALWAYS HIGH severity when visible.
 Return ONLY valid JSON. No markdown fences.`;
 
 const SATELLITE_PROMPT = `You are a certified property inspector with 20 years of South African experience.
@@ -114,12 +118,14 @@ Analyse this satellite/aerial image of a property. Focus specifically on:
 - Outbuildings, extensions, or structures not on original plans
 - Roof orientation estimate for solar viability (north-facing is ideal in SA)
 - Pool, garden structures, parking
+- NEGATIVES nearby: railway lines or rail corridors (noise, vibration — severity HIGH), informal settlements/shack areas with dense irregular roofing (safety, property value — severity HIGH), industrial zones, landfill sites, power substations, highway proximity
+- POSITIVES nearby: parks, green belts, sports fields, nature reserves, river/dam (not flood risk), well-spaced residential plots, mountain backdrop
 
 Return structured JSON:
 {
   "photo_type": "roof",
   "findings": [{
-    "category": "roof|structure|extension",
+    "category": "roof|structure|extension|environment",
     "observation": "exact description of what you see",
     "confidence": "CONFIRMED_VISIBLE|PROBABLE|POSSIBLE|NOT_DETECTABLE",
     "severity": "CRITICAL|HIGH|MEDIUM|LOW|COSMETIC",
@@ -130,10 +136,12 @@ Return structured JSON:
   "solar_installed": false,
   "roof_orientation_estimate": "north|south|east|west|unclear",
   "asbestos_indicators": false,
-  "security_visible": false
+  "security_visible": false,
+  "nearby_negatives": ["railway line", "informal settlement", etc - only if visible in image],
+  "nearby_positives": ["park/green space", "sports field", etc - only if visible in image]
 }
 
-Rules: Never confirm asbestos — flag indicators only. SA terminology. ZAR costs.
+Rules: Never confirm asbestos — flag indicators only. SA terminology. ZAR costs. Railway lines and informal settlements are ALWAYS HIGH severity when visible.
 Return ONLY valid JSON. No markdown fences.`;
 
 // ─── Image download ────────────────────────────────────────────────────

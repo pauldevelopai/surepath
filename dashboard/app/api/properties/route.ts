@@ -59,5 +59,28 @@ export const GET = withAuth(async (req: NextRequest) => {
   `;
 
   const rows = await query(sql, params);
-  return NextResponse.json({ rows, total, page, perPage, totalPages: Math.ceil(total / perPage) });
+
+  // Global stats across ALL properties (not just current page)
+  const globalStats = await query(`
+    SELECT
+      COUNT(*) AS total,
+      COUNT(*) FILTER (WHERE lat IS NOT NULL) AS geocoded,
+      COUNT(*) FILTER (WHERE id IN (SELECT DISTINCT property_id FROM property_images)) AS with_photos,
+      COUNT(*) FILTER (WHERE id IN (SELECT DISTINCT property_id FROM property_images WHERE vision_analysis IS NOT NULL)) AS vision_done,
+      COUNT(*) FILTER (WHERE id IN (SELECT DISTINCT property_id FROM property_reports WHERE status = 'complete')) AS with_reports,
+      COUNT(*) FILTER (WHERE id IN (SELECT DISTINCT property_id FROM deeds_data)) AS with_deeds
+    FROM properties
+  `);
+
+  return NextResponse.json({
+    rows, total, page, perPage, totalPages: Math.ceil(total / perPage),
+    stats: {
+      total: parseInt(globalStats[0].total),
+      geocoded: parseInt(globalStats[0].geocoded),
+      with_photos: parseInt(globalStats[0].with_photos),
+      vision_done: parseInt(globalStats[0].vision_done),
+      with_reports: parseInt(globalStats[0].with_reports),
+      with_deeds: parseInt(globalStats[0].with_deeds),
+    },
+  });
 });

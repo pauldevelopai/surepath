@@ -187,13 +187,17 @@ async function getNHWFromDB(suburb, city) {
 
 // ─── Google Places fallback for security companies ───────────────────
 
-async function searchSecurityCompaniesGoogle(lat, lng) {
-  const places = await placesTextSearch('security company armed response', lat, lng, 10000);
+async function searchSecurityCompaniesGoogle(lat, lng, suburb, city) {
+  // Include suburb in query for locality-relevant results
+  const places = await placesTextSearch(`security company armed response ${suburb || ''}`, lat, lng, 5000);
 
   try {
     const { logGoogle } = require('./costs');
     await logGoogle('google_places_text_search');
   } catch {}
+
+  const suburbLower = (suburb || '').toLowerCase();
+  const cityLower = (city || '').toLowerCase();
 
   return places.map(p => {
     const reviews = (p.reviews || []).map(r => ({
@@ -206,6 +210,11 @@ async function searchSecurityCompaniesGoogle(lat, lng) {
     const armedResponse = allText.includes('armed response') || allText.includes('armed reaction') ||
       (p.displayName?.text || '').toLowerCase().includes('armed') ||
       allText.includes('patrol');
+
+    // Check if this company is relevant to the property's area
+    const addr = (p.formattedAddress || '').toLowerCase();
+    const localRelevant = addr.includes(suburbLower) || addr.includes(cityLower) ||
+      allText.includes(suburbLower) || allText.includes(cityLower);
 
     const positive = reviews
       .filter(r => r.rating >= 4 && r.text.length > 20)
@@ -224,18 +233,22 @@ async function searchSecurityCompaniesGoogle(lat, lng) {
       phone: p.nationalPhoneNumber || null,
       website: p.websiteUri || null,
       armed_response: armedResponse,
+      local_relevant: localRelevant,
       source: 'google_places',
       top_reviews: positive,
       complaints: negative,
     };
-  }).filter(c => c.review_count > 0 || c.name.toLowerCase().includes('security'));
+  })
+  .filter(c => c.review_count > 0 || c.name.toLowerCase().includes('security'))
+  .sort((a, b) => (b.local_relevant ? 1 : 0) - (a.local_relevant ? 1 : 0) || (b.rating || 0) - (a.rating || 0));
 }
 
 // ─── Google Places fallback for CPF ──────────────────────────────────
 
-async function searchCPFGoogle(lat, lng, suburb) {
-  const query = `community policing forum CPF ${suburb}`;
-  const places = await placesTextSearch(query, lat, lng, 15000);
+async function searchCPFGoogle(lat, lng, suburb, city) {
+  // Search specifically for the suburb's CPF first
+  const query = `"${suburb}" CPF community policing forum ${city || ''}`;
+  const places = await placesTextSearch(query, lat, lng, 5000);
 
   try {
     const { logGoogle } = require('./costs');
@@ -284,9 +297,9 @@ async function searchCPFGoogle(lat, lng, suburb) {
 
 // ─── Google Places fallback for NHW ──────────────────────────────────
 
-async function searchNHWGoogle(lat, lng, suburb) {
-  const query = `neighbourhood watch ${suburb}`;
-  const places = await placesTextSearch(query, lat, lng, 10000);
+async function searchNHWGoogle(lat, lng, suburb, city) {
+  const query = `"${suburb}" neighbourhood watch ${city || ''}`;
+  const places = await placesTextSearch(query, lat, lng, 5000);
 
   try {
     const { logGoogle } = require('./costs');
@@ -400,7 +413,7 @@ async function collectForProperty(propertyId) {
 
   if (securityCompanies.length === 0) {
     console.log(`[security] No DB coverage for ${suburb} — falling back to Google Places`);
-    securityCompanies = await searchSecurityCompaniesGoogle(lat, lng);
+    securityCompanies = await searchSecurityCompaniesGoogle(lat, lng, suburb, city);
     securitySource = 'google_places';
     await sleep(500);
   } else {
@@ -413,7 +426,7 @@ async function collectForProperty(propertyId) {
 
   if (!cpf) {
     console.log(`[security] No CPF in DB for ${suburb} — falling back to Google Places`);
-    cpf = await searchCPFGoogle(lat, lng, suburb);
+    cpf = await searchCPFGoogle(lat, lng, suburb, city);
     cpfSource = 'google_places';
     await sleep(500);
   } else {
@@ -426,7 +439,7 @@ async function collectForProperty(propertyId) {
 
   if (!nhw) {
     console.log(`[security] No NHW in DB for ${suburb} — falling back to Google Places`);
-    nhw = await searchNHWGoogle(lat, lng, suburb);
+    nhw = await searchNHWGoogle(lat, lng, suburb, city);
     nhwSource = 'google_places';
   } else {
     console.log(`[security] NHW from DB: ${nhw.name} (${nhw.activity_level})`);

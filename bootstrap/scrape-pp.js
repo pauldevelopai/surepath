@@ -21,7 +21,6 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
 const https = require('https');
 const http = require('http');
-const puppeteer = require('puppeteer');
 const pool = require('../db');
 const { recordSource } = require('../provenance');
 
@@ -91,90 +90,88 @@ async function getListings(searchUrl) {
   return found;
 }
 
-// ─── Extract ALL data from a single listing ────────────────────────────
+// ─── Extract ALL data from a single listing (plain HTTP, no Puppeteer) ──
 
-async function extractListing(page, url) {
-  await page.goto(url, { waitUntil: 'networkidle0', timeout: 25000 });
-  await sleep(1500);
+async function extractListing(_unused, url) {
+  const html = await fetchPage(url);
+  const r = { photos: [] };
+  const bodyText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
-  return page.evaluate(() => {
-    const r = { photos: [] };
-    const body = document.body.innerText;
+  // Title — h1
+  const h1Match = html.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+  r.title = h1Match ? h1Match[1].trim() : null;
 
-    // Title
-    r.title = document.querySelector('h1')?.textContent?.trim() || null;
-
-    // Price
-    const priceMatch = body.match(/R\s*([\d\s]+\d{3})/);
-    r.price = priceMatch ? parseInt(priceMatch[1].replace(/\s/g, '')) : null;
-
-    // Features — beds, baths, parking, sqm
-    const bedMatch = body.match(/(\d+)\s*Bed/i);
-    const bathMatch = body.match(/(\d+)\s*Bath/i);
-    const parkMatch = body.match(/(\d+)\s*(?:Parking|Garage)/i);
-    const sqmMatch = body.match(/(\d+)\s*m²/);
-    const erfMatch = body.match(/Erf Size[:\s]*(\d[\d\s]*)\s*m²/i);
-
-    r.bedrooms = bedMatch ? parseInt(bedMatch[1]) : null;
-    r.bathrooms = bathMatch ? parseInt(bathMatch[1]) : null;
-    r.parking = parkMatch ? parseInt(parkMatch[1]) : null;
-    r.floor_area = sqmMatch ? parseInt(sqmMatch[1]) : null;
-    r.erf_size = erfMatch ? parseInt(erfMatch[1].replace(/\s/g, '')) : null;
-
-    // Levies and rates
-    const levyMatch = body.match(/Lev(?:y|ies)[:\s]*R\s*([\d\s]+)/i);
-    const rateMatch = body.match(/Rates[:\s]*R\s*([\d\s]+)/i);
-    r.levies = levyMatch ? parseInt(levyMatch[1].replace(/\s/g, '')) : null;
-    r.rates = rateMatch ? parseInt(rateMatch[1].replace(/\s/g, '')) : null;
-
-    // Property type
-    const typeText = body.toLowerCase();
-    if (typeText.includes('apartment') || typeText.includes('flat')) r.property_type = 'sectional';
-    else if (typeText.includes('house') && !typeText.includes('townhouse')) r.property_type = 'freehold';
-    else if (typeText.includes('townhouse') || typeText.includes('cluster')) r.property_type = 'estate';
-    else r.property_type = null;
-
-    // Booleans
-    r.pet_friendly = /pet[s]?\s*(?:allowed|friendly)/i.test(body);
-    r.furnished = /\bfurnished\b/i.test(body);
-
-    // Description — grab main description block
-    const descEl = document.querySelector('[class*="description"], [class*="listing-body"]');
-    r.description = descEl ? descEl.textContent.trim().substring(0, 3000) : null;
-
-    // Agent
-    const agentEl = document.querySelector('[class*="agent-name"], [class*="consultant"]');
-    r.agent_name = agentEl ? agentEl.textContent.trim() : null;
-    const agencyEl = document.querySelector('[class*="agency-name"], [class*="brand-name"]');
-    r.agency_name = agencyEl ? agencyEl.textContent.trim() : null;
-
-    // ALL photos — PP stores them in the DOM, much better than P24
-    const seen = new Set();
-    document.querySelectorAll('img[src], img[data-src]').forEach(el => {
-      const src = el.src || el.dataset?.src || '';
-      if (src.includes('images.pp.co.za') && !src.includes('logo')) {
-        // Get the base image ID and request full size
-        const imgMatch = src.match(/images\.pp\.co\.za\/listing\/(\d+)\/([^/]+)/);
-        if (imgMatch && !seen.has(imgMatch[2])) {
-          seen.add(imgMatch[2]);
-          // Request largest version
-          r.photos.push(`https://images.pp.co.za/listing/${imgMatch[1]}/${imgMatch[2]}/1600/1066/contain/jpegorpng`);
+  // JSON-LD — beds, baths, garages, address, photo
+  const jsonldBlocks = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
+  for (const block of jsonldBlocks) {
+    try {
+      const jsonStr = block.replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '');
+      const ld = JSON.parse(jsonStr);
+      if (ld.additionalProperty) {
+        for (const p of ld.additionalProperty) {
+          if (p.name === 'Bedrooms' && !r.bedrooms) r.bedrooms = parseInt(p.value);
+          if (p.name === 'Bathrooms' && !r.bathrooms) r.bathrooms = parseInt(p.value);
+          if (p.name === 'Garages' && !r.parking) r.parking = parseInt(p.value);
         }
       }
-    });
+    } catch {}
+  }
 
-    // Also scan scripts and HTML for image URLs
-    const html = document.documentElement.innerHTML;
-    const imgMatches = html.matchAll(/images\.pp\.co\.za\/listing\/(\d+)\/([A-Za-z0-9_-]+)/g);
-    for (const m of imgMatches) {
-      if (!seen.has(m[2])) {
-        seen.add(m[2]);
-        r.photos.push(`https://images.pp.co.za/listing/${m[1]}/${m[2]}/1600/1066/contain/jpegorpng`);
-      }
+  // Fallback features from body text
+  if (!r.bedrooms) { const m = bodyText.match(/(\d+)\s*Bed/i); r.bedrooms = m ? parseInt(m[1]) : null; }
+  if (!r.bathrooms) { const m = bodyText.match(/(\d+)\s*Bath/i); r.bathrooms = m ? parseInt(m[1]) : null; }
+  if (!r.parking) { const m = bodyText.match(/(\d+)\s*(?:Parking|Garage)/i); r.parking = m ? parseInt(m[1]) : null; }
+  const sqmMatch = bodyText.match(/(\d+)\s*m²/);
+  r.floor_area = sqmMatch ? parseInt(sqmMatch[1]) : null;
+  const erfMatch = bodyText.match(/Erf Size[:\s]*(\d[\d\s]*)\s*m²/i);
+  r.erf_size = erfMatch ? parseInt(erfMatch[1].replace(/\s/g, '')) : null;
+
+  // Price — PP renders price client-side, but sometimes it's in the static HTML
+  const priceMatch = bodyText.match(/R\s*([\d\s]+\d{3})/);
+  r.price = priceMatch ? parseInt(priceMatch[1].replace(/\s/g, '')) : null;
+  // Validate — small numbers are not prices
+  if (r.price && r.price < 50000) r.price = null;
+
+  // Levies and rates
+  const levyMatch = bodyText.match(/Lev(?:y|ies)[:\s]*R\s*([\d\s]+)/i);
+  const rateMatch = bodyText.match(/Rates[:\s]*R\s*([\d\s]+)/i);
+  r.levies = levyMatch ? parseInt(levyMatch[1].replace(/\s/g, '')) : null;
+  r.rates = rateMatch ? parseInt(rateMatch[1].replace(/\s/g, '')) : null;
+
+  // Property type
+  const typeText = bodyText.toLowerCase();
+  if (typeText.includes('apartment') || typeText.includes('flat')) r.property_type = 'sectional';
+  else if (typeText.includes('house') && !typeText.includes('townhouse')) r.property_type = 'freehold';
+  else if (typeText.includes('townhouse') || typeText.includes('cluster')) r.property_type = 'estate';
+  else r.property_type = null;
+
+  // Booleans
+  r.pet_friendly = /pet[s]?\s*(?:allowed|friendly)/i.test(bodyText);
+  r.furnished = /\bfurnished\b/i.test(bodyText);
+
+  // Description
+  const descMatch = html.match(/<[^>]*class="[^"]*(?:description|listing-body)[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i);
+  r.description = descMatch ? descMatch[1].replace(/<[^>]+>/g, '').trim().substring(0, 3000) : null;
+
+  // Agent
+  const agentMatch = html.match(/<[^>]*class="[^"]*(?:agent-name|consultant)[^"]*"[^>]*>([^<]+)<\/[^>]+>/i);
+  r.agent_name = agentMatch ? agentMatch[1].trim() : null;
+  const agencyMatch = html.match(/<[^>]*class="[^"]*(?:agency-name|brand-name)[^"]*"[^>]*>([^<]+)<\/[^>]+>/i);
+  r.agency_name = agencyMatch ? agencyMatch[1].trim() : null;
+
+  // Photos — scan entire HTML for PP image CDN URLs
+  const photoSeen = new Set();
+  const imgRegex = /images\.pp\.co\.za\/listing\/(\d+)\/([A-Za-z0-9_-]+)/g;
+  let imgM;
+  while ((imgM = imgRegex.exec(html)) !== null) {
+    if (!photoSeen.has(imgM[2])) {
+      photoSeen.add(imgM[2]);
+      r.photos.push(`https://images.pp.co.za/listing/${imgM[1]}/${imgM[2]}/1600/1066/contain/jpegorpng`);
     }
+    if (r.photos.length >= 16) break;
+  }
 
-    return r;
-  });
+  return r;
 }
 
 // ─── Store listing ─────────────────────────────────────────────────────
@@ -306,12 +303,8 @@ async function main() {
 
   console.log(`\nScraping PrivateProperty — ${label}`);
   console.log(`Delay ${delaySec}s, max ${maxPages} pages`);
+  console.log(`No Puppeteer — all extraction via plain HTTP`);
   console.log();
-
-  // Puppeteer only needed for individual listing detail pages (price extraction)
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-  const detailPage = await browser.newPage();
-  await detailPage.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
   let totalStored = 0;
   let totalSkipped = 0;
@@ -348,7 +341,7 @@ async function main() {
 
           try {
             await sleep(delaySec * 1000);
-            const listing = await extractListing(detailPage, meta.url);
+            const listing = await extractListing(null, meta.url);
 
             if (!listing.title && !listing.price) {
               console.log(`    SKIP ${meta.id} — empty page`);
@@ -436,8 +429,6 @@ async function main() {
       } catch (e) { console.log(`  Could not save bookmark: ${e.message}`); }
     }
   }
-
-  await browser.close();
 
   console.log(`\n=== PP SCRAPE COMPLETE ===`);
   console.log(`  Scope: ${label}`);

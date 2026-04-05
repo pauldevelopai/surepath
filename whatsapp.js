@@ -651,25 +651,97 @@ async function runTeaseAsync(from, phoneNumber, url) {
         }
       }
 
-      // Step 6: No PP match found — use P24 data directly
+      // Step 6: No PP match found — Puppeteer-scrape P24 for full photos before offering the report
       if (!extractedData) {
-        // Build a proper address: "5 Bedroom House in Golden Acre, Somerset West, Western Cape"
-        const p24Address = p24Data.streetAddress
-          ? `${p24Data.streetAddress}, ${p24Suburb || ''}, ${p24City || ''}`
+        console.log(`[tease] No PP match — scraping P24 with Puppeteer to get all photos`);
+
+        let p24Photos = p24Data.photos || [];
+        let p24Price = p24Data.price;
+        let p24Street = p24Data.streetAddress;
+        let p24Desc = p24Data.description;
+
+        try {
+          const puppeteer = require('puppeteer');
+          const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+          const p24Page = await browser.newPage();
+          await p24Page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36');
+          await p24Page.goto(url, { waitUntil: 'networkidle0', timeout: 25000 });
+
+          const scraped = await p24Page.evaluate(() => {
+            const r = { photos: [] };
+            const seen = new Set();
+            const pageHtml = document.documentElement.innerHTML;
+
+            // Find all prop24 CDN image IDs
+            const idMatches = pageHtml.match(/images\.prop24\.com\/(\d+)/g) || [];
+            for (const m of idMatches) {
+              const id = m.match(/(\d+)$/)?.[1];
+              if (id && !seen.has(id) && parseInt(id) > 300000000) {
+                seen.add(id);
+                r.photos.push('https://images.prop24.com/' + id + '/Ensure1280x720');
+              }
+            }
+
+            // Price
+            const allEls = document.querySelectorAll('*');
+            for (const el of allEls) {
+              const t = el.textContent?.trim() || '';
+              if (/^R\s*[\d\s,]+$/.test(t)) {
+                const p = parseInt(t.replace(/\D/g, ''));
+                if (p >= 100000 && p <= 500000000) { r.price = p; break; }
+              }
+            }
+
+            // Beds/baths/street
+            const body = document.body.innerText;
+            const bedsM = body.match(/(\d+)\s*Bed/i);
+            const bathsM = body.match(/(\d+)\s*Bath/i);
+            r.bedrooms = bedsM ? parseInt(bedsM[1]) : null;
+            r.bathrooms = bathsM ? parseInt(bathsM[1]) : null;
+            try {
+              document.querySelectorAll('script[type="application/ld+json"]').forEach(el => {
+                const ld = JSON.parse(el.innerHTML);
+                if (ld.address?.streetAddress) r.streetAddress = ld.address.streetAddress;
+              });
+            } catch {}
+
+            // Description
+            const descEl = document.querySelector('[class*="description"], [class*="listing-body"]');
+            r.description = descEl ? descEl.textContent?.trim()?.substring(0, 2000) : null;
+
+            return r;
+          });
+
+          await browser.close();
+
+          if (scraped.photos.length > 0) p24Photos = scraped.photos;
+          if (scraped.price && !p24Price) p24Price = scraped.price;
+          if (scraped.streetAddress && !p24Street) p24Street = scraped.streetAddress;
+          if (scraped.description && !p24Desc) p24Desc = scraped.description;
+          if (scraped.bedrooms && !p24Data.bedrooms) p24Data.bedrooms = scraped.bedrooms;
+          if (scraped.bathrooms && !p24Data.bathrooms) p24Data.bathrooms = scraped.bathrooms;
+
+          console.log(`[tease] P24 Puppeteer: ${p24Photos.length} photos, R${p24Price || '?'}`);
+        } catch (err) {
+          console.error(`[tease] P24 Puppeteer failed: ${err.message} — using OG data`);
+        }
+
+        const p24Address = p24Street
+          ? `${p24Street}, ${p24Suburb || ''}, ${p24City || ''}`
           : p24Data.title
             ? `${p24Data.title.replace(/\s+for\s+sale\s*/i, ' in ').replace(/\s+in\s+in\s+/i, ' in ')}, ${p24City || ''}`
             : `Property in ${p24Suburb || 'unknown'}`;
 
         extractedData = {
           address: p24Address.replace(/, $/, ''),
-          askingPrice: p24Data.price,
+          askingPrice: p24Price,
           bedrooms: p24Data.bedrooms,
           bathrooms: p24Data.bathrooms,
-          photoUrls: p24Data.photos || [],
-          description: p24Data.description,
+          photoUrls: p24Photos,
+          description: p24Desc,
           listingId: null,
         };
-        console.log(`[tease] Using P24 data directly: "${extractedData.address}", R${extractedData.askingPrice}, ${extractedData.bedrooms}bed`);
+        console.log(`[tease] P24 final: "${extractedData.address}", R${extractedData.askingPrice}, ${extractedData.bedrooms}bed, ${extractedData.photoUrls.length} photos`);
       }
     } else {
       extractedData = await extractPrivatePropertyData(url);

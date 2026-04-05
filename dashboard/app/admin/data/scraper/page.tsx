@@ -8,7 +8,7 @@ const SCRAPERS = [
   { id: "pp", label: "PrivateProperty", desc: "Newest listings first, all provinces", color: "bg-blue-600", hover: "hover:bg-blue-700" },
   { id: "crime", label: "Crime Data", desc: "CrimeHub / SAPS — all police stations", color: "bg-red-700", hover: "hover:bg-red-800" },
   { id: "solar", label: "Solar Data", desc: "PVGIS — satellite-measured irradiance", color: "bg-yellow-600", hover: "hover:bg-yellow-700" },
-  { id: "discovery", label: "New Listings", desc: "Discover new PP listings nationwide", color: "bg-purple-700", hover: "hover:bg-purple-800" },
+  { id: "security", label: "Security & Community", desc: "Security companies, CPF, neighbourhood watch", color: "bg-emerald-700", hover: "hover:bg-emerald-800" },
 ];
 
 export default function ScraperPage() {
@@ -83,7 +83,7 @@ export default function ScraperPage() {
     pp:        { pending: (s.pp_universe || 0) - (s.pp_total || totals.pp_properties || 0), done: s.pp_total || totals.pp_properties || 0, unit: "listings" },
     crime:     { pending: s.crime_pending || 0,  done: s.crime_total || 0,                      unit: "suburbs" },
     solar:     { pending: s.solar_pending || 0,  done: s.solar_total || 0,                      unit: "properties" },
-    discovery: { pending: 0,                     done: s.suburbs_with_listings || 0,             unit: "suburbs" },
+    security:  { pending: s.security_pending || 0, done: s.security_total || 0,                 unit: "suburbs" },
   };
 
   return (

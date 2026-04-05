@@ -102,6 +102,27 @@ export default function PropertyDetailPage() {
   const [genResult, setGenResult] = useState<A | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [ratings, setRatings] = useState<Record<string, string>>({});
+
+  function rateItem(section: string, hash: string, rating: string, context?: A) {
+    const key = `${section}:${hash}`;
+    setRatings(prev => ({ ...prev, [key]: rating }));
+    fetch("/api/feedback", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ property_id: id, section, finding_hash: hash, rating, context }),
+    }).catch(() => {});
+  }
+
+  function RateBtn({ section, hash, context }: { section: string; hash: string; context?: A }) {
+    const key = `${section}:${hash}`;
+    const current = ratings[key];
+    return (
+      <span className="inline-flex gap-0.5 ml-1 shrink-0">
+        <button onClick={() => rateItem(section, hash, "good", context)} className={`text-[11px] px-1 rounded ${current === "good" ? "bg-green-200 text-green-800" : "text-gray-300 hover:text-green-500"}`} title="Good — accurate/useful">&#x25B2;</button>
+        <button onClick={() => rateItem(section, hash, "bad", context)} className={`text-[11px] px-1 rounded ${current === "bad" ? "bg-red-200 text-red-800" : "text-gray-300 hover:text-red-500"}`} title="Bad — inaccurate/irrelevant">&#x25BC;</button>
+      </span>
+    );
+  }
 
   const load = useCallback(() => { fetch(`/api/inspect/${id}`).then(r => r.json()).then(setData); }, [id]);
   useEffect(() => { load(); }, [load]);
@@ -371,6 +392,32 @@ export default function PropertyDetailPage() {
             </div>
           )}
         </div>
+
+        {/* Key metrics bar */}
+        {(p.suburb_crime_score || p.solar_ghi_kwh_year || p.water_quality_score) && (
+          <div className="flex gap-3 mt-3">
+            {p.suburb_crime_score != null && p.suburb_crime_score > 0 && (
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium ${p.suburb_crime_score >= 7 ? 'bg-red-100 text-red-800' : p.suburb_crime_score >= 4 ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
+                <span className="text-[10px] text-gray-500">Crime</span>
+                <span className="font-bold">{p.suburb_crime_score}/10</span>
+                <span className="text-[9px]">(SAPS verified)</span>
+              </div>
+            )}
+            {p.solar_ghi_kwh_year && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium bg-yellow-50 text-yellow-800">
+                <span className="text-[10px] text-gray-500">Solar</span>
+                <span className="font-bold">{Number(p.solar_ghi_kwh_year).toFixed(0)} kWh/m²/yr</span>
+                <span className="text-[9px]">(PVGIS verified)</span>
+              </div>
+            )}
+            {p.water_quality_score != null && (
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium ${p.water_quality_score >= 7 ? 'bg-green-100 text-green-800' : p.water_quality_score >= 4 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}>
+                <span className="text-[10px] text-gray-500">Water</span>
+                <span className="font-bold">{p.water_quality_score}/10</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Status panel — unverified fields + action messages (hidden in print, shown in left sidebar) */}
@@ -438,6 +485,7 @@ export default function PropertyDetailPage() {
                 <div key={i} className="flex gap-1 items-start text-xs mt-1">
                   <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
                   <span className="flex-1">{f.observation}</span>
+                  <RateBtn section="streetview" hash={`sv-${i}`} context={{ observation: f.observation, severity: f.severity }} />
                   <span className="text-[9px] text-orange-500">Claude Vision</span>
                 </div>
               ))}
@@ -465,9 +513,15 @@ export default function PropertyDetailPage() {
               <div className="text-[9px] text-gray-400 mt-1">Click image to view full size</div>
               {satelliteImg.vision_analysis && (
                 <div className="mt-1">
-                  <Datum label="Roof Material" value={satelliteImg.vision_analysis.roof_material} source={{ name: "Claude Vision", url: "https://console.anthropic.com", confidence: "estimated" }} />
-                  <Datum label="Roof Orientation" value={satelliteImg.vision_analysis.roof_orientation_estimate} source={{ name: "Claude Vision", url: "https://console.anthropic.com", confidence: "estimated" }} />
-                  <Datum label="Solar Panels" value={satelliteImg.vision_analysis.solar_installed ? "Visible" : "None visible"} source={{ name: "Claude Vision", url: "https://console.anthropic.com", confidence: "estimated" }} />
+                  <div className="flex items-center"><Datum label="Roof Material" value={satelliteImg.vision_analysis.roof_material} source={{ name: "Claude Vision", url: "https://console.anthropic.com", confidence: "estimated" }} /><RateBtn section="satellite" hash="roof_material" context={{ field: "roof_material", value: satelliteImg.vision_analysis.roof_material }} /></div>
+                  <div className="flex items-center"><Datum label="Roof Orientation" value={satelliteImg.vision_analysis.roof_orientation_estimate} source={{ name: "Claude Vision", url: "https://console.anthropic.com", confidence: "estimated" }} /><RateBtn section="satellite" hash="roof_orientation" context={{ field: "roof_orientation", value: satelliteImg.vision_analysis.roof_orientation_estimate }} /></div>
+                  <div className="flex items-center"><Datum label="Solar Panels" value={satelliteImg.vision_analysis.solar_installed ? "Visible" : "None visible"} source={{ name: "Claude Vision", url: "https://console.anthropic.com", confidence: "estimated" }} /><RateBtn section="satellite" hash="solar_installed" context={{ field: "solar_installed", value: satelliteImg.vision_analysis.solar_installed }} /></div>
+                  {satelliteImg.vision_analysis.nearby_negatives?.map((n: string, i: number) => (
+                    <div key={`neg-${i}`} className="flex items-center gap-1 mt-1"><span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold">⚠ {n}</span><RateBtn section="satellite" hash={`neg-${i}`} context={{ type: "nearby_negative", value: n }} /></div>
+                  ))}
+                  {satelliteImg.vision_analysis.nearby_positives?.map((n: string, i: number) => (
+                    <div key={`pos-${i}`} className="flex items-center gap-1 mt-1"><span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded font-bold">✓ {n}</span><RateBtn section="satellite" hash={`pos-${i}`} context={{ type: "nearby_positive", value: n }} /></div>
+                  ))}
                 </div>
               )}
             </div>
@@ -529,6 +583,7 @@ export default function PropertyDetailPage() {
                       {f.estimated_repair_cost_zar && <span className="text-gray-400 ml-1">({formatZAR(f.estimated_repair_cost_zar.min)}–{formatZAR(f.estimated_repair_cost_zar.max)})</span>}
                       {f.source_photo && <a href={f.source_photo} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline ml-2">[photo]</a>}
                     </div>
+                    <RateBtn section="vision" hash={`${sev}-${i}-${(f.observation||'').slice(0,30)}`} context={{ observation: f.observation, severity: f.severity, category: f.category }} />
                     <span className="text-[9px] text-orange-500 shrink-0">estimated</span>
                   </div>
                 )))}
@@ -1366,26 +1421,10 @@ export default function PropertyDetailPage() {
         })()}
 
         {/* ── DATA SUMMARY FOOTER ── */}
-        <section className="bg-[#0D1B2A] text-white rounded-lg p-6">
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            {p.solar_ghi_kwh_year && (
-              <div>
-                <div className="text-gray-400 text-[10px]">Solar Irradiance (PVGIS verified)</div>
-                <div className="font-bold">{Number(p.solar_ghi_kwh_year).toFixed(0)} kWh/m²/year</div>
-                <div className="text-[10px] text-gray-500">PV output: {Number(p.solar_pv_output_kwh_year).toFixed(0)} kWh/year per 1kWp</div>
-              </div>
-            )}
-            {p.suburb_crime_score != null && p.suburb_crime_score > 0 && (
-              <div>
-                <div className="text-gray-400 text-[10px]">Crime Score (CrimeHub/SAPS verified)</div>
-                <div className="font-bold">{p.suburb_crime_score}/10</div>
-              </div>
-            )}
-          </div>
-          <div className="text-[9px] text-gray-500 mt-4 pt-3 border-t border-white/10">
-            All findings are risk indicators from data sources listed above. This report does not replace a professional building inspection or valuation. Verify all findings on-site with qualified professionals.
-          </div>
-        </section>
+        {/* Disclaimer */}
+        <div className="text-[9px] text-gray-400 text-center mt-6 pt-3 border-t">
+          All findings are risk indicators from data sources listed above. This report does not replace a professional building inspection or valuation. Verify all findings on-site with qualified professionals.
+        </div>
 
         {/* Print footer */}
         <div className="print-header" style={{ textAlign: "center", marginTop: 30, fontSize: 9, color: "#888" }}>
