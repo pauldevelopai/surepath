@@ -476,7 +476,7 @@ export default function PropertyDetailPage() {
                 <h2 className="font-bold text-sm">Street View</h2>
                 <FeedbackBtn propertyId={p.id} section="streetview" />
               </div>
-              <div className="text-[10px] text-gray-400"><a href="https://developers.google.com/maps/documentation/streetview" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Google Street View Static API</a> &middot; $7/1k</div>
+              <div className="text-[10px] text-gray-400"><a href="https://developers.google.com/maps/documentation/streetview" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Google Street View Static API</a></div>
             </div>
             <div className="flex gap-1">
               <CollectBtn action="streetview" label="Capture" ready={!!streetviewImg} />
@@ -518,7 +518,7 @@ export default function PropertyDetailPage() {
           <div className="flex justify-between items-start mb-2">
             <div>
               <h2 className="font-bold text-sm">Satellite / Aerial</h2>
-              <div className="text-[10px] text-gray-400"><a href="https://developers.google.com/maps/documentation/maps-static" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Google Maps Static API</a> &middot; $2/1k</div>
+              <div className="text-[10px] text-gray-400"><a href="https://developers.google.com/maps/documentation/maps-static" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Google Maps Static API</a></div>
             </div>
             <div className="flex gap-1">
               <CollectBtn action="satellite" label="Capture" ready={!!satelliteImg} />
@@ -626,7 +626,7 @@ export default function PropertyDetailPage() {
             <div>
               <h2 className="font-bold text-sm">Vision Analysis ({findings.length} findings)</h2>
               {sectionUpdated("roof_material", "security_visible") && <span className="text-[9px] text-gray-300 ml-2">Updated: {sectionUpdated("roof_material", "security_visible")}</span>}
-              <div className="text-[10px] text-gray-400"><a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Anthropic Claude</a> &middot; estimated &middot; ~R1.35</div>
+              <div className="text-[10px] text-gray-400"><a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Anthropic Claude</a> &middot; estimated</div>
             </div>
             <button onClick={() => collect("vision")} disabled={actionLoading === "vision"}
               className="px-3 py-1.5 rounded text-xs font-semibold bg-[#0D1B2A] text-white hover:bg-gray-800 disabled:opacity-50">

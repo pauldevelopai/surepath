@@ -874,7 +874,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
       return `/property-images/${filename}`;
     }
 
-    // Store listing photos — always try, ON CONFLICT skips duplicates
+    // Store listing photos — always add, ON CONFLICT preserves existing analysis
     if (photoUrls.length > 0) {
       const validPhotos = photoUrls.filter(url => {
         const lower = url.toLowerCase();
@@ -893,7 +893,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
         );
         if (rowCount > 0) added++;
       }
-      log(4, `${added} new photos added (${validPhotos.length - added} already existed)`);
+      log(4, added > 0 ? `${added} new photos added (${validPhotos.length - added} already existed)` : `All ${validPhotos.length} photos already in DB`);
     }
 
     // Street View — skip if already exists
@@ -917,7 +917,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
           const localUrl = saveImageFile(streetviewBase64, propertyId, 'streetview', 'jpg');
           await pool.query(
             `INSERT INTO property_images (property_id, source, image_url, image_type)
-             VALUES ($1, 'streetview', $2, 'exterior') ON CONFLICT (property_id, image_url) DO NOTHING`,
+             VALUES ($1, 'streetview', $2, 'exterior') ON CONFLICT (property_id, image_url) DO UPDATE SET source = EXCLUDED.source`,
             [propertyId, localUrl]
           );
           log(4, `Street View saved: ${localUrl}`);
@@ -933,7 +933,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
           const localUrl = saveImageFile(satelliteBase64, propertyId, 'satellite', 'png');
           await pool.query(
             `INSERT INTO property_images (property_id, source, image_url, image_type)
-             VALUES ($1, 'satellite', $2, 'exterior') ON CONFLICT (property_id, image_url) DO NOTHING`,
+             VALUES ($1, 'satellite', $2, 'exterior') ON CONFLICT (property_id, image_url) DO UPDATE SET source = EXCLUDED.source`,
             [propertyId, localUrl]
           );
           log(4, `Satellite saved: ${localUrl}`);

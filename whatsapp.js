@@ -1252,29 +1252,29 @@ async function runPipelineAsync(order, conv) {
         const hasCoords = !!existing[0].lat;
         const hasSuburb = !!existing[0].suburb;
 
-        // Check completeness: all photos analysed, streetview, satellite
+        // Check completeness: ALL photos analysed + streetview + satellite
         const { rows: imgCheck } = await pool.query(`
           SELECT
             COUNT(*) FILTER (WHERE source NOT IN ('streetview','satellite')) AS total_photos,
             COUNT(*) FILTER (WHERE source NOT IN ('streetview','satellite') AND vision_analysis IS NOT NULL) AS analysed_photos,
-            COUNT(*) FILTER (WHERE source = 'streetview') AS has_streetview,
-            COUNT(*) FILTER (WHERE source = 'satellite') AS has_satellite
+            COUNT(*) FILTER (WHERE source = 'streetview' AND vision_analysis IS NOT NULL) AS sv_analysed,
+            COUNT(*) FILTER (WHERE source = 'satellite' AND vision_analysis IS NOT NULL) AS sat_analysed
           FROM property_images WHERE property_id = $1
         `, [pid]);
 
         const totalPhotos = parseInt(imgCheck[0].total_photos);
         const analysedPhotos = parseInt(imgCheck[0].analysed_photos);
-        const hasStreetview = parseInt(imgCheck[0].has_streetview) > 0;
-        const hasSatellite = parseInt(imgCheck[0].has_satellite) > 0;
-        const allPhotosAnalysed = totalPhotos > 0 && analysedPhotos >= totalPhotos;
+        const svAnalysed = parseInt(imgCheck[0].sv_analysed) > 0;
+        const satAnalysed = parseInt(imgCheck[0].sat_analysed) > 0;
+        const allAnalysed = totalPhotos > 0 && analysedPhotos >= totalPhotos;
 
-        const isComplete = hasCoords && hasSuburb && hasStreetview && hasSatellite && allPhotosAnalysed;
+        const isComplete = hasCoords && hasSuburb && allAnalysed && svAnalysed && satAnalysed;
 
         if (isComplete) {
           propertyId = pid;
-          console.log(`[pipeline] Property ${pid} fully complete (${analysedPhotos}/${totalPhotos} photos, sv:${hasStreetview}, sat:${hasSatellite}) — exporting PDF directly`);
+          console.log(`[pipeline] Property ${pid} fully complete (${analysedPhotos}/${totalPhotos} photos, sv+sat analysed) — exporting PDF directly`);
         } else {
-          console.log(`[pipeline] Property ${pid} incomplete — coords:${hasCoords} suburb:${hasSuburb} sv:${hasStreetview} sat:${hasSatellite} photos:${analysedPhotos}/${totalPhotos} — running pipeline`);
+          console.log(`[pipeline] Property ${pid} incomplete — coords:${hasCoords} suburb:${hasSuburb} sv:${svAnalysed} sat:${satAnalysed} photos:${analysedPhotos}/${totalPhotos} — running pipeline`);
         }
       }
     }
