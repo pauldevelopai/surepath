@@ -176,10 +176,32 @@ async function runTeaseAsync(from, phoneNumber, url) {
     }
 
     // ── CHECK: Property exists in DB with vision data — generate tease from stored findings ──
-    const { rows: existingProps } = await pool.query(
-      'SELECT id, address_raw, address_normalised, asking_price, bedrooms, bathrooms FROM properties WHERE listing_url = $1 ORDER BY id DESC LIMIT 1',
-      [url]
-    );
+    // Only match if the listing_url is the SAME type as the input (PP URL for PP, P24 URL for P24)
+    // This prevents stale cross-referenced records from being picked up
+    const { rows: existingProps } = isP24
+      ? await pool.query(
+          `SELECT id, address_raw, address_normalised, asking_price, bedrooms, bathrooms FROM properties
+           WHERE listing_url = $1 AND listing_url LIKE '%privateproperty%'
+           ORDER BY id DESC LIMIT 1`,
+          [url]
+        )
+      : await pool.query(
+          `SELECT id, address_raw, address_normalised, asking_price, bedrooms, bathrooms FROM properties
+           WHERE listing_url = $1
+           ORDER BY id DESC LIMIT 1`,
+          [url]
+        );
+    // For P24 URLs, also check if a PP record was cross-referenced from this P24 URL
+    if (existingProps.length === 0 && isP24) {
+      const { rows: crossRef } = await pool.query(
+        `SELECT id, address_raw, address_normalised, asking_price, bedrooms, bathrooms FROM properties
+         WHERE erf_number LIKE 'PP_%' AND listing_url LIKE '%privateproperty%'
+         AND data_sources->>'p24_url' IS NOT NULL AND data_sources->'p24_url'->>'url' = $1
+         ORDER BY id DESC LIMIT 1`,
+        [url]
+      );
+      if (crossRef.length > 0) existingProps.push(...crossRef);
+    }
 
     // Only use cached path if property has vision analysis (meaning it's been fully processed)
     const { rows: visionCheck } = existingProps.length > 0
@@ -225,7 +247,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
       const address = p.address_normalised || p.address_raw;
       const flagsText = topRiskFlags.length > 0
         ? topRiskFlags.slice(0, 3).join('; ')
-        : 'none found in photos';
+        : 'no risk flags found';
 
       let nicoTease;
       try {
@@ -234,8 +256,8 @@ async function runTeaseAsync(from, phoneNumber, url) {
         const resp = await client.messages.create({
           model: 'claude-sonnet-4-6',
           max_tokens: 150,
-          system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. You've seen a lot of properties and you don't sugarcoat things. Write exactly 2 sentences about this property for a potential buyer. The reader is considering buying. Be honest but not alarmist. Do not mention AI. Do not use estate agent language. Do not say 'however' or 'that said'. Write in plain conversational South African English. Do not invent problems that aren't in the risk flags — only reference what was actually observed. Do not speculate about hidden issues or rooms not photographed. If there are no risk flags, mention what looks good and recommend the full report for a complete picture.",
-          messages: [{ role: 'user', content: `Property: ${address}. Asking price: R${p.asking_price ? Number(p.asking_price).toLocaleString('en-ZA') : 'unknown'}. Top risk flags from photo analysis: ${flagsText}.` }],
+          system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Be honest but never alarmist or discouraging. NEVER say the buyer is 'buying blind', NEVER suggest the report is inadequate, NEVER mention missing data or street view. Do not invent problems — only reference risk flags that were actually provided. If there are no risk flags, comment positively on the property details (size, location, bedrooms, price) and say the full Surepath report will cover deeds, crime stats, and structural risks. Do not mention AI. Do not use estate agent language. Write in plain conversational South African English. Your job is to give an honest preview that makes the buyer want the full report.",
+          messages: [{ role: 'user', content: `Property: ${address}. Asking price: R${p.asking_price ? Number(p.asking_price).toLocaleString('en-ZA') : 'unknown'}. Risk flags: ${flagsText}.` }],
         });
         nicoTease = resp.content[0].text;
       } catch (err) {
@@ -275,24 +297,380 @@ async function runTeaseAsync(from, phoneNumber, url) {
 
     // ── No existing property — scrape and generate fresh tease ──
     let extractedData;
+    let resolvedUrl = url; // may change to PP URL if we find a match
+
     if (isP24) {
-      const html = await fetchHTML(url);
-      const p24 = extractProperty24Data(html);
-      const bodyText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-      const priceMatch = bodyText.match(/R\s*([\d\s,]+)/);
-      let price = null;
-      if (priceMatch) { const p = parseInt(priceMatch[1].replace(/[\s,]/g, '')); if (p >= 50000) price = p; }
-      const bedsMatch = bodyText.match(/(\d+)\s*Bed/i);
-      const bathsMatch = bodyText.match(/(\d+)\s*Bath/i);
-      extractedData = {
-        address: p24.address,
-        askingPrice: price,
-        bedrooms: bedsMatch ? parseInt(bedsMatch[1]) : null,
-        bathrooms: bathsMatch ? parseInt(bathsMatch[1]) : null,
-        photoUrls: p24.photoUrls,
-        description: null,
-        listingId: null,
-      };
+      console.log(`[tease] Property24 URL — extracting OG metadata and cross-referencing`);
+
+      // Step 1: Fetch P24 page with simple HTTP GET and extract OG meta tags
+      // No Puppeteer needed — P24 blocks scrapers, but OG tags are in the static HTML
+      let p24Data = null;
+      try {
+        const html = await fetchHTML(url);
+
+        // Extract OG meta tags
+        const ogImage = (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+                         html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) || [])[1] || null;
+        const ogTitle = (html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+                         html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i) || [])[1] || null;
+        const ogDesc = (html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i) ||
+                        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i) || [])[1] || null;
+
+        // Parse title — P24 OG titles are like "8 Bedroom House for sale in Helderberg Estate - Somerset West"
+        const title = ogTitle || '';
+        const titleBedsM = title.match(/(\d+)\s*Bed/i);
+        const bedrooms = titleBedsM ? parseInt(titleBedsM[1]) : null;
+        const bathsM = (ogDesc || '').match(/(\d+)\s*Bath/i);
+        const bathrooms = bathsM ? parseInt(bathsM[1]) : null;
+
+        // Price from OG description or page content
+        let price = null;
+        const priceText = (ogDesc || '').match(/R\s*([\d\s,]+)/);
+        if (priceText) {
+          const parsed = parseInt(priceText[1].replace(/[\s,]/g, ''));
+          if (parsed >= 100000 && parsed <= 500000000) price = parsed;
+        }
+
+        // Property type from title
+        const tLower = title.toLowerCase();
+        let propertyType = null;
+        if (tLower.includes('apartment') || tLower.includes('flat')) propertyType = 'sectional';
+        else if (tLower.includes('house') && !tLower.includes('townhouse')) propertyType = 'freehold';
+        else if (tLower.includes('townhouse') || tLower.includes('cluster')) propertyType = 'estate';
+
+        // Street address from JSON-LD (still in static HTML)
+        let streetAddress = null;
+        let listingName = null;
+        try {
+          const jsonldMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
+          for (const block of jsonldMatches) {
+            const jsonStr = block.replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '');
+            const ld = JSON.parse(jsonStr);
+            if (ld.address?.streetAddress) streetAddress = ld.address.streetAddress;
+            if (ld.name) listingName = ld.name;
+          }
+        } catch {}
+
+        // Also try to extract street address from OG title
+        // Pattern: "8 Bedroom House for sale in Linden - 79 Third Street - Randburg - Property24"
+        if (!streetAddress && ogTitle) {
+          const titleParts = ogTitle.replace(/\s*-\s*Property24.*$/i, '').split(/\s*-\s*/);
+          // If there are 3+ parts, the middle ones might be street addresses
+          // First part is "X Bedroom House for sale in Suburb", last is city
+          if (titleParts.length >= 3) {
+            // Parts between suburb and city are likely street address
+            streetAddress = titleParts.slice(1, -1).join(', ');
+          }
+        }
+
+        p24Data = {
+          title: ogTitle || title,
+          price,
+          bedrooms,
+          bathrooms,
+          propertyType,
+          streetAddress,
+          listingName,
+          ogImage,            // the thumbnail from the link preview
+          photos: ogImage ? [ogImage] : [],
+          description: ogDesc,
+        };
+
+        console.log(`[tease] P24 OG extracted: "${p24Data.title}", R${p24Data.price}, ${p24Data.bedrooms}bed, ogImage: ${ogImage ? 'yes' : 'no'}`);
+      } catch (err) {
+        console.error(`[tease] P24 fetch failed: ${err.message}`);
+        p24Data = { title: null, photos: [], price: null, bedrooms: null, bathrooms: null, ogImage: null };
+      }
+
+      // Step 2: Extract suburb from P24 URL
+      // P24 URL format: /for-sale/{suburb}/{city}/{province}/{code}/{id}
+      const p24Parts = url.match(/property24\.com\/for-sale\/([^/]+)\/([^/]+)\/([^/]+)/);
+      const p24Suburb = p24Parts ? p24Parts[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : null;
+      const p24City = p24Parts ? p24Parts[2].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : null;
+
+      // Step 3: Match P24 to PP via local database
+      // Priority: street address > suburb+beds+price > fallback
+      let matchedPropertyId = null;
+
+      // Normalize street for matching: "79 Third Street" → "79-third", "79-3rd"
+      const streetRaw = (p24Data.streetAddress || '').toLowerCase().replace(/\s+street$/i, '').replace(/\s+road$/i, '').replace(/\s+avenue$/i, '').replace(/\s+drive$/i, '').trim();
+      const streetNorm = streetRaw.replace(/\s+/g, '-');
+      // Also create numeric-ordinal variant: "third" → "3rd", "first" → "1st"
+      const ordinals = { first: '1st', second: '2nd', third: '3rd', fourth: '4th', fifth: '5th', sixth: '6th', seventh: '7th', eighth: '8th', ninth: '9th', tenth: '10th' };
+      const streetOrdinal = streetNorm.replace(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b/g, m => ordinals[m]);
+
+      console.log(`[tease] Matching P24 → PP: suburb="${p24Suburb}", beds=${p24Data.bedrooms}, price=R${p24Data.price}, street="${streetRaw || 'none'}"`);
+
+      // Strategy 1: Street address match in PP listing URL (strongest signal)
+      if (streetNorm && p24Suburb) {
+        const streetPatterns = [streetOrdinal, streetNorm].filter((v, i, a) => a.indexOf(v) === i);
+        for (const pattern of streetPatterns) {
+          if (matchedPropertyId) break;
+          const { rows: streetMatches } = await pool.query(
+            `SELECT id, address_raw, asking_price, bedrooms, listing_url FROM properties
+             WHERE erf_number LIKE 'PP_%'
+             AND listing_url ILIKE $1
+             AND (suburb ILIKE $2 OR listing_url ILIKE $3)
+             ORDER BY id DESC LIMIT 5`,
+            [`%/${pattern}/%`, p24Suburb, `%/${p24Suburb.toLowerCase().replace(/\s+/g, '-')}/%`]
+          );
+
+          if (streetMatches.length > 0) {
+            // If multiple matches at same street, narrow by bedrooms
+            let best = streetMatches[0];
+            if (streetMatches.length > 1 && p24Data.bedrooms) {
+              const bedsMatch = streetMatches.find(r => r.bedrooms === p24Data.bedrooms);
+              if (bedsMatch) best = bedsMatch;
+            }
+            matchedPropertyId = best.id;
+            resolvedUrl = best.listing_url || url;
+            console.log(`[tease] STRONG MATCH (street address): property ${matchedPropertyId} "${best.address_raw}" via URL pattern "${pattern}"`);
+          }
+        }
+      }
+
+      // Strategy 2: Street address match in address_raw field
+      if (!matchedPropertyId && streetRaw && p24Suburb) {
+        const { rows: addrMatches } = await pool.query(
+          `SELECT id, address_raw, asking_price, bedrooms, listing_url FROM properties
+           WHERE erf_number LIKE 'PP_%'
+           AND (suburb ILIKE $1 OR city ILIKE $1)
+           AND (address_raw ILIKE $2 OR address_raw ILIKE $3)
+           ORDER BY id DESC LIMIT 5`,
+          [p24Suburb, `%${streetRaw}%`, `%${streetRaw.replace(/\s+/g, '%')}%`]
+        );
+
+        if (addrMatches.length > 0) {
+          let best = addrMatches[0];
+          if (addrMatches.length > 1 && p24Data.bedrooms) {
+            const bedsMatch = addrMatches.find(r => r.bedrooms === p24Data.bedrooms);
+            if (bedsMatch) best = bedsMatch;
+          }
+          matchedPropertyId = best.id;
+          resolvedUrl = best.listing_url || url;
+          console.log(`[tease] STRONG MATCH (address_raw): property ${matchedPropertyId} "${best.address_raw}"`);
+        }
+      }
+
+      // Strategy 3: Suburb + bedrooms + price range (weaker, only if unique match)
+      if (!matchedPropertyId && p24Data.bedrooms && p24Data.price) {
+        const searchTerms = [p24Suburb, p24City].filter(Boolean);
+        for (const term of searchTerms) {
+          if (matchedPropertyId) break;
+          const { rows: matchRows } = await pool.query(
+            `SELECT id, address_raw, asking_price, bedrooms, listing_url FROM properties
+             WHERE (suburb ILIKE $1 OR city ILIKE $1) AND bedrooms = $2
+             AND asking_price BETWEEN $3 * 0.85 AND $3 * 1.15
+             AND erf_number LIKE 'PP_%'
+             ORDER BY ABS(asking_price - $3) LIMIT 5`,
+            [term, p24Data.bedrooms, p24Data.price]
+          );
+
+          if (matchRows.length === 1) {
+            // Only accept if there's exactly one match — avoids ambiguity
+            matchedPropertyId = matchRows[0].id;
+            resolvedUrl = matchRows[0].listing_url || url;
+            console.log(`[tease] MATCH (suburb+beds+price, unique): property ${matchedPropertyId} "${matchRows[0].address_raw}" via "${term}"`);
+          } else if (matchRows.length > 1) {
+            console.log(`[tease] ${matchRows.length} candidates for ${term}/${p24Data.bedrooms}bed/R${p24Data.price} — too ambiguous, skipping`);
+          }
+        }
+      }
+
+      // Strategy 4: Suburb + bedrooms only (even weaker, only if unique)
+      if (!matchedPropertyId && p24Data.bedrooms && !p24Data.price) {
+        const { rows: bedsOnly } = await pool.query(
+          `SELECT id, address_raw, asking_price, bedrooms, listing_url FROM properties
+           WHERE (suburb ILIKE $1 OR city ILIKE $1) AND bedrooms = $2
+           AND erf_number LIKE 'PP_%'
+           LIMIT 2`,
+          [p24Suburb, p24Data.bedrooms]
+        );
+        if (bedsOnly.length === 1) {
+          matchedPropertyId = bedsOnly[0].id;
+          resolvedUrl = bedsOnly[0].listing_url || url;
+          console.log(`[tease] MATCH (suburb+beds only, unique): property ${matchedPropertyId} "${bedsOnly[0].address_raw}"`);
+        }
+      }
+
+      if (matchedPropertyId) {
+        await pool.query(
+          "UPDATE properties SET data_sources = COALESCE(data_sources, '{}'::jsonb) || $1::jsonb WHERE id = $2",
+          [JSON.stringify({ p24_url: { name: 'Property24 URL', url, confidence: 'cross-referenced', date: new Date().toISOString() } }), matchedPropertyId]
+        );
+      } else {
+        console.log(`[tease] No PP match in local DB for ${p24Suburb}/${p24City} ${p24Data.bedrooms}bed R${p24Data.price} street="${streetRaw || 'none'}"`);
+      }
+
+      // Step 4: If no local match, use Google Vision reverse image search with OG thumbnail
+      if (!matchedPropertyId && p24Data.ogImage) {
+        try {
+          const { reverseImageSearch } = require('./match-p24-to-pp');
+          console.log(`[tease] Reverse image searching P24 OG thumbnail...`);
+          const matchingPages = await reverseImageSearch(p24Data.ogImage);
+          const ppPages = matchingPages.filter(u => u.includes('privateproperty.co.za/for-sale/'));
+
+          // Find PP listing URLs (may be multiple candidates)
+          const ppCandidates = [];
+          for (const ppPage of ppPages) {
+            const tMatch = ppPage.match(/(https?:\/\/www\.privateproperty\.co\.za\/for-sale\/[^?#]+\/T\d+)/);
+            if (tMatch && !ppCandidates.includes(tMatch[1])) ppCandidates.push(tMatch[1]);
+          }
+
+          // Validate each candidate — must match suburb and bedrooms from P24
+          let bestPPUrl = null;
+          for (const candidateUrl of ppCandidates) {
+            console.log(`[tease] Checking PP candidate: ${candidateUrl}`);
+            const ppExtracted = await extractPrivatePropertyData(candidateUrl);
+            if (!ppExtracted?.address) continue;
+
+            // Validate: suburb must match
+            // PP URL: /for-sale/{province}/{region}/{city}/{suburb}/{optional-street}/{T-id}
+            const ppUrlParts = candidateUrl.replace(/.*\/for-sale\//, '').split('/');
+            const ppSuburb = (ppUrlParts[3] || '').replace(/-/g, ' ').toLowerCase();
+            const ppCity = (ppUrlParts[2] || '').replace(/-/g, ' ').toLowerCase();
+            const p24SuburbLower = (p24Suburb || '').toLowerCase();
+            const p24CityLower = (p24City || '').toLowerCase();
+            const suburbMatch = ppSuburb && p24SuburbLower && (
+              ppSuburb.includes(p24SuburbLower) || p24SuburbLower.includes(ppSuburb)
+            );
+            // Also check city matches (prevents cross-city false matches)
+            const cityMatch = !p24CityLower || !ppCity || ppCity.includes(p24CityLower) || p24CityLower.includes(ppCity);
+
+            // Validate: bedrooms must match (if we have both)
+            const bedsMatch = !p24Data.bedrooms || !ppExtracted.bedrooms || p24Data.bedrooms === ppExtracted.bedrooms;
+
+            // Validate: street address if available
+            const p24Street = (p24Data.streetAddress || '').toLowerCase().split(',')[0].trim();
+            const ppAddress = (ppExtracted.address || '').toLowerCase();
+            const streetMatch = !p24Street || ppAddress.includes(p24Street) || candidateUrl.toLowerCase().includes(p24Street.replace(/\s+/g, '-'));
+
+            console.log(`[tease]   suburb: ${ppSuburb} vs ${p24SuburbLower} (${suburbMatch ? 'OK' : 'MISMATCH'}), city: ${ppCity} vs ${p24CityLower} (${cityMatch ? 'OK' : 'MISMATCH'}), beds: ${ppExtracted.bedrooms} vs ${p24Data.bedrooms} (${bedsMatch ? 'OK' : 'MISMATCH'}), street: ${streetMatch ? 'OK' : 'MISMATCH'}`);
+
+            if (suburbMatch && cityMatch && bedsMatch) {
+              bestPPUrl = candidateUrl;
+              extractedData = ppExtracted;
+              resolvedUrl = candidateUrl;
+              console.log(`[tease] Verified PP match: ${ppExtracted.address}, R${ppExtracted.askingPrice}`);
+              break;
+            } else {
+              console.log(`[tease]   Rejected — wrong property`);
+            }
+          }
+
+          if (!bestPPUrl && ppCandidates.length > 0) {
+            console.log(`[tease] ${ppCandidates.length} PP candidates found but none matched suburb/beds — using P24 data`);
+          } else if (ppCandidates.length === 0) {
+            console.log(`[tease] No PP listing URLs found via OG image search`);
+          }
+
+          // Log the cost
+          try {
+            const { logGoogle } = require('./costs');
+            if (logGoogle) await logGoogle('google_vision_web_detection', 1, null);
+          } catch {}
+        } catch (err) {
+          console.log(`[tease] Image match failed: ${err.message}`);
+        }
+      }
+
+      // Step 5: If we matched a local property, use the existing-property tease path
+      if (matchedPropertyId) {
+        // Re-enter the existing-property path with this matched ID
+        const { rows: matchProps } = await pool.query(
+          'SELECT id, address_raw, address_normalised, asking_price, bedrooms, bathrooms FROM properties WHERE id = $1',
+          [matchedPropertyId]
+        );
+        if (matchProps.length > 0) {
+          const p = matchProps[0];
+          // Re-run the existing property tease logic (same as the cached-property path above)
+          const { rows: imgFindings } = await pool.query(
+            "SELECT vision_analysis FROM property_images WHERE property_id = $1 AND vision_analysis IS NOT NULL LIMIT 6",
+            [matchedPropertyId]
+          );
+          const topRiskFlags = [];
+          for (const img of imgFindings) {
+            const va = typeof img.vision_analysis === 'string' ? JSON.parse(img.vision_analysis) : img.vision_analysis;
+            for (const f of (va?.findings || [])) {
+              if ((f.severity === 'CRITICAL' || f.severity === 'HIGH') && f.observation) topRiskFlags.push(f.observation);
+            }
+          }
+
+          // Refresh from PP listing
+          try {
+            if (resolvedUrl !== url) {
+              const freshData = await extractPrivatePropertyData(resolvedUrl);
+              if (freshData?.address) {
+                await pool.query('UPDATE properties SET address_raw = COALESCE($1, address_raw), asking_price = COALESCE($2, asking_price), bedrooms = COALESCE($3, bedrooms), bathrooms = COALESCE($4, bathrooms) WHERE id = $5',
+                  [freshData.address, freshData.askingPrice, freshData.bedrooms, freshData.bathrooms, matchedPropertyId]);
+                const { rows: refreshed } = await pool.query('SELECT address_raw, address_normalised, asking_price, bedrooms, bathrooms FROM properties WHERE id = $1', [matchedPropertyId]);
+                if (refreshed.length > 0) Object.assign(p, refreshed[0]);
+              }
+            }
+          } catch {}
+
+          const address = p.address_normalised || p.address_raw;
+          const flagsText = topRiskFlags.length > 0 ? topRiskFlags.slice(0, 3).join('; ') : 'no risk flags found';
+          const propertyDetails = [p.bedrooms ? `${p.bedrooms} bedrooms` : null, p.bathrooms ? `${p.bathrooms} bathrooms` : null].filter(Boolean).join(', ');
+          let nicoTease;
+          try {
+            const Anthropic = require('@anthropic-ai/sdk');
+            const client = new Anthropic();
+            const resp = await client.messages.create({
+              model: 'claude-sonnet-4-6', max_tokens: 150,
+              system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Be honest but never alarmist or discouraging. NEVER say the buyer is \"buying blind\", NEVER suggest the report is inadequate, NEVER mention missing data or street view. Do not invent problems — only reference risk flags that were actually provided. If there are no risk flags, comment positively on the property details (size, location, bedrooms, price) and say the full Surepath report will cover deeds, crime stats, and structural risks. Do not mention AI. Do not use estate agent language. Write in plain conversational South African English. Your job is to give an honest preview that makes the buyer want the full report.",
+              messages: [{ role: 'user', content: `Property: ${address}. ${propertyDetails}. Asking price: R${p.asking_price ? Number(p.asking_price).toLocaleString('en-ZA') : 'unknown'}. Risk flags: ${flagsText}.` }],
+            });
+            nicoTease = resp.content[0].text;
+          } catch { nicoTease = `${propertyDetails || 'This property'} in ${(address || '').split(',')[0]} at R${p.asking_price ? Number(p.asking_price).toLocaleString('en-ZA') : 'unknown'} — the full report covers deeds history, crime stats, structural risks, and compliance.`; }
+
+          const priceFormatted = p.asking_price ? 'R' + Number(p.asking_price).toLocaleString('en-ZA') : 'Price not listed';
+          const bedsLine = [p.bedrooms ? `${p.bedrooms} bed` : null, p.bathrooms ? `${p.bathrooms} bath` : null].filter(Boolean).join(' · ');
+
+          await upsertConversation(phoneNumber, {
+            state: 'tease_sent',
+            tease_data: JSON.stringify({ address, askingPrice: p.asking_price, bedrooms: p.bedrooms, bathrooms: p.bathrooms, topRiskFlags: topRiskFlags.slice(0, 3), nicoTease, photoCount: 0 }),
+            asking_price: p.asking_price || null,
+            listing_url: resolvedUrl,
+            input_data: resolvedUrl,
+          });
+
+          const message = [
+            `*${address}*`,
+            bedsLine ? `${bedsLine} · Asking ${priceFormatted}` : `Asking ${priceFormatted}`,
+            '',
+            nicoTease,
+            '',
+            'The full Surepath report includes deeds history, crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
+            '',
+            'Reply *1* to get the full report (R149), or send a different listing link.',
+          ].join('\n');
+
+          await sendWhatsApp(from, message);
+          return;
+        }
+      }
+
+      // Step 6: No PP match found — use P24 data directly
+      if (!extractedData) {
+        // Build a proper address: "5 Bedroom House in Golden Acre, Somerset West, Western Cape"
+        const p24Address = p24Data.streetAddress
+          ? `${p24Data.streetAddress}, ${p24Suburb || ''}, ${p24City || ''}`
+          : p24Data.title
+            ? `${p24Data.title.replace(/\s+for\s+sale\s*/i, ' in ').replace(/\s+in\s+in\s+/i, ' in ')}, ${p24City || ''}`
+            : `Property in ${p24Suburb || 'unknown'}`;
+
+        extractedData = {
+          address: p24Address.replace(/, $/, ''),
+          askingPrice: p24Data.price,
+          bedrooms: p24Data.bedrooms,
+          bathrooms: p24Data.bathrooms,
+          photoUrls: p24Data.photos || [],
+          description: p24Data.description,
+          listingId: null,
+        };
+        console.log(`[tease] Using P24 data directly: "${extractedData.address}", R${extractedData.askingPrice}, ${extractedData.bedrooms}bed`);
+      }
     } else {
       extractedData = await extractPrivatePropertyData(url);
     }
@@ -303,20 +681,24 @@ async function runTeaseAsync(from, phoneNumber, url) {
 
     // Create property record immediately so it appears in the system
     try {
-      // Extract suburb/city from URL
-      const urlParts = url.replace(/.*\/for-sale\//, '').split('/');
+      // Use resolved URL (may be PP URL if cross-referenced from P24)
+      const storeUrl = resolvedUrl || url;
+
+      // Extract suburb/city from the URL we're storing
+      const urlForParts = storeUrl.includes('privateproperty') ? storeUrl : url;
+      const urlParts = urlForParts.replace(/.*\/for-sale\//, '').split('/');
       let urlSuburb = null, urlCity = null, urlProvince = null;
-      if (isPP && urlParts.length >= 5) {
+      if (urlForParts.includes('privateproperty') && urlParts.length >= 5) {
         urlProvince = urlParts[0].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         urlCity = urlParts[2].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         urlSuburb = urlParts[3].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-      } else if (isP24 && urlParts.length >= 3) {
+      } else if (urlForParts.includes('property24') && urlParts.length >= 3) {
         urlSuburb = urlParts[0].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         urlCity = urlParts[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         urlProvince = urlParts[2].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
       }
 
-      const ppMatch = url.match(/(T\d+)/);
+      const ppMatch = storeUrl.match(/(T\d+)/);
       const p24Match = url.match(/\/(\d{6,})(?:\/|$)/);
       const erfNumber = ppMatch ? `PP_${ppMatch[1]}` : p24Match ? `P24_${p24Match[1]}` : `WA_${Date.now()}`;
 
@@ -331,14 +713,14 @@ async function runTeaseAsync(from, phoneNumber, url) {
            suburb = COALESCE(EXCLUDED.suburb, properties.suburb),
            city = COALESCE(EXCLUDED.city, properties.city),
            province = COALESCE(EXCLUDED.province, properties.province)`,
-        [erfNumber, extractedData.address, url, extractedData.askingPrice || null,
+        [erfNumber, extractedData.address, storeUrl, extractedData.askingPrice || null,
          extractedData.bedrooms || null, extractedData.bathrooms || null,
          urlSuburb, urlCity, urlProvince]
       );
 
       // Store photos
       if (extractedData.photoUrls?.length > 0) {
-        const source = isPP ? 'privateproperty' : 'property24';
+        const source = storeUrl.includes('privateproperty') ? 'privateproperty' : 'property24';
         for (const photoUrl of extractedData.photoUrls) {
           await pool.query(
             `INSERT INTO property_images (property_id, source, image_url, image_type)
@@ -372,12 +754,14 @@ async function runTeaseAsync(from, phoneNumber, url) {
     // Generate tease
     const tease = await generateTease(extractedData);
 
-    // Store tease in conversation
+    // Store tease in conversation — include input_data and listing_url so report generation works
     await upsertConversation(phoneNumber, {
       state: 'tease_sent',
       tease_data: JSON.stringify(tease),
       asking_price: tease.askingPrice || null,
       pp_listing_id: extractedData.listingId || null,
+      listing_url: resolvedUrl || url,
+      input_data: resolvedUrl || url,
     });
 
     // Format and send tease message
@@ -435,6 +819,21 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
     const normalised = body.toLowerCase().trim();
     const url = extractURL(body);
     const hasListingURL = url && (isProperty24URL(url) || isPrivatePropertyURL(url));
+
+    // ── If generating/scraping but user sends a NEW listing URL, start fresh ──
+    if ((state === 'generating' || state === 'scraping') && hasListingURL && conv?.listing_url !== url) {
+      console.log(`[whatsapp] New URL while ${state} — resetting to new tease`);
+      await sendWhatsApp(from, 'Got it — checking this property now. ⏳');
+      await upsertConversation(phoneNumber, {
+        state: 'scraping',
+        input_data: url,
+        listing_url: url,
+        tease_data: null,
+      });
+      runTeaseAsync(from, phoneNumber, url);
+      res.type('text/xml').send('<Response></Response>');
+      return;
+    }
 
     // ── If generating/scraping, don't reset — give progress update instead ──
     if (state === 'generating' || state === 'scraping') {

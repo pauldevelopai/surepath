@@ -2,19 +2,25 @@
 /**
  * PRIVATEPROPERTY.CO.ZA SCRAPER
  *
- * Much faster than P24 — no rate limiting, 16 photos per listing, plain HTTP works.
- * Paginates through province pages, scraping every listing found.
+ * Scrapes PP listings sorted by most recently uploaded, nationwide.
+ * Uses plain HTTP for search pages (fast) and Puppeteer only for
+ * individual listing detail pages (needed for price extraction).
+ *
+ * Default: newest listings first, all provinces. Stops when it
+ * hits listings already in the DB (i.e. caught up to last run).
  *
  * Usage:
- *   node bootstrap/scrape-pp.js --province western-cape --code 4      # Western Cape
- *   node bootstrap/scrape-pp.js --province gauteng --code 3            # Gauteng
- *   node bootstrap/scrape-pp.js --province kwazulu-natal --code 2     # KZN
+ *   node bootstrap/scrape-pp.js                                       # Newest first, all SA
+ *   node bootstrap/scrape-pp.js --province western-cape               # Filter to one province
  *   node bootstrap/scrape-pp.js --max-pages 100                       # Limit pages
  *   node bootstrap/scrape-pp.js --delay 3                             # Seconds between requests
+ *   node bootstrap/scrape-pp.js --no-stop                             # Don't stop when caught up
  *   node bootstrap/scrape-pp.js --status                              # Show progress
  */
 
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
+const https = require('https');
+const http = require('http');
 const puppeteer = require('puppeteer');
 const pool = require('../db');
 const { recordSource } = require('../provenance');
@@ -25,6 +31,10 @@ const PROVINCES = {
   'kwazulu-natal':  { code: '2', name: 'KwaZulu-Natal' },
   'eastern-cape':   { code: '7', name: 'Eastern Cape' },
   'free-state':     { code: '6', name: 'Free State' },
+  'mpumalanga':     { code: '8', name: 'Mpumalanga' },
+  'limpopo':        { code: '9', name: 'Limpopo' },
+  'north-west':     { code: '5', name: 'North West' },
+  'northern-cape':  { code: '10', name: 'Northern Cape' },
 };
 
 const DEFAULT_DELAY_SEC = 3;
@@ -32,29 +42,53 @@ const DEFAULT_MAX_PAGES = 500;
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// ─── Extract listing IDs from a search page ────────────────────────────
+// ─── Plain HTTP fetch (no Puppeteer needed for search pages) ──────────
 
-async function getListings(page, url) {
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-  await sleep(1500);
-
-  return page.evaluate(() => {
-    const found = [];
-    document.querySelectorAll('a[href]').forEach(a => {
-      const m = a.href.match(/\/for-sale\/([^/]+)\/([^/]+)\/([^/]+)\/([^/]+)\/.+\/(T\d+)$/);
-      if (m && !found.some(f => f.id === m[5])) {
-        found.push({
-          id: m[5],
-          url: a.href,
-          province: m[1],
-          city_region: m[2],
-          area: m[3],
-          suburb: m[4],
-        });
+function fetchPage(url) {
+  const mod = url.startsWith('https') ? https : http;
+  return new Promise((resolve, reject) => {
+    const options = {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+    };
+    mod.get(url, options, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        const redirectUrl = new (require('url').URL)(res.headers.location, url).href;
+        return fetchPage(redirectUrl).then(resolve).catch(reject);
       }
-    });
-    return found;
+      if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => resolve(body));
+      res.on('error', reject);
+    }).on('error', reject);
   });
+}
+
+// ─── Extract listing IDs from a search page (plain HTTP) ──────────────
+
+async function getListings(searchUrl) {
+  const html = await fetchPage(searchUrl);
+
+  const found = [];
+  const seen = new Set();
+  // PP listing URLs: /for-sale/{province}/{region}/{city}/{suburb}/.../{T-id}
+  const regex = /\/for-sale\/([^"]+?)\/([^"\/]+)\/([^"\/]+)\/([^"\/]+)\/(?:[^"]*\/)?(T\d+)/g;
+  let m;
+  while ((m = regex.exec(html)) !== null) {
+    if (seen.has(m[5])) continue;
+    seen.add(m[5]);
+    // Extract province from the first path segment
+    const provincePath = m[1].split('/')[0];
+    found.push({
+      id: m[5],
+      url: `https://www.privateproperty.co.za/for-sale/${m[1]}/${m[2]}/${m[3]}/${m[4]}/${m[5]}`,
+      province: provincePath,
+      city_region: m[2],
+      area: m[3],
+      suburb: m[4],
+    });
+  }
+  return found;
 }
 
 // ─── Extract ALL data from a single listing ────────────────────────────
@@ -246,88 +280,167 @@ async function main() {
   if (args.includes('--status')) {
     const { rows: pp } = await pool.query("SELECT COUNT(*) AS c FROM properties WHERE erf_number LIKE 'PP_%'");
     const { rows: imgs } = await pool.query("SELECT COUNT(*) AS c FROM property_images WHERE source = 'privateproperty'");
+    const { rows: newest } = await pool.query("SELECT created_at FROM properties WHERE erf_number LIKE 'PP_%' ORDER BY created_at DESC LIMIT 1");
     console.log(`PrivateProperty: ${pp[0].c} properties, ${imgs[0].c} images`);
+    if (newest.length > 0) console.log(`Last scraped: ${newest[0].created_at}`);
     await pool.end();
     return;
   }
 
-  const provinceKey = args.includes('--province') ? args[args.indexOf('--province') + 1] : 'western-cape';
-  const provinceCode = args.includes('--code') ? args[args.indexOf('--code') + 1] : PROVINCES[provinceKey]?.code || '4';
+  // Province filter is now optional — default is nationwide
+  const provinceKey = args.includes('--province') ? args[args.indexOf('--province') + 1] : null;
   const maxPages = args.includes('--max-pages') ? parseInt(args[args.indexOf('--max-pages') + 1]) : DEFAULT_MAX_PAGES;
   const delaySec = args.includes('--delay') ? parseInt(args[args.indexOf('--delay') + 1]) : DEFAULT_DELAY_SEC;
   const startPage = args.includes('--start-page') ? parseInt(args[args.indexOf('--start-page') + 1]) : 1;
+  const stopWhenCaughtUp = !args.includes('--no-stop');
 
-  const provinceName = PROVINCES[provinceKey]?.name || provinceKey;
-  console.log(`\nScraping PrivateProperty — ${provinceName} (code ${provinceCode})`);
-  console.log(`Pages ${startPage} to ${maxPages}, ${delaySec}s delay\n`);
+  // Build base search URL — nationwide or filtered by province
+  let basePath, label;
+  if (provinceKey && PROVINCES[provinceKey]) {
+    basePath = `/for-sale/${provinceKey}/${PROVINCES[provinceKey].code}`;
+    label = PROVINCES[provinceKey].name;
+  } else {
+    basePath = '/for-sale/south-africa/1';
+    label = 'All South Africa';
+  }
 
+  console.log(`\nScraping PrivateProperty — ${label}`);
+  console.log(`Delay ${delaySec}s, max ${maxPages} pages`);
+  console.log();
+
+  // Puppeteer only needed for individual listing detail pages (price extraction)
   const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-  const page = await browser.newPage();
-  await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+  const detailPage = await browser.newPage();
+  await detailPage.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
   let totalStored = 0;
   let totalSkipped = 0;
   let totalPhotos = 0;
-  let emptyPages = 0;
 
-  for (let pg = startPage; pg <= maxPages; pg++) {
-    const searchUrl = `https://www.privateproperty.co.za/for-sale/${provinceKey}/${provinceCode}?page=${pg}`;
-    console.log(`[page ${pg}] ${searchUrl}`);
+  // Helper: scrape a range of pages, returns the page number where it stopped
+  async function scrapePages(fromPage, toPage, stopOnCaughtUp) {
+    let emptyPages = 0;
+    let caughtUpPages = 0;
+    let lastPage = fromPage;
 
-    try {
-      const listings = await getListings(page, searchUrl);
-      console.log(`  ${listings.length} listings`);
+    for (let pg = fromPage; pg <= toPage; pg++) {
+      lastPage = pg;
+      const searchUrl = `https://www.privateproperty.co.za${basePath}?page=${pg}&so=MostRecent`;
+      console.log(`[page ${pg}] ${searchUrl}`);
 
-      if (listings.length === 0) {
-        emptyPages++;
-        if (emptyPages >= 3) { console.log('  3 empty pages in a row — done'); break; }
-        continue;
-      }
-      emptyPages = 0;
+      try {
+        const listings = await getListings(searchUrl);
+        console.log(`  ${listings.length} listings`);
 
-      for (const meta of listings) {
-        // Skip if already in DB
-        const { rows: exists } = await pool.query("SELECT id FROM properties WHERE erf_number = $1", [`PP_${meta.id}`]);
-        if (exists.length > 0) { totalSkipped++; continue; }
-
-        try {
-          await sleep(delaySec * 1000);
-          const listing = await extractListing(page, meta.url);
-
-          if (!listing.title && !listing.price) {
-            console.log(`    SKIP ${meta.id} — empty page`);
-            continue;
-          }
-
-          const result = await storeListing(listing, meta, meta.url);
-          if (result.skipped) {
-            totalSkipped++;
-          } else {
-            totalStored++;
-            totalPhotos += result.photos || 0;
-            const priceStr = listing.price ? `R${listing.price.toLocaleString()}` : '-';
-            console.log(`    NEW #${result.id} ${listing.title || 'untitled'} | ${priceStr} | ${listing.bedrooms || '?'}bed | ${result.photos}pho`);
-          }
-        } catch (err) {
-          console.error(`    ERROR ${meta.id}: ${err.message}`);
+        if (listings.length === 0) {
+          emptyPages++;
+          if (emptyPages >= 3) { console.log('  3 empty pages in a row — done'); return lastPage; }
+          continue;
         }
+        emptyPages = 0;
+
+        let pageNewCount = 0;
+        let pageSkipCount = 0;
+
+        for (const meta of listings) {
+          const { rows: exists } = await pool.query("SELECT id FROM properties WHERE erf_number = $1", [`PP_${meta.id}`]);
+          if (exists.length > 0) { totalSkipped++; pageSkipCount++; continue; }
+
+          try {
+            await sleep(delaySec * 1000);
+            const listing = await extractListing(detailPage, meta.url);
+
+            if (!listing.title && !listing.price) {
+              console.log(`    SKIP ${meta.id} — empty page`);
+              continue;
+            }
+
+            const result = await storeListing(listing, meta, meta.url);
+            if (result.skipped) {
+              totalSkipped++;
+              pageSkipCount++;
+            } else {
+              totalStored++;
+              pageNewCount++;
+              totalPhotos += result.photos || 0;
+              const priceStr = listing.price ? `R${listing.price.toLocaleString()}` : '-';
+              console.log(`    NEW #${result.id} ${listing.title || 'untitled'} | ${priceStr} | ${listing.bedrooms || '?'}bed | ${result.photos}pho`);
+            }
+          } catch (err) {
+            console.error(`    ERROR ${meta.id}: ${err.message}`);
+          }
+        }
+
+        console.log(`  → ${pageNewCount} new, ${pageSkipCount} skipped`);
+
+        if (stopOnCaughtUp && pageNewCount === 0 && pageSkipCount > 0) {
+          caughtUpPages++;
+          if (caughtUpPages >= 2) {
+            console.log(`  Caught up — no new listings for ${caughtUpPages} pages.`);
+            return lastPage;
+          }
+        } else {
+          caughtUpPages = 0;
+        }
+      } catch (err) {
+        console.error(`  Page error: ${err.message}`);
       }
-    } catch (err) {
-      console.error(`  Page error: ${err.message}`);
+
+      if (pg % 10 === 0) {
+        console.log(`\n  --- Page ${pg}: ${totalStored} stored, ${totalSkipped} skipped, ${totalPhotos} photos ---\n`);
+      }
+
+      await sleep(delaySec * 1000);
     }
 
-    // Progress every 10 pages
-    if (pg % 10 === 0) {
-      console.log(`\n  --- Page ${pg}: ${totalStored} stored, ${totalSkipped} skipped, ${totalPhotos} photos ---\n`);
-    }
+    return lastPage;
+  }
 
-    await sleep(delaySec * 1000);
+  // ── PHASE 1: Catch up on new listings (pages 1-N, stop when caught up) ──
+  if (startPage === 1) {
+    console.log(`=== PHASE 1: New listings sweep ===`);
+    const catchUpEnd = await scrapePages(1, Math.min(50, maxPages), true);
+    console.log(`  New listings sweep finished at page ${catchUpEnd} — ${totalStored} new so far\n`);
+  }
+
+  // ── PHASE 2: Backfill from bookmark (deep scrape into older listings) ──
+  // Load bookmark — the deepest page we've reached in previous runs
+  const { rows: bookmarkRows } = await pool.query(
+    "SELECT value FROM scraper_state WHERE key = 'pp_backfill_page' LIMIT 1"
+  ).catch(() => ({ rows: [] }));
+  let backfillPage = bookmarkRows.length > 0 ? parseInt(bookmarkRows[0].value) : startPage;
+  if (startPage > 1) backfillPage = startPage; // manual override
+
+  // Skip phase 2 if we've already been told to stop early
+  if (!stopWhenCaughtUp || startPage > 1) {
+    console.log(`=== PHASE 2: Backfill from page ${backfillPage} ===`);
+    const endPage = await scrapePages(backfillPage, maxPages, false);
+
+    // Save bookmark for next run
+    try {
+      await pool.query(
+        `INSERT INTO scraper_state (key, value, updated_at) VALUES ('pp_backfill_page', $1, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+        [String(endPage + 1)]
+      );
+      console.log(`  Bookmark saved: will resume from page ${endPage + 1} next run`);
+    } catch {
+      // scraper_state table might not exist yet — create it
+      try {
+        await pool.query(`CREATE TABLE IF NOT EXISTS scraper_state (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())`);
+        await pool.query(
+          `INSERT INTO scraper_state (key, value) VALUES ('pp_backfill_page', $1) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+          [String(endPage + 1)]
+        );
+        console.log(`  Bookmark saved: will resume from page ${endPage + 1} next run`);
+      } catch (e) { console.log(`  Could not save bookmark: ${e.message}`); }
+    }
   }
 
   await browser.close();
 
   console.log(`\n=== PP SCRAPE COMPLETE ===`);
-  console.log(`  Province: ${provinceName}`);
+  console.log(`  Scope: ${label}`);
   console.log(`  New properties: ${totalStored}`);
   console.log(`  Photos stored: ${totalPhotos}`);
   console.log(`  Skipped (already in DB): ${totalSkipped}`);

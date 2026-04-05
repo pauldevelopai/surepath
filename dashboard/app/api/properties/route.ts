@@ -9,8 +9,34 @@ export const GET = withAuth(async (req: NextRequest) => {
   const hasReport = u.get("has_report");
   const hasPhotos = u.get("has_photos");
   const hasCoords = u.get("has_coords");
+  const page = Math.max(1, parseInt(u.get("page") || "1"));
+  const perPage = 500;
+  const offset = (page - 1) * perPage;
 
-  let sql = `
+  const whereClauses: string[] = [];
+  const params: unknown[] = [];
+  let idx = 1;
+
+  if (search) {
+    whereClauses.push(`(p.address_raw ILIKE $${idx} OR p.erf_number ILIKE $${idx} OR p.suburb ILIKE $${idx} OR p.city ILIKE $${idx} OR p.listing_url ILIKE $${idx} OR p.address_normalised ILIKE $${idx} OR p.street_address ILIKE $${idx})`);
+    params.push(`%${search}%`);
+    idx++;
+  }
+  if (suburb) { whereClauses.push(`p.suburb ILIKE $${idx++}`); params.push(`%${suburb}%`); }
+  if (hasReport === "true") whereClauses.push("pr.id IS NOT NULL");
+  if (hasReport === "false") whereClauses.push("pr.id IS NULL");
+  if (hasCoords === "true") whereClauses.push("p.lat IS NOT NULL");
+  if (hasCoords === "false") whereClauses.push("p.lat IS NULL");
+
+  const whereSQL = whereClauses.length > 0 ? "WHERE " + whereClauses.join(" AND ") : "";
+
+  const fromJoin = `FROM properties p
+    LEFT JOIN property_reports pr ON pr.property_id = p.id AND pr.status = 'complete'`;
+
+  const countResult = await query(`SELECT COUNT(DISTINCT p.id) AS total ${fromJoin} ${whereSQL}`, params);
+  const total = parseInt(countResult[0]?.total) || 0;
+
+  const sql = `
     SELECT p.id, p.erf_number, p.address_raw, p.address_normalised,
            p.suburb, p.city, p.province,
            p.lat, p.lng, p.bedrooms, p.bathrooms, p.floor_area_sqm,
@@ -26,26 +52,12 @@ export const GET = withAuth(async (req: NextRequest) => {
            (SELECT COUNT(*) FROM property_images pi WHERE pi.property_id = p.id) AS photo_count,
            (SELECT COUNT(*) FROM property_images pi WHERE pi.property_id = p.id AND pi.vision_analysis IS NOT NULL) AS analysed_count,
            (SELECT COUNT(*) FROM deeds_data d WHERE d.property_id = p.id) AS has_deeds
-    FROM properties p
-    LEFT JOIN property_reports pr ON pr.property_id = p.id AND pr.status = 'complete'
-    WHERE 1=1
+    ${fromJoin}
+    ${whereSQL}
+    ORDER BY p.created_at DESC
+    LIMIT ${perPage} OFFSET ${offset}
   `;
-  const params: unknown[] = [];
-  let idx = 1;
-
-  if (search) {
-    sql += ` AND (p.address_raw ILIKE $${idx} OR p.erf_number ILIKE $${idx} OR p.suburb ILIKE $${idx} OR p.city ILIKE $${idx} OR p.listing_url ILIKE $${idx} OR p.address_normalised ILIKE $${idx} OR p.street_address ILIKE $${idx})`;
-    params.push(`%${search}%`);
-    idx++;
-  }
-  if (suburb) { sql += ` AND p.suburb ILIKE $${idx++}`; params.push(`%${suburb}%`); }
-  if (hasReport === "true") sql += ` AND pr.id IS NOT NULL`;
-  if (hasReport === "false") sql += ` AND pr.id IS NULL`;
-  if (hasCoords === "true") sql += ` AND p.lat IS NOT NULL`;
-  if (hasCoords === "false") sql += ` AND p.lat IS NULL`;
-
-  sql += " ORDER BY p.created_at DESC LIMIT 2000";
 
   const rows = await query(sql, params);
-  return NextResponse.json(rows);
+  return NextResponse.json({ rows, total, page, perPage, totalPages: Math.ceil(total / perPage) });
 });

@@ -3,13 +3,16 @@ import { query } from "@/lib/db";
 import { withAuth } from "@/lib/auth";
 
 export const GET = withAuth(async () => {
-  const [crimePending, crimeTotal, solarPending, solarTotal, suburbs] = await Promise.all([
-    query(`SELECT COUNT(*) as cnt FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL
+  const [crimePending, crimeTotal, solarPending, solarTotal, ppTotal, ppLatest, suburbs, suburbsWithListings] = await Promise.all([
+    query(`SELECT COUNT(DISTINCT (p.suburb || '|' || p.city)) as cnt FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'crime_detailed')`),
     query(`SELECT COUNT(*) as cnt FROM area_risk_data WHERE risk_type = 'crime_detailed'`),
     query(`SELECT COUNT(*) as cnt FROM properties WHERE lat IS NOT NULL AND solar_ghi_kwh_year IS NULL`),
     query(`SELECT COUNT(*) as cnt FROM properties WHERE solar_ghi_kwh_year IS NOT NULL`),
+    query(`SELECT COUNT(*) as cnt FROM properties WHERE erf_number LIKE 'PP_%'`),
+    query(`SELECT created_at FROM properties WHERE erf_number LIKE 'PP_%' ORDER BY created_at DESC LIMIT 1`),
     query(`SELECT COUNT(DISTINCT suburb) as cnt FROM properties WHERE suburb IS NOT NULL`),
+    query(`SELECT COUNT(DISTINCT suburb) as cnt FROM properties WHERE suburb IS NOT NULL AND erf_number LIKE 'PP_%'`),
   ]);
 
   return NextResponse.json({
@@ -17,7 +20,10 @@ export const GET = withAuth(async () => {
     crime_total: parseInt(crimeTotal[0].cnt),
     solar_pending: parseInt(solarPending[0].cnt),
     solar_total: parseInt(solarTotal[0].cnt),
+    pp_total: parseInt(ppTotal[0].cnt),
+    pp_universe: 208500, // Total active listings on privateproperty.co.za (updated periodically)
+    pp_latest: ppLatest[0]?.created_at || null,
     suburbs_tracked: parseInt(suburbs[0].cnt),
-    listings_discovered: 0,
+    suburbs_with_listings: parseInt(suburbsWithListings[0].cnt),
   });
 });

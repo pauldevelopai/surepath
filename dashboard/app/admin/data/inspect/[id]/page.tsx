@@ -202,6 +202,7 @@ export default function PropertyDetailPage() {
       { action: "analyse_streetview", label: "Analysing Street View" },
       { action: "analyse_satellite", label: "Analysing satellite" },
       { action: "social", label: "Neighbourhood Pros and Cons" },
+      { action: "security", label: "Security & Community" },
     ];
 
     const results: string[] = [];
@@ -337,8 +338,22 @@ export default function PropertyDetailPage() {
         <div className="flex gap-3 mt-1">
           <Datum label="Title" value={p.address_raw} source={src("address_raw")} />
         </div>
-        {p.listing_url && (
-          <a href={p.listing_url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">{p.listing_url}</a>
+        {(p.listing_url || p.data_sources?.p24_url?.url) && (
+          <div className="flex flex-col gap-1 mt-1">
+            {p.listing_url && (
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-medium text-gray-400 w-8">{p.listing_url.includes('privateproperty') ? 'PP' : 'P24'}</span>
+                <a href={p.listing_url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline truncate">{p.listing_url}</a>
+              </div>
+            )}
+            {p.data_sources?.p24_url?.url && p.listing_url !== p.data_sources.p24_url.url && (
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-medium text-orange-400 w-8">P24</span>
+                <a href={p.data_sources.p24_url.url} target="_blank" rel="noreferrer" className="text-xs text-orange-600 hover:underline truncate">{p.data_sources.p24_url.url}</a>
+                <span className="text-[9px] text-gray-300">cross-referenced {p.data_sources.p24_url.date ? new Date(p.data_sources.p24_url.date).toLocaleDateString() : ''}</span>
+              </div>
+            )}
+          </div>
         )}
         <div className="flex gap-4 mt-2 text-xs">
           {p.listing_date && (
@@ -665,6 +680,130 @@ export default function PropertyDetailPage() {
                         <span className="font-medium">{p2.place}</span>: &ldquo;{p2.review_text}&rdquo;
                       </div>
                     ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </section>
+
+        {/* ── SECURITY & COMMUNITY ── */}
+        <section className="bg-white border rounded-lg p-4">
+          <div className="flex justify-between items-start mb-2">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="font-bold text-sm">Security &amp; Community</h2>
+                <FeedbackBtn propertyId={p.id} section="security" />
+              </div>
+              <div className="text-[10px] text-gray-400">
+                Armed response companies, CPF, neighbourhood watch — via{" "}
+                <a href="https://developers.google.com/maps/documentation/places" target="_blank" rel="noreferrer" className="text-blue-500">Google Places API</a>
+              </div>
+            </div>
+            <CollectBtn action="security" label="Collect Security Data" ready={data.area_risks?.some((r: A) => r.risk_type === "security_community")} />
+          </div>
+          {(() => {
+            const secData = data.area_risks?.find((r: A) => r.risk_type === "security_community");
+            if (!secData?.details) return <p className="text-sm text-gray-400">Click Collect Security Data to find armed response, CPF, and neighbourhood watch info.</p>;
+
+            const details = typeof secData.details === "string" ? JSON.parse(secData.details) : secData.details;
+            const companies = details.security_companies || [];
+            const cpf = details.cpf || {};
+            const nhw = details.neighbourhood_watch || {};
+            const sentiment = details.sentiment || {};
+
+            return (
+              <div className="space-y-3">
+                {/* Overall sentiment */}
+                <div className={`rounded p-2 text-xs font-bold ${sentiment.overall === "GOOD" ? "bg-green-50 text-green-700" : sentiment.overall === "POOR" ? "bg-red-50 text-red-700" : "bg-yellow-50 text-yellow-700"}`}>
+                  Security coverage: {sentiment.overall || "UNKNOWN"}
+                  {sentiment.themes?.length > 0 && <span className="font-normal ml-2">— themes: {sentiment.themes.map((t: string) => t.replace(/_/g, " ")).join(", ")}</span>}
+                </div>
+
+                {/* Security companies */}
+                {companies.length > 0 && (
+                  <div>
+                    <h3 className="text-xs font-bold mb-1">Security Companies ({companies.length})</h3>
+                    <div className="space-y-2">
+                      {companies.map((co: A, i: number) => (
+                        <div key={i} className="bg-gray-50 rounded p-2 text-xs">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <span className="font-bold">{co.name}</span>
+                              {co.armed_response && <span className="ml-1.5 bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[9px] font-bold">ARMED RESPONSE</span>}
+                            </div>
+                            <div className="flex gap-2 items-center shrink-0">
+                              {co.rating && <span className="text-yellow-600 font-bold">{co.rating} ★</span>}
+                              {co.review_count > 0 && <span className="text-gray-400">({co.review_count} reviews)</span>}
+                            </div>
+                          </div>
+                          {co.phone && <div className="text-gray-500 mt-0.5">Phone: {co.phone}</div>}
+                          {co.website && <a href={co.website} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline mt-0.5 block truncate">{co.website}</a>}
+                          {co.top_reviews?.length > 0 && (
+                            <div className="mt-1 text-green-700 italic">&ldquo;{co.top_reviews[0]}&rdquo;</div>
+                          )}
+                          {co.complaints?.length > 0 && (
+                            <div className="mt-1 text-red-600 italic">&ldquo;{co.complaints[0]}&rdquo;</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* CPF */}
+                <div className="flex gap-4">
+                  <div className="flex-1 bg-gray-50 rounded p-2 text-xs">
+                    <h3 className="font-bold mb-1">Community Policing Forum (CPF)</h3>
+                    {cpf.name ? (
+                      <div>
+                        <div className="font-medium">{cpf.name}</div>
+                        <div className={`text-[10px] ${cpf.activity_level === "active" ? "text-green-600" : cpf.activity_level === "moderate" ? "text-yellow-600" : "text-gray-400"}`}>
+                          Activity: {cpf.activity_level}
+                        </div>
+                        {cpf.contact_phone && <div className="text-gray-500">Phone: {cpf.contact_phone}</div>}
+                        {cpf.website_url && <a href={cpf.website_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline block truncate">{cpf.website_url}</a>}
+                        {cpf.facebook_url && <a href={cpf.facebook_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline block truncate">Facebook page</a>}
+                        {cpf.evidence && <div className="text-gray-400 mt-1">{cpf.evidence}</div>}
+                      </div>
+                    ) : <span className="text-gray-400">No CPF found nearby</span>}
+                  </div>
+
+                  {/* Neighbourhood Watch */}
+                  <div className="flex-1 bg-gray-50 rounded p-2 text-xs">
+                    <h3 className="font-bold mb-1">Neighbourhood Watch</h3>
+                    {nhw.name ? (
+                      <div>
+                        <div className="font-medium">{nhw.name}</div>
+                        <div className={`text-[10px] ${nhw.activity_level === "active" ? "text-green-600" : nhw.activity_level === "moderate" ? "text-yellow-600" : "text-gray-400"}`}>
+                          Activity: {nhw.activity_level}
+                        </div>
+                        {nhw.contact_info && <div className="text-gray-500">Contact: {nhw.contact_info}</div>}
+                        {nhw.facebook_url && <a href={nhw.facebook_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline block truncate">Facebook page</a>}
+                      </div>
+                    ) : <span className="text-gray-400">No neighbourhood watch found nearby</span>}
+                  </div>
+                </div>
+
+                {/* Sentiment details */}
+                {(sentiment.positive?.length > 0 || sentiment.negative?.length > 0) && (
+                  <div className="flex gap-4">
+                    {sentiment.positive?.length > 0 && (
+                      <div className="flex-1">
+                        <h3 className="text-xs font-bold text-green-700 mb-1">Positive signals</h3>
+                        {sentiment.positive.map((s: string, i: number) => (
+                          <div key={i} className="bg-green-50 rounded p-1.5 text-xs mb-1">{s}</div>
+                        ))}
+                      </div>
+                    )}
+                    {sentiment.negative?.length > 0 && (
+                      <div className="flex-1">
+                        <h3 className="text-xs font-bold text-red-700 mb-1">Concerns</h3>
+                        {sentiment.negative.map((s: string, i: number) => (
+                          <div key={i} className="bg-red-50 rounded p-1.5 text-xs mb-1">{s}</div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

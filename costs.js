@@ -30,6 +30,7 @@ const PRICING = {
   'google_places_nearby': { per_request: 0.032 },
   'google_places_details': { per_request: 0.017 },
   'google_static_map': { per_request: 0.002 },
+  'google_places_text_search': { per_request: 0.032 },
   'elevenlabs_tts': { per_1000_chars: 0.30 },
 };
 

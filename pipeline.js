@@ -30,7 +30,9 @@ function fetchHTML(url) {
   return new Promise((resolve, reject) => {
     mod.get(options, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return fetchHTML(res.headers.location).then(resolve).catch(reject);
+        // Resolve relative redirects against the original URL
+        const redirectUrl = new (require('url').URL)(res.headers.location, url).href;
+        return fetchHTML(redirectUrl).then(resolve).catch(reject);
       }
       if (res.statusCode !== 200) {
         return reject(new Error(`HTTP ${res.statusCode} fetching ${url}`));
@@ -268,7 +270,7 @@ async function generateTease(extractedData) {
     let topRiskFlags = [];
     let hasAsbestosRisk = false;
     let hasStructuralFlags = false;
-    let nicoTease = "I couldn't pull a full photo preview on this one. The full report will cover everything.";
+    let nicoTease = null; // will be generated from photos or listing data
 
     if (photoSlice.length > 0) {
       // Step 2: Download and encode images
@@ -284,50 +286,73 @@ async function generateTease(extractedData) {
       }
 
       if (images.length > 0) {
-        // Step 3: Run vision analysis on the batch
-        const analyses = await vision.analyseBatch(images);
+        try {
+          // Step 3: Run vision analysis on the batch
+          const analyses = await vision.analyseBatch(images);
 
-        // Step 4: Extract top risk flags
-        const allFindings = [];
-        for (const a of analyses) {
-          if (Array.isArray(a.findings)) allFindings.push(...a.findings);
+          // Step 4: Extract top risk flags
+          const allFindings = [];
+          for (const a of analyses) {
+            if (Array.isArray(a.findings)) allFindings.push(...a.findings);
+          }
+
+          topRiskFlags = allFindings
+            .filter(f => f.severity === 'CRITICAL' || f.severity === 'HIGH')
+            .map(f => f.observation)
+            .filter(Boolean)
+            .slice(0, 3);
+
+          // Step 5: Check asbestos and structural flags
+          hasAsbestosRisk = analyses.some(a => a.asbestos_indicators === true);
+          hasStructuralFlags = allFindings.some(f =>
+            (f.category === 'structure' || f.category === 'walls') &&
+            (f.severity === 'CRITICAL' || f.severity === 'HIGH')
+          );
+
+          // Step 6: Generate Nico tease via Claude
+          const flagsText = topRiskFlags.length > 0
+            ? topRiskFlags.join('; ')
+            : 'none found in first 3 photos';
+
+          const message = await anthropicClient.messages.create({
+            model: 'claude-sonnet-4-6',
+            max_tokens: 150,
+            system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Be honest but never alarmist or discouraging. NEVER say the buyer is 'buying blind', NEVER suggest the report is inadequate, NEVER mention missing data or street view. Do not invent problems — only reference risk flags that were actually provided. If there are no risk flags, comment positively on the property details (size, location, bedrooms, price) and say the full Surepath report will cover deeds, crime stats, and structural risks. Do not mention AI. Do not use estate agent language. Write in plain conversational South African English. Your job is to give an honest preview that makes the buyer want the full report.",
+            messages: [{
+              role: 'user',
+              content: `Property: ${extractedData.address || 'unknown address'}. Asking price: R${extractedData.askingPrice ? extractedData.askingPrice.toLocaleString('en-ZA') : 'unknown'}. Top risk flags from photo analysis: ${flagsText}.`,
+            }],
+          });
+
+          nicoTease = message.content[0].text;
+
+          // Log cost
+          try {
+            const { logClaude } = require('./costs');
+            await logClaude('claude-sonnet-4-6', message.usage.input_tokens, message.usage.output_tokens, 'tease/nico');
+          } catch {}
+        } catch (visionErr) {
+          console.error(`[tease] Vision/Claude tease failed: ${visionErr.message} — falling back to listing data`);
+          // nicoTease stays null → listing-data fallback below will handle it
         }
+      }
+    }
 
-        topRiskFlags = allFindings
-          .filter(f => f.severity === 'CRITICAL' || f.severity === 'HIGH')
-          .map(f => f.observation)
-          .filter(Boolean)
-          .slice(0, 3);
-
-        // Step 5: Check asbestos and structural flags
-        hasAsbestosRisk = analyses.some(a => a.asbestos_indicators === true);
-        hasStructuralFlags = allFindings.some(f =>
-          (f.category === 'structure' || f.category === 'walls') &&
-          (f.severity === 'CRITICAL' || f.severity === 'HIGH')
-        );
-
-        // Step 6: Generate Nico tease via Claude
-        const flagsText = topRiskFlags.length > 0
-          ? topRiskFlags.join('; ')
-          : 'none found in first 3 photos';
-
-        const message = await anthropicClient.messages.create({
+    // If no tease was generated from photos, generate from listing data
+    if (!nicoTease) {
+      try {
+        const priceStr = extractedData.askingPrice ? `R${extractedData.askingPrice.toLocaleString('en-ZA')}` : 'unknown price';
+        const bedsStr = extractedData.bedrooms ? `${extractedData.bedrooms} bedroom` : '';
+        const locationStr = extractedData.address || 'this area';
+        const resp = await anthropicClient.messages.create({
           model: 'claude-sonnet-4-6',
           max_tokens: 150,
-          system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. You've seen a lot of properties and you don't sugarcoat things. Write exactly 2 sentences about this property for a potential buyer. The reader is considering buying. Be honest but not alarmist. Do not mention AI. Do not use estate agent language. Do not say 'however' or 'that said'. Write in plain conversational South African English. Do not invent problems that aren't in the risk flags — only reference what was actually observed. Do not speculate about hidden issues or rooms not photographed. If there are no risk flags, mention what looks good and recommend the full report for a complete picture.",
-          messages: [{
-            role: 'user',
-            content: `Property: ${extractedData.address || 'unknown address'}. Asking price: R${extractedData.askingPrice ? extractedData.askingPrice.toLocaleString('en-ZA') : 'unknown'}. Top risk flags from photo analysis: ${flagsText}.`,
-          }],
+          system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Focus on the property details — size, price, location, what makes it interesting. NEVER say you haven't seen photos. NEVER mention missing data. Do not mention AI. Write in plain conversational South African English. End with why the full Surepath report would be valuable for this specific property.",
+          messages: [{ role: 'user', content: `Property: ${bedsStr} property at ${locationStr}. Asking ${priceStr}.` }],
         });
-
-        nicoTease = message.content[0].text;
-
-        // Log cost
-        try {
-          const { logClaude } = require('./costs');
-          await logClaude('claude-sonnet-4-6', message.usage.input_tokens, message.usage.output_tokens, 'tease/nico');
-        } catch {}
+        nicoTease = resp.content[0].text;
+      } catch {
+        nicoTease = `${extractedData.bedrooms || ''}bed property at ${extractedData.address || 'this location'} for ${extractedData.askingPrice ? 'R' + extractedData.askingPrice.toLocaleString('en-ZA') : 'an undisclosed price'}. Get the full report for deeds, crime stats, and infrastructure data.`;
       }
     }
 
@@ -344,6 +369,14 @@ async function generateTease(extractedData) {
     };
   } catch (err) {
     console.error(`[tease] Error: ${err.message}`);
+    // Even if everything failed, generate something useful from listing data
+    const addr = extractedData.address || 'this property';
+    const beds = extractedData.bedrooms ? `${extractedData.bedrooms} bed` : '';
+    const price = extractedData.askingPrice ? `R${extractedData.askingPrice.toLocaleString('en-ZA')}` : '';
+    const details = [beds, price].filter(Boolean).join(' at ');
+    const fallbackTease = details
+      ? `${details} in ${addr} — worth a closer look. The full report covers deeds history, crime stats, structural risks, and compliance flags so you know exactly what you're getting into.`
+      : `The full report covers deeds history, crime stats, structural risks, and compliance flags for ${addr} — everything you need before making an offer.`;
     return {
       address: extractedData.address,
       askingPrice: extractedData.askingPrice,
@@ -352,7 +385,7 @@ async function generateTease(extractedData) {
       topRiskFlags: [],
       hasAsbestosRisk: false,
       hasStructuralFlags: false,
-      nicoTease: "I couldn't pull a full photo preview on this one. The full report will cover everything.",
+      nicoTease: fallbackTease,
       photoCount: (extractedData.photoUrls || []).length,
     };
   }
@@ -379,12 +412,141 @@ async function generateReport(input, askingPrice, phoneNumber) {
     log(1, 'Property resolution');
 
     if (isProperty24URL(input)) {
-      log(1, `Fetching Property24 listing: ${input}`);
+      log(1, `Property24 URL — extracting OG metadata: ${input}`);
       const html = await fetchHTML(input);
-      const extracted = extractProperty24Data(html);
-      photoUrls = extracted.photoUrls;
-      address = extracted.address;
-      log(1, `Extracted ${photoUrls.length} photos, address: "${address}"`);
+
+      // Extract OG meta tags (reliable from static HTML, unlike photos which need JS)
+      const ogImage = (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+                       html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) || [])[1] || null;
+      const ogTitle = (html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+                       html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i) || [])[1] || null;
+
+      // Try to find the PP equivalent — local DB first, Vision API as fallback
+      // P24 URL: /for-sale/{suburb}/{city}/{province}/{code}/{id}
+      const p24UrlParts = input.match(/property24\.com\/for-sale\/([^/]+)\/([^/]+)\/([^/]+)/);
+      const p24Suburb = p24UrlParts ? p24UrlParts[1].replace(/-/g, ' ') : null;
+      const p24City = p24UrlParts ? p24UrlParts[2].replace(/-/g, ' ') : null;
+      const p24Beds = ogTitle ? parseInt((ogTitle.match(/(\d+)\s*Bed/i) || [])[1]) || null : null;
+
+      // Extract street address from OG title or JSON-LD
+      let p24Street = null;
+      try {
+        const jsonldMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
+        for (const block of jsonldMatches) {
+          const jsonStr = block.replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '');
+          const ld = JSON.parse(jsonStr);
+          if (ld.address?.streetAddress) { p24Street = ld.address.streetAddress; break; }
+        }
+      } catch {}
+      if (!p24Street && ogTitle) {
+        const titleParts = ogTitle.replace(/\s*-\s*Property24.*$/i, '').split(/\s*-\s*/);
+        if (titleParts.length >= 3) p24Street = titleParts.slice(1, -1).join(', ');
+      }
+
+      let ppResolved = false;
+
+      // Strategy 1: Local DB — street address match in PP listing URL
+      if (p24Street && p24Suburb) {
+        const streetNorm = p24Street.toLowerCase().replace(/\s+street$/i, '').replace(/\s+road$/i, '').replace(/\s+avenue$/i, '').replace(/\s+drive$/i, '').trim().replace(/\s+/g, '-');
+        const ordinals = { first: '1st', second: '2nd', third: '3rd', fourth: '4th', fifth: '5th', sixth: '6th', seventh: '7th', eighth: '8th', ninth: '9th', tenth: '10th' };
+        const streetOrdinal = streetNorm.replace(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b/g, m => ordinals[m]);
+
+        log(1, `Searching local DB for street "${streetOrdinal}" in ${p24Suburb}`);
+        for (const pattern of [streetOrdinal, streetNorm]) {
+          if (ppResolved) break;
+          const { rows } = await pool.query(
+            `SELECT id, listing_url, address_raw, bedrooms FROM properties
+             WHERE erf_number LIKE 'PP_%' AND listing_url ILIKE $1
+             AND (suburb ILIKE $2 OR listing_url ILIKE $3)
+             ORDER BY id DESC LIMIT 5`,
+            [`%/${pattern}/%`, p24Suburb, `%/${p24Suburb.toLowerCase().replace(/\s+/g, '-')}/%`]
+          );
+          if (rows.length > 0) {
+            const best = (p24Beds && rows.length > 1) ? (rows.find(r => r.bedrooms === p24Beds) || rows[0]) : rows[0];
+            const ppData = await extractPrivatePropertyData(best.listing_url);
+            if (ppData?.address) {
+              photoUrls = ppData.photoUrls || [];
+              address = ppData.address;
+              if (!askingPrice && ppData.askingPrice) askingPrice = ppData.askingPrice;
+              input = best.listing_url;
+              ppResolved = true;
+              log(1, `LOCAL DB MATCH (street): ${best.listing_url} → ${photoUrls.length} photos, "${address}"`);
+            }
+          }
+        }
+      }
+
+      // Strategy 2: Local DB — suburb + beds + price (only if unique)
+      if (!ppResolved && p24Suburb && p24Beds) {
+        const priceClause = askingPrice ? 'AND asking_price BETWEEN $3 * 0.85 AND $3 * 1.15' : '';
+        const params = askingPrice ? [p24Suburb, p24Beds, askingPrice] : [p24Suburb, p24Beds];
+        const { rows } = await pool.query(
+          `SELECT id, listing_url, address_raw, bedrooms FROM properties
+           WHERE erf_number LIKE 'PP_%' AND (suburb ILIKE $1 OR city ILIKE $1) AND bedrooms = $2
+           ${priceClause} ORDER BY id DESC LIMIT 5`,
+          params
+        );
+        if (rows.length === 1) {
+          const ppData = await extractPrivatePropertyData(rows[0].listing_url);
+          if (ppData?.address) {
+            photoUrls = ppData.photoUrls || [];
+            address = ppData.address;
+            if (!askingPrice && ppData.askingPrice) askingPrice = ppData.askingPrice;
+            input = rows[0].listing_url;
+            ppResolved = true;
+            log(1, `LOCAL DB MATCH (suburb+beds+price, unique): ${rows[0].listing_url}`);
+          }
+        } else if (rows.length > 1) {
+          log(1, `${rows.length} candidates in DB for ${p24Suburb}/${p24Beds}bed — too ambiguous`);
+        }
+      }
+
+      // Strategy 3: Vision API fallback (only if no local match found)
+      if (!ppResolved && ogImage) {
+        log(1, `No local match — trying Vision API reverse image search`);
+        try {
+          const { reverseImageSearch } = require('./match-p24-to-pp');
+          const matchingPages = await reverseImageSearch(ogImage);
+          const ppCandidates = [];
+          for (const page of matchingPages.filter(u => u.includes('privateproperty.co.za/for-sale/'))) {
+            const tMatch = page.match(/(https?:\/\/www\.privateproperty\.co\.za\/for-sale\/[^?#]+\/T\d+)/);
+            if (tMatch && !ppCandidates.includes(tMatch[1])) ppCandidates.push(tMatch[1]);
+          }
+
+          for (const candidateUrl of ppCandidates) {
+            const ppUrlParts = candidateUrl.replace(/.*\/for-sale\//, '').split('/');
+            const ppSuburb = (ppUrlParts[3] || '').replace(/-/g, ' ').toLowerCase();
+            const ppCity = (ppUrlParts[2] || '').replace(/-/g, ' ').toLowerCase();
+            const suburbMatch = ppSuburb && p24Suburb && (ppSuburb.includes(p24Suburb.toLowerCase()) || p24Suburb.toLowerCase().includes(ppSuburb));
+            const cityMatch = !p24City || !ppCity || ppCity.includes(p24City.toLowerCase()) || p24City.toLowerCase().includes(ppCity);
+
+            if (suburbMatch && cityMatch) {
+              const ppData = await extractPrivatePropertyData(candidateUrl);
+              if (ppData?.address && (!p24Beds || !ppData.bedrooms || p24Beds === ppData.bedrooms)) {
+                photoUrls = ppData.photoUrls || [];
+                address = ppData.address;
+                if (!askingPrice && ppData.askingPrice) askingPrice = ppData.askingPrice;
+                input = candidateUrl;
+                ppResolved = true;
+                log(1, `VISION MATCH: ${candidateUrl} → ${photoUrls.length} photos, "${address}"`);
+                break;
+              }
+            }
+          }
+        } catch (err) {
+          log(1, `Vision match failed: ${err.message}`);
+        }
+      }
+
+      // Fallback: use P24 OG data directly
+      if (!ppResolved) {
+        const extracted = extractProperty24Data(html);
+        photoUrls = ogImage ? [ogImage, ...extracted.photoUrls] : extracted.photoUrls;
+        address = ogTitle
+          ? ogTitle.replace(/\s*[-–|]\s*Property24.*$/i, '').replace(/\s+for\s+sale\s+in\s+/i, ' in ').replace(/\s+in\s+in\s+/i, ' in ')
+          : extracted.address;
+        log(1, `No PP match — using P24 data: ${photoUrls.length} photos, address: "${address}"`);
+      }
 
       if (!address) {
         throw new Error('Could not extract address from Property24 listing');
@@ -650,8 +812,17 @@ async function generateReport(input, askingPrice, phoneNumber) {
     if (parseInt(existingListingPhotos[0].c) > 0) {
       log(4, `Already have ${existingListingPhotos[0].c} listing photos — skipping`);
     } else if (photoUrls.length > 0) {
-      log(4, `Storing ${photoUrls.length} listing photos`);
-      for (const url of photoUrls) {
+      // Filter out junk images (placeholders, icons, GIFs, SVGs, non-image URLs)
+      const validPhotos = photoUrls.filter(url => {
+        const lower = url.toLowerCase();
+        if (lower.includes('.gif') || lower.includes('.svg')) return false;
+        if (lower.includes('noimage') || lower.includes('blank') || lower.includes('loading')) return false;
+        if (lower.includes('/icons/') || lower.includes('icon.')) return false;
+        if (lower.includes('/for-sale/') && !lower.includes('images.')) return false;
+        return true;
+      });
+      log(4, `Storing ${validPhotos.length} listing photos (filtered ${photoUrls.length - validPhotos.length} junk)`);
+      for (const url of validPhotos) {
         await pool.query(
           `INSERT INTO property_images (property_id, source, image_url, image_type)
            VALUES ($1, $2, $3, 'listing')`,
@@ -710,19 +881,27 @@ async function generateReport(input, askingPrice, phoneNumber) {
     // ── STEP 05: Vision analysis — listing photos ───────────────────
     log(5, 'Vision analysis — listing photos');
 
-    // Only analyse photos that don't have vision_analysis yet
+    // Only analyse photos that don't have vision_analysis yet — filter out junk (placeholders, icons, GIFs, SVGs)
     const { rows: unanalysedPhotos } = await pool.query(
-      "SELECT image_url FROM property_images WHERE property_id = $1 AND image_type = 'listing' AND vision_analysis IS NULL AND image_url LIKE 'http%'",
+      `SELECT image_url FROM property_images WHERE property_id = $1 AND image_type = 'listing' AND vision_analysis IS NULL AND image_url LIKE 'http%'
+       AND image_url NOT LIKE '%.gif%' AND image_url NOT LIKE '%.svg%'
+       AND image_url NOT LIKE '%NoImage%' AND image_url NOT LIKE '%blank%'
+       AND image_url NOT LIKE '%loading%' AND image_url NOT LIKE '%icon%'
+       AND image_url NOT LIKE '%/for-sale/%'`,
       [propertyId]
     );
     if (unanalysedPhotos.length > 0) {
       const urlsToAnalyse = unanalysedPhotos.map(r => r.image_url);
       log(5, `${urlsToAnalyse.length} unanalysed listing photos (skipping ${photoUrls.length - urlsToAnalyse.length} already done)`);
-      const listingVision = await vision.analyseWithHFPrestage(propertyId, urlsToAnalyse);
-      if (listingVision) {
-        log(5, `Analysed ${listingVision.analyses.length} listing photos, ${listingVision.aggregated.vision_findings.length} total findings`);
-      } else {
-        log(5, 'No listing photos analysed (download failures)');
+      try {
+        const listingVision = await vision.analyseWithHFPrestage(propertyId, urlsToAnalyse);
+        if (listingVision) {
+          log(5, `Analysed ${listingVision.analyses.length} listing photos, ${listingVision.aggregated.vision_findings.length} total findings`);
+        } else {
+          log(5, 'No listing photos analysed (download failures)');
+        }
+      } catch (visionErr) {
+        log(5, `Vision analysis error (non-fatal): ${visionErr.message}`);
       }
     } else {
       log(5, 'All listing photos already analysed — skipping');
@@ -1004,6 +1183,29 @@ async function generateReport(input, askingPrice, phoneNumber) {
       }
     } else {
       log('9B', 'No coordinates — skipping social listening');
+    }
+
+    // ── STEP 09C: Security & Community Intelligence ─────────────────
+    log('9C', 'Security & Community — security companies, CPF, neighbourhood watch');
+
+    const { rows: existingSecurity } = await pool.query(
+      "SELECT COUNT(*) AS c FROM area_risk_data WHERE risk_type = 'security_community' AND (suburb ILIKE $1 OR city ILIKE $1) AND city ILIKE $2",
+      [areaSuburb, areaCity]
+    );
+    if (parseInt(existingSecurity[0].c) > 0) {
+      log('9C', `Security & Community already done for ${areaSuburb} — skipping`);
+    } else if (geo || (ps.lat && ps.lng)) {
+      try {
+        const collectSecurity = require('./collect-security');
+        const secResult = await collectSecurity.collectForProperty(propertyId);
+        if (secResult) {
+          log('9C', `Found ${secResult.security_companies_count} security companies, CPF: ${secResult.cpf_found ? 'yes' : 'no'}, NHW: ${secResult.nhw_found ? 'yes' : 'no'}, sentiment: ${secResult.sentiment_overall}`);
+        }
+      } catch (err) {
+        log('9C', `Security & Community error (non-fatal): ${err.message}`);
+      }
+    } else {
+      log('9C', 'No coordinates — skipping security & community');
     }
 
     // ── STEP 10: Building age risk matrix ───────────────────────────

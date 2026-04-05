@@ -24,6 +24,9 @@ export default function PropertiesPage() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [sort, setSortState] = useState("scraped_desc");
+  const [page, setPage] = useState(1);
+  const [totalRows, setTotalRows] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
   // Load saved sort on mount
   useEffect(() => {
@@ -38,21 +41,25 @@ export default function PropertiesPage() {
   }
   const [loading, setLoading] = useState(true);
 
-  function loadProperties() {
+  function loadProperties(p_page = page) {
     const p = new URLSearchParams();
     if (search) p.set("q", search);
     if (filter === "has_report") p.set("has_report", "true");
     if (filter === "no_report") p.set("has_report", "false");
+    p.set("page", String(p_page));
     setLoading(true);
     fetch(`/api/properties?${p}`).then(r => r.json()).then((data) => {
-      let filtered = data;
-      if (filter === "no_photos") filtered = data.filter((r: P) => parseInt(r.photo_count) === 0);
-      if (filter === "has_photos") filtered = data.filter((r: P) => parseInt(r.photo_count) > 0);
+      let filtered = data.rows || [];
+      if (filter === "no_photos") filtered = filtered.filter((r: P) => parseInt(r.photo_count) === 0);
+      if (filter === "has_photos") filtered = filtered.filter((r: P) => parseInt(r.photo_count) > 0);
       setRows(filtered);
+      setTotalRows(data.total || 0);
+      setTotalPages(data.totalPages || 1);
     }).finally(() => setLoading(false));
   }
 
-  useEffect(() => { loadProperties(); }, [search, filter]);
+  useEffect(() => { setPage(1); loadProperties(1); }, [search, filter]);
+  useEffect(() => { loadProperties(page); }, [page]);
 
   // Data depth: count how many data points we have per property
   function dataDepth(r: P): number {
@@ -105,7 +112,8 @@ export default function PropertiesPage() {
       try {
         const res = await fetch(`/api/properties?q=${encodeURIComponent(val)}`);
         const data = await res.json();
-        setInputMatches(Array.isArray(data) ? data.slice(0, 5) : []);
+        const list = data.rows || (Array.isArray(data) ? data : []);
+        setInputMatches(list.slice(0, 5));
       } catch {}
     }, 300);
   }
@@ -145,8 +153,8 @@ export default function PropertiesPage() {
     <span title={label} className={`inline-block w-2 h-2 rounded-full ${ok ? "bg-green-500" : "bg-gray-300"}`} />
   );
 
-  // Summary stats
-  const total = rows.length;
+  // Summary stats (page-level counts for ratios, totalRows for overall)
+  const pageCount = rows.length;
   const withCoords = rows.filter(r => r.lat).length;
   const withPhotos = rows.filter(r => parseInt(r.photo_count) > 0).length;
   const withAnalysis = rows.filter(r => parseInt(r.analysed_count) > 0).length;
@@ -211,12 +219,12 @@ export default function PropertiesPage() {
       {/* Summary cards */}
       <div className="grid grid-cols-6 gap-3 mb-2">
         {[
-          { label: "Properties", val: total, color: "text-[#0D1B2A]" },
-          { label: "Geocoded", val: `${withCoords}/${total}`, color: withCoords === total ? "text-green-600" : "text-yellow-600" },
-          { label: "With Photos", val: `${withPhotos}/${total}`, color: withPhotos > 0 ? "text-green-600" : "text-red-500" },
-          { label: "Vision Done", val: `${withAnalysis}/${total}`, color: withAnalysis > 0 ? "text-green-600" : "text-gray-400" },
-          { label: "Reports", val: `${withReports}/${total}`, color: withReports > 0 ? "text-green-600" : "text-gray-400" },
-          { label: "Deeds Data", val: `${withDeeds}/${total}`, color: withDeeds > 0 ? "text-green-600" : "text-gray-400" },
+          { label: "Properties", val: totalRows, color: "text-[#0D1B2A]" },
+          { label: "Geocoded", val: `${withCoords}/${pageCount}`, color: withCoords === pageCount ? "text-green-600" : "text-yellow-600" },
+          { label: "With Photos", val: `${withPhotos}/${pageCount}`, color: withPhotos > 0 ? "text-green-600" : "text-red-500" },
+          { label: "Vision Done", val: `${withAnalysis}/${pageCount}`, color: withAnalysis > 0 ? "text-green-600" : "text-gray-400" },
+          { label: "Reports", val: `${withReports}/${pageCount}`, color: withReports > 0 ? "text-green-600" : "text-gray-400" },
+          { label: "Deeds Data", val: `${withDeeds}/${pageCount}`, color: withDeeds > 0 ? "text-green-600" : "text-gray-400" },
         ].map(c => (
           <div key={c.label} className="bg-white border rounded p-3 text-center">
             <div className={`text-xl font-bold ${c.color}`}>{String(c.val)}</div>
@@ -297,8 +305,32 @@ export default function PropertiesPage() {
           <option value="price_desc">Price: high to low</option>
           <option value="price_asc">Price: low to high</option>
         </select>
-        <span className="text-xs text-gray-400">{sortedRows.length} shown</span>
+        <span className="text-xs text-gray-400">{sortedRows.length} shown of {totalRows}</span>
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center gap-2 mb-4">
+          <button onClick={() => setPage(1)} disabled={page === 1} className="px-2 py-1 text-xs border rounded disabled:opacity-30">&laquo;</button>
+          <button onClick={() => setPage(p => p - 1)} disabled={page === 1} className="px-2 py-1 text-xs border rounded disabled:opacity-30">&lsaquo; Prev</button>
+          {Array.from({ length: totalPages }, (_, i) => i + 1)
+            .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 2)
+            .reduce<(number | string)[]>((acc, p, i, arr) => {
+              if (i > 0 && p - (arr[i - 1] as number) > 1) acc.push("...");
+              acc.push(p);
+              return acc;
+            }, [])
+            .map((p, i) =>
+              p === "..." ? <span key={`gap-${i}`} className="text-xs text-gray-400">...</span> :
+              <button key={p} onClick={() => setPage(p as number)}
+                className={`px-2.5 py-1 text-xs border rounded ${page === p ? "bg-[#0D1B2A] text-white" : "hover:bg-gray-100"}`}>
+                {p}
+              </button>
+            )}
+          <button onClick={() => setPage(p => p + 1)} disabled={page === totalPages} className="px-2 py-1 text-xs border rounded disabled:opacity-30">Next &rsaquo;</button>
+          <button onClick={() => setPage(totalPages)} disabled={page === totalPages} className="px-2 py-1 text-xs border rounded disabled:opacity-30">&raquo;</button>
+        </div>
+      )}
 
       {/* Table */}
       {loading ? <p className="text-gray-500">Loading...</p> : (
@@ -317,7 +349,7 @@ export default function PropertiesPage() {
           <tbody>
             {sortedRows.map((r, idx) => (
               <tr key={r.id} className="border-b hover:bg-gray-50 cursor-pointer" onClick={() => router.push(`/admin/data/inspect/${r.id}`)}>
-                <td className="px-3 py-2 text-xs text-gray-400 font-mono">{idx + 1}</td>
+                <td className="px-3 py-2 text-xs text-gray-400 font-mono">{(page - 1) * 500 + idx + 1}</td>
                 <td className="px-3 py-2">
                   <div className="max-w-xs truncate font-medium">{propertyTitle(r)}</div>
                   <div className="text-[10px] text-gray-400">{propertySubtitle(r)}</div>

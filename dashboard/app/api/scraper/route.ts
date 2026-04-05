@@ -39,47 +39,104 @@ export const GET = withAuth(async () => {
     scraper_running: scraperProcesses.size > 0,
     scraper_processes: Array.from(scraperProcesses.entries()).map(([name, s]) => ({
       name, running: !s.proc.killed, started: s.startedAt, log_lines: s.log.length,
+      log: s.log.slice(-50),
     })),
     scraper_log: scraperLog.slice(-50),
   });
 });
 
 export const POST = withAuth(async (req: NextRequest) => {
-  const { action, suburb, delay, max_pages, refresh, source, province, province_code, start_page } = await req.json();
+  const { action, suburb, delay, max_pages, refresh, source, province, province_code, start_page, name: stopName } = await req.json();
 
   if (action === "start") {
-    // Generate a unique name for this scraper instance
-    const scraperName = source === "pp"
-      ? `pp${province ? '_' + province.substring(0, 10) : ''}`
-      : `p24${suburb ? '_' + suburb.substring(0, 15) : ''}`;
+    // Determine scraper name and command based on source
+    let scraperName: string;
+    let args: string[];
+    const projectDir = path.resolve(process.cwd(), "..");
+
+    if (source === "pp") {
+      scraperName = "pp";
+      args = [path.resolve(projectDir, "bootstrap", "scrape-pp.js")];
+      if (province) args.push("--province", province);
+      if (province_code) args.push("--code", String(province_code));
+      args.push("--start-page", String(start_page || 1));
+      args.push("--delay", String(delay || 3));
+      args.push("--max-pages", String(max_pages || 500));
+      args.push("--no-stop");
+    } else if (source === "crime") {
+      scraperName = "crime";
+      // Run collect-crime inline script that processes properties missing crime data
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const { collectForProperty } = require('./collect-crime');
+        (async () => {
+          const { rows } = await pool.query(
+            "SELECT p.id, p.suburb, p.city FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'crime_detailed') ORDER BY p.created_at DESC LIMIT 50"
+          );
+          console.log('Crime: ' + rows.length + ' properties to process');
+          for (const prop of rows) {
+            try {
+              const r = await collectForProperty(prop.id);
+              if (r?.station) console.log('OK: ' + prop.suburb + ' → ' + r.station + ' (' + r.total + ' incidents)');
+              else console.log('SKIP: ' + prop.suburb + ' — ' + (r?.error || 'no data'));
+            } catch (e) { console.log('ERROR: ' + prop.suburb + ' — ' + e.message); }
+          }
+          console.log('=== Crime collection complete ===');
+          await pool.end();
+        })();
+      `];
+    } else if (source === "solar") {
+      scraperName = "solar";
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const mod = require('./collect-solar');
+        const fn = mod.collectForProperty || mod.getSolarData;
+        (async () => {
+          const { rows } = await pool.query(
+            "SELECT id, suburb FROM properties WHERE lat IS NOT NULL AND lng IS NOT NULL AND solar_ghi_kwh_year IS NULL ORDER BY created_at DESC LIMIT 50"
+          );
+          console.log('Solar: ' + rows.length + ' properties to process (only geocoded properties)');
+          if (rows.length === 0) console.log('No properties with coordinates pending solar data. Properties get geocoded when a report is generated.');
+          for (const prop of rows) {
+            try {
+              const r = await fn(prop.id);
+              if (r?.ghi_kwh_m2_year || r?.ghi) console.log('OK: ' + (prop.suburb || prop.id) + ' → ' + (r.ghi_kwh_m2_year || r.ghi) + ' kWh/m²/year');
+              else console.log('SKIP: ' + (prop.suburb || prop.id) + ' — ' + (r?.error || 'no data'));
+            } catch (e) { console.log('ERROR: ' + (prop.suburb || prop.id) + ' — ' + e.message); }
+          }
+          console.log('=== Solar collection complete ===');
+          await pool.end();
+        })();
+      `];
+    } else if (source === "discovery") {
+      scraperName = "discovery";
+      // Use the scrape-pp.js with a small page count for quick discovery
+      args = [path.resolve(projectDir, "bootstrap", "scrape-pp.js"), "--max-pages", "20", "--delay", "2"];
+    } else {
+      scraperName = `p24${suburb ? '_' + suburb.substring(0, 15) : ''}`;
+      args = [path.resolve(projectDir, "bootstrap", "scrape-p24.js")];
+      if (suburb) args.push("--suburb", suburb);
+      if (refresh) args.push("--refresh");
+      if (delay) args.push("--delay", String(delay));
+      if (max_pages) args.push("--max-pages", String(max_pages));
+    }
 
     // Check if same scraper is already running
     const existing = scraperProcesses.get(scraperName);
     if (existing && !existing.proc.killed) {
-      return NextResponse.json({ ok: false, message: `Scraper "${scraperName}" already running` });
+      return NextResponse.json({ ok: false, message: `"${scraperName}" already running` });
     }
-
-    let args: string[];
-    if (source === "pp") {
-      args = [path.resolve(process.cwd(), "..", "bootstrap", "scrape-pp.js")];
-      if (province) args.push("--province", province);
-      if (province_code) args.push("--code", String(province_code));
-      if (start_page) args.push("--start-page", String(start_page));
-    } else {
-      args = [path.resolve(process.cwd(), "..", "bootstrap", "scrape-p24.js")];
-      if (suburb) args.push("--suburb", suburb);
-      if (refresh) args.push("--refresh");
-    }
-    if (delay) args.push("--delay", String(delay));
-    if (max_pages) args.push("--max-pages", String(max_pages));
 
     const logLines: string[] = [`[${scraperName}] Starting: node ${args.join(" ")}`];
     scraperLog.push(...logLines);
 
     const proc = spawn("node", args, {
       cwd: path.resolve(process.cwd(), ".."),
-      env: { ...process.env },
+      env: { ...process.env, FORCE_COLOR: "0" },
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
     });
 
     scraperProcesses.set(scraperName, { proc, log: logLines, startedAt: new Date() });
@@ -113,7 +170,7 @@ export const POST = withAuth(async (req: NextRequest) => {
   }
 
   if (action === "stop") {
-    const { name } = await req.json().catch(() => ({ name: null }));
+    const name = stopName || null;
     if (name) {
       // Stop specific scraper
       const entry = scraperProcesses.get(name);

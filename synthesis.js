@@ -254,6 +254,27 @@ async function synthesiseReport(propertyId, askingPrice) {
     vision_findings: visionAnalyses,
   };
 
+  // Add security & community data if available
+  try {
+    const { rows: secRows } = await pool.query(
+      "SELECT details FROM area_risk_data WHERE risk_type = 'security_community' AND (suburb ILIKE $1 OR city ILIKE $1) AND city ILIKE $2 LIMIT 1",
+      [property.suburb || '', property.city || '']
+    );
+    if (secRows[0]?.details) {
+      const secData = typeof secRows[0].details === 'string' ? JSON.parse(secRows[0].details) : secRows[0].details;
+      context.security_community = {
+        security_companies_count: secData.security_companies?.length || 0,
+        top_company: secData.security_companies?.[0]?.name || null,
+        top_company_rating: secData.security_companies?.[0]?.rating || null,
+        cpf_name: secData.cpf?.name || null,
+        cpf_activity: secData.cpf?.activity_level || 'unknown',
+        neighbourhood_watch: secData.neighbourhood_watch?.name || null,
+        nhw_activity: secData.neighbourhood_watch?.activity_level || 'unknown',
+        sentiment: secData.sentiment?.overall || 'unknown',
+      };
+    }
+  } catch {}
+
   // Step 5: Call Claude Opus for synthesis
   console.log('[synthesis] Calling Claude Opus for report synthesis...');
 

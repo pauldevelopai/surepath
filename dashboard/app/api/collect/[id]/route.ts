@@ -434,6 +434,22 @@ export const POST = withAuth(async (req: NextRequest, { params }: { params: Prom
       }
     }
 
+    if (action === "security") {
+      if (!prop.lat) return NextResponse.json({ ok: false, message: "Geocode first" });
+      try {
+        const security = await loadModule("collect-security");
+        const result = await security.collectForProperty(parseInt(id));
+        if (!result) return NextResponse.json({ ok: false, message: "No data returned" });
+        return NextResponse.json({
+          ok: true,
+          message: `Found ${result.security_companies_count} security companies. CPF: ${result.cpf_found ? "yes" : "no"}. NHW: ${result.nhw_found ? "yes" : "no"}. Sentiment: ${result.sentiment_overall}.`,
+          data: result,
+        });
+      } catch (e: unknown) {
+        return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Security collection failed" });
+      }
+    }
+
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

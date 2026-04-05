@@ -223,7 +223,8 @@ function buildHTML(report, property, deeds, images, areaRisks) {
   <div class="meta">${p.bedrooms || '—'} bed | ${p.bathrooms || '—'} bath | ${p.floor_area_sqm ? p.floor_area_sqm + ' m²' : '—'} | ${p.property_type || ''}</div>
   ${r.asking_price ? `<div class="meta" style="font-size:18px;font-weight:bold;margin-top:10px">${formatZAR(r.asking_price)}</div>` : ''}
   <div class="meta" style="margin-top:20px">Report generated: ${today}</div>
-  ${p.listing_url ? `<div class="meta" style="font-size:10px;color:#999;margin-top:5px">Source: ${p.listing_url}</div>` : ''}
+  ${p.listing_url ? `<div class="meta" style="font-size:10px;color:#999;margin-top:5px">${p.listing_url.includes('privateproperty') ? 'PP' : 'P24'}: ${p.listing_url}</div>` : ''}
+  ${p.data_sources?.p24_url?.url && p.listing_url !== p.data_sources.p24_url.url ? `<div class="meta" style="font-size:10px;color:#999;margin-top:2px">P24: ${p.data_sources.p24_url.url}</div>` : ''}
   <div class="meta" style="margin-top:30px;color:#999">Confidential property intelligence report</div>
 </div>
 <div class="page-break"></div>
@@ -407,6 +408,7 @@ ${p.electrical_coc_required ? `
   <thead><tr><th>Data</th><th>Source</th><th>Confidence</th></tr></thead>
   <tbody>
     ${p.listing_url ? `<tr><td>Listing data</td><td><a href="${p.listing_url}">${p.listing_url.includes('privateproperty') ? 'PrivateProperty' : 'Property24'}</a></td><td>Scraped</td></tr>` : ''}
+    ${p.data_sources?.p24_url?.url && p.listing_url !== p.data_sources?.p24_url?.url ? `<tr><td>Cross-reference</td><td><a href="${p.data_sources.p24_url.url}">Property24</a></td><td>Cross-referenced</td></tr>` : ''}
     ${p.lat ? `<tr><td>Coordinates</td><td>Google Maps Geocoding API</td><td>Verified</td></tr>` : ''}
     ${r.vision_findings && r.vision_findings.length > 0 ? `<tr><td>Visual findings (${Array.isArray(r.vision_findings) ? r.vision_findings.length : 0})</td><td>Anthropic Claude Vision</td><td>AI Estimated</td></tr>` : ''}
     ${d ? `<tr><td>Ownership &amp; deeds</td><td>Windeed (Deeds Office)</td><td>Verified</td></tr>` : ''}
@@ -719,6 +721,10 @@ function buildDataHTML(property, images, deeds, areaRisks, crimeData) {
   const crimeDetailed = areaRisks.find(r => r.risk_type === 'crime_detailed');
   const cd = crimeDetailed?.details ? (typeof crimeDetailed.details === 'string' ? JSON.parse(crimeDetailed.details) : crimeDetailed.details) : null;
 
+  // Security & Community data
+  const securityRisk = areaRisks.find(r => r.risk_type === 'security_community');
+  const sec = securityRisk?.details ? (typeof securityRisk.details === 'string' ? JSON.parse(securityRisk.details) : securityRisk.details) : null;
+
   // Satellite analysis
   const satVA = satellite ? (typeof satellite.vision_analysis === 'string' ? JSON.parse(satellite.vision_analysis) : satellite.vision_analysis) : null;
 
@@ -800,7 +806,8 @@ function buildDataHTML(property, images, deeds, areaRisks, crimeData) {
   <div class="meta">${p.bedrooms || '—'} bed | ${p.bathrooms || '—'} bath | ${p.floor_area_sqm ? p.floor_area_sqm + ' m²' : '—'} | ${p.property_type || ''}</div>
   ${p.asking_price ? `<div class="meta" style="font-size:18px;font-weight:bold;margin-top:10px">${formatZAR(p.asking_price)}</div>` : ''}
   <div class="meta" style="margin-top:20px">Report generated: ${today}</div>
-  ${p.listing_url ? `<div class="meta" style="font-size:10px;color:#999;margin-top:5px">Source: ${p.listing_url}</div>` : ''}
+  ${p.listing_url ? `<div class="meta" style="font-size:10px;color:#999;margin-top:5px">${p.listing_url.includes('privateproperty') ? 'PP' : 'P24'}: ${p.listing_url}</div>` : ''}
+  ${p.data_sources?.p24_url?.url && p.listing_url !== p.data_sources.p24_url.url ? `<div class="meta" style="font-size:10px;color:#999;margin-top:2px">P24: ${p.data_sources.p24_url.url}</div>` : ''}
   <div class="meta" style="margin-top:30px;color:#999">Property Intelligence Report</div>
 </div>
 <div class="page-break"></div>
@@ -953,6 +960,58 @@ ${cd.categories?.length > 0 ? `
 <div style="font-size:10px;color:#888;margin-top:4px">Source: SAPS Annual Statistics</div>
 ` : ''}`}
 
+<!-- SECURITY & COMMUNITY -->
+${sec ? `
+<h2>Security &amp; Community — ${p.suburb || p.city}</h2>
+
+${sec.security_companies?.length > 0 ? `
+<h3 style="margin-top:8px;color:#0D1B2A">Security Companies in the Area</h3>
+<table>
+  <thead><tr><th>Company</th><th style="text-align:center">Rating</th><th style="text-align:center">Reviews</th><th style="text-align:center">Armed Response</th></tr></thead>
+  <tbody>${sec.security_companies.slice(0, 8).map(c => `
+    <tr>
+      <td><strong>${c.name}</strong>${c.phone ? `<br><span style="font-size:10px;color:#555">${c.phone}</span>` : ''}</td>
+      <td style="text-align:center">${c.rating ? c.rating.toFixed(1) + '/5' : '—'}</td>
+      <td style="text-align:center">${c.review_count || 0}</td>
+      <td style="text-align:center;color:${c.armed_response ? '#27AE60' : '#888'}">${c.armed_response ? 'Yes' : '—'}</td>
+    </tr>`).join('')}
+  </tbody>
+</table>
+` : '<p style="color:#888">No security companies found nearby</p>'}
+
+<div style="display:flex;gap:16px;margin-top:12px">
+  <div style="flex:1;background:#f8f9fa;border-radius:8px;padding:12px">
+    <h3 style="margin:0 0 6px 0;color:#0D1B2A;font-size:13px">Community Policing Forum (CPF)</h3>
+    ${sec.cpf?.name ? `
+      <p style="margin:4px 0"><strong>${sec.cpf.name}</strong></p>
+      ${sec.cpf.contact_phone ? `<p style="margin:2px 0;font-size:11px">Phone: ${sec.cpf.contact_phone}</p>` : ''}
+      ${sec.cpf.website_url ? `<p style="margin:2px 0;font-size:11px">Web: ${sec.cpf.website_url}</p>` : ''}
+      ${sec.cpf.facebook_url ? `<p style="margin:2px 0;font-size:11px">Facebook: ${sec.cpf.facebook_url}</p>` : ''}
+      <p style="margin:4px 0;font-size:11px;color:${sec.cpf.activity_level === 'active' ? '#27AE60' : sec.cpf.activity_level === 'moderate' ? '#F39C12' : '#888'}">Activity: ${sec.cpf.activity_level}</p>
+      ${sec.cpf.evidence ? `<p style="margin:2px 0;font-size:10px;color:#666">${sec.cpf.evidence}</p>` : ''}
+    ` : '<p style="margin:4px 0;color:#888;font-size:11px">No CPF found for this area</p>'}
+  </div>
+  <div style="flex:1;background:#f8f9fa;border-radius:8px;padding:12px">
+    <h3 style="margin:0 0 6px 0;color:#0D1B2A;font-size:13px">Neighbourhood Watch</h3>
+    ${sec.neighbourhood_watch?.name ? `
+      <p style="margin:4px 0"><strong>${sec.neighbourhood_watch.name}</strong></p>
+      ${sec.neighbourhood_watch.contact_info ? `<p style="margin:2px 0;font-size:11px">Contact: ${sec.neighbourhood_watch.contact_info}</p>` : ''}
+      ${sec.neighbourhood_watch.facebook_url ? `<p style="margin:2px 0;font-size:11px">Facebook: ${sec.neighbourhood_watch.facebook_url}</p>` : ''}
+      <p style="margin:4px 0;font-size:11px;color:${sec.neighbourhood_watch.activity_level === 'active' ? '#27AE60' : sec.neighbourhood_watch.activity_level === 'moderate' ? '#F39C12' : '#888'}">Activity: ${sec.neighbourhood_watch.activity_level}</p>
+    ` : '<p style="margin:4px 0;color:#888;font-size:11px">No neighbourhood watch found for this area</p>'}
+  </div>
+</div>
+
+${sec.sentiment ? `
+<div style="margin-top:12px;background:${sec.sentiment.overall === 'GOOD' ? '#E8F5E9' : sec.sentiment.overall === 'POOR' ? '#FFEBEE' : '#FFF8E1'};border-radius:8px;padding:12px">
+  <h3 style="margin:0 0 6px 0;color:#0D1B2A;font-size:13px">Community Security Sentiment: <span style="color:${sec.sentiment.overall === 'GOOD' ? '#27AE60' : sec.sentiment.overall === 'POOR' ? '#E63946' : '#F39C12'}">${sec.sentiment.overall}</span></h3>
+  ${sec.sentiment.positive?.length > 0 ? `<p style="margin:4px 0;font-size:11px;color:#27AE60">+ ${sec.sentiment.positive.slice(0, 3).join('<br>+ ')}</p>` : ''}
+  ${sec.sentiment.negative?.length > 0 ? `<p style="margin:4px 0;font-size:11px;color:#E63946">- ${sec.sentiment.negative.slice(0, 3).join('<br>- ')}</p>` : ''}
+</div>
+` : ''}
+<div style="font-size:10px;color:#888;margin-top:4px">Source: Google Places — Security & Community Intelligence</div>
+` : ''}
+
 <!-- INFRASTRUCTURE & RISK -->
 ${(p.water_quality_score != null || p.dolomite_risk || p.flood_zone || p.solar_ghi_kwh_year) ? `
 <h2>Infrastructure &amp; Environmental Risk</h2>
@@ -1008,6 +1067,7 @@ ${listingPhotos.slice(0, 12).map(img => `
   <thead><tr><th>Data</th><th>Source</th><th>Confidence</th></tr></thead>
   <tbody>
     ${p.listing_url ? `<tr><td>Listing data</td><td>${p.listing_url.includes('privateproperty') ? 'PrivateProperty.co.za' : 'Property24.com'}</td><td>Scraped</td></tr>` : ''}
+    ${p.data_sources?.p24_url?.url && p.listing_url !== p.data_sources?.p24_url?.url ? `<tr><td>Cross-reference</td><td>Property24.com</td><td>Cross-referenced</td></tr>` : ''}
     ${p.lat ? '<tr><td>Coordinates</td><td>Google Maps Geocoding API</td><td>Verified</td></tr>' : ''}
     ${svSrc ? '<tr><td>Street View</td><td>Google Street View Static API</td><td>Verified</td></tr>' : ''}
     ${satSrc ? '<tr><td>Satellite</td><td>Google Maps Static API</td><td>Verified</td></tr>' : ''}

@@ -229,6 +229,45 @@ async function refreshStaleCrimeData() {
   return { refreshed };
 }
 
+// ── 5. Refresh stale security & community data (uses Google Places — not free) ──
+async function refreshSecurityData() {
+  let refreshed = 0;
+  try {
+    // Find suburbs with security data older than 30 days
+    const { rows } = await pool.query(`
+      SELECT DISTINCT a.suburb, a.city, p.id AS property_id
+      FROM area_risk_data a
+      JOIN properties p ON (p.suburb ILIKE a.suburb AND p.city ILIKE a.city)
+      WHERE a.risk_type = 'security_community'
+      AND a.created_at < NOW() - INTERVAL '30 days'
+      LIMIT 10
+    `);
+
+    if (rows.length === 0) return { refreshed: 0 };
+
+    await log(`  Refreshing security data for ${rows.length} suburbs`);
+    const collectSecurity = require('./collect-security');
+
+    for (const row of rows) {
+      try {
+        // Delete old data
+        await pool.query(
+          "DELETE FROM area_risk_data WHERE risk_type = 'security_community' AND suburb ILIKE $1 AND city ILIKE $2",
+          [row.suburb, row.city]
+        );
+        await collectSecurity.collectForProperty(row.property_id);
+        refreshed++;
+        await sleep(BATCH_DELAY);
+      } catch (err) {
+        await log(`  Security refresh error for ${row.suburb}: ${err.message}`);
+      }
+    }
+  } catch (err) {
+    await log(`  Security refresh error: ${err.message}`);
+  }
+  return { refreshed };
+}
+
 // ── Main ──
 async function main() {
   await log('=== Nightly Collection Started ===');
@@ -253,6 +292,7 @@ async function main() {
     const water = await collectWaterData();
     const discovery = await discoverNewListings();
     const refresh = await refreshStaleCrimeData();
+    const secRefresh = await refreshSecurityData();
 
     const elapsed = Math.round((Date.now() - start) / 1000);
     await log(`=== Nightly Collection Complete (${elapsed}s) ===`);
@@ -261,7 +301,8 @@ async function main() {
     await log(`  Solar: ${solar.success} OK, ${solar.failed} failed`);
     await log(`  Water: ${water.success} OK, ${water.failed} failed`);
     await log(`  New PP listings: ${discovery.newFound}`);
-    await log(`  Refreshed: ${refresh.refreshed}`);
+    await log(`  Refreshed crime: ${refresh.refreshed}`);
+    await log(`  Refreshed security: ${secRefresh.refreshed}`);
 
     // Store run summary
     await pool.query(`
