@@ -16,7 +16,15 @@ const router = express.Router();
 const reportPath = require('path').join(__dirname, 'reports');
 const reportFs = require('fs');
 if (!reportFs.existsSync(reportPath)) reportFs.mkdirSync(reportPath, { recursive: true });
-router.use('/reports', express.static(reportPath));
+// Serve reports with explicit Content-Type (bypasses ngrok interstitial for Twilio)
+router.get('/reports/:filename', (req, res) => {
+  const filePath = require('path').join(reportPath, req.params.filename);
+  if (!require('fs').existsSync(filePath)) return res.status(404).send('Not found');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${req.params.filename}"`);
+  res.setHeader('ngrok-skip-browser-warning', 'true');
+  require('fs').createReadStream(filePath).pipe(res);
+});
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
@@ -1318,16 +1326,14 @@ async function runPipelineAsync(order, conv) {
         await sendWhatsApp(phoneNumber, reportMsg, publicPdfUrl);
         console.log(`[pipeline] Report delivered to ${phoneNumber}`);
       } catch (sendErr) {
-        // PDF send failed (ngrok fetch issue) — retry once after a short delay
         console.error(`[pipeline] PDF send failed: ${sendErr.message} — retrying in 5s`);
         await new Promise(r => setTimeout(r, 5000));
         try {
           await sendWhatsApp(phoneNumber, reportMsg, publicPdfUrl);
           console.log(`[pipeline] Report delivered on retry to ${phoneNumber}`);
         } catch (retryErr) {
-          // Send as link instead
           console.error(`[pipeline] PDF retry failed: ${retryErr.message} — sending as link`);
-          await sendWhatsApp(phoneNumber, reportMsg + `\n\nDownload your report: ${publicPdfUrl}`);
+          await sendWhatsApp(phoneNumber, reportMsg + `\n\nDownload your report:\n${publicPdfUrl}`);
         }
       }
     } else {
