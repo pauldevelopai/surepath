@@ -141,12 +141,39 @@ export const GET = withAuth(async (_req: NextRequest, { params }: { params: Prom
     /ceiling not visible in frame/i,
   ];
 
+  // Topic-based grouping: keep highest severity per topic
+  const topicPatterns = [
+    { topic: 'moss_wall_moisture', pattern: /moss.wall|plant.wall|living.wall|living.green|living.moss/i },
+    { topic: 'bedroom3_extension', pattern: /bedroom.3.*guestroom|guestroom.*offset|add.on.*structure|unauthorised.*construction|irregular.footprint/i },
+    { topic: 'flat_roof_waterproofing', pattern: /flat.roof.*waterproof|bare.aggregate|screed.finish|waterproofing.membrane|torch.on/i },
+    { topic: 'ceiling_condition', pattern: /ceiling.*no.sag|ceiling.*intact|ceiling.*no.*active.*leak|ceiling.*mold.*bloom|ceiling.*stain/i },
+    { topic: 'walls_no_cracks', pattern: /walls.*no.*crack|walls.*good.*cosmetic|walls.*acceptable|painted.*plaster.*no.*crack/i },
+    { topic: 'floor_plan_layout', pattern: /floor.plan.*overlay|floor.plan.*shows|layout.*shows/i },
+  ];
+  const sevOrder = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'COSMETIC'];
+
   const linkedFindings: Record<string, any>[] = [];
   const seenKeys = new Set<string>();
+  const seenTopics = new Map<string, Record<string, any>>();
   for (const fi of rawFindings) {
     if (skipPatterns.some(p => p.test(fi.observation))) continue;
     if (fi.severity === 'LOW' && (!fi.estimated_repair_cost_zar || fi.estimated_repair_cost_zar.max === 0) &&
         /no\s+(visible|confirmed|active|defect|crack|stain|sag|leak|damage)/i.test(fi.observation)) continue;
+
+    const matchedTopic = topicPatterns.find(tp => tp.pattern.test(fi.observation));
+    if (matchedTopic) {
+      const existing = seenTopics.get(matchedTopic.topic);
+      if (existing) {
+        if (sevOrder.indexOf(fi.severity) < sevOrder.indexOf(existing.severity)) {
+          const idx = linkedFindings.indexOf(existing);
+          if (idx >= 0) linkedFindings[idx] = fi;
+          seenTopics.set(matchedTopic.topic, fi);
+        }
+        continue;
+      }
+      seenTopics.set(matchedTopic.topic, fi);
+    }
+
     const key = findingKey(fi.observation);
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
