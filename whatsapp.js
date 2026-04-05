@@ -766,8 +766,8 @@ async function runTeaseAsync(from, phoneNumber, url) {
       const erfNumber = ppMatch ? `PP_${ppMatch[1]}` : p24Match ? `P24_${p24Match[1]}` : `WA_${Date.now()}`;
 
       await pool.query(
-        `INSERT INTO properties (erf_number, address_raw, listing_url, asking_price, bedrooms, bathrooms, suburb, city, province)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `INSERT INTO properties (erf_number, address_raw, listing_url, asking_price, bedrooms, bathrooms, suburb, city, province, description)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (erf_number) DO UPDATE SET
            listing_url = COALESCE(EXCLUDED.listing_url, properties.listing_url),
            asking_price = COALESCE(EXCLUDED.asking_price, properties.asking_price),
@@ -775,10 +775,11 @@ async function runTeaseAsync(from, phoneNumber, url) {
            bathrooms = COALESCE(EXCLUDED.bathrooms, properties.bathrooms),
            suburb = COALESCE(EXCLUDED.suburb, properties.suburb),
            city = COALESCE(EXCLUDED.city, properties.city),
-           province = COALESCE(EXCLUDED.province, properties.province)`,
+           province = COALESCE(EXCLUDED.province, properties.province),
+           description = COALESCE(NULLIF(EXCLUDED.description, ''), properties.description)`,
         [erfNumber, extractedData.address, storeUrl, extractedData.askingPrice || null,
          extractedData.bedrooms || null, extractedData.bathrooms || null,
-         urlSuburb, urlCity, urlProvince]
+         urlSuburb, urlCity, urlProvince, extractedData.description || null]
       );
 
       // Store photos

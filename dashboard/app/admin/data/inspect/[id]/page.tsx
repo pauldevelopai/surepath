@@ -494,8 +494,20 @@ export default function PropertyDetailPage() {
                   <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
                   <span className="flex-1">{f.observation}</span>
                   <RateBtn section="streetview" hash={`sv-${i}`} context={{ observation: f.observation, severity: f.severity }} />
-                  <span className="text-[9px] text-orange-500">Claude Vision</span>
                 </div>
+              ))}
+              {streetviewImg.vision_analysis?.security_observations?.length > 0 && (
+                <div className="mt-2 flex gap-1 flex-wrap">
+                  {streetviewImg.vision_analysis.security_observations.map((s: string, i: number) => (
+                    <span key={i} className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded">{s}</span>
+                  ))}
+                </div>
+              )}
+              {streetviewImg.vision_analysis?.nearby_negatives?.map((n: string, i: number) => (
+                <div key={`svneg-${i}`} className="flex items-center gap-1 mt-1"><span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold">⚠ {n}</span><RateBtn section="streetview" hash={`svneg-${i}`} context={{ type: "nearby_negative", value: n }} /></div>
+              ))}
+              {streetviewImg.vision_analysis?.nearby_positives?.map((n: string, i: number) => (
+                <div key={`svpos-${i}`} className="flex items-center gap-1 mt-1"><span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded font-bold">✓ {n}</span><RateBtn section="streetview" hash={`svpos-${i}`} context={{ type: "nearby_positive", value: n }} /></div>
               ))}
             </div>
           ) : <p className="text-sm text-gray-400">{hasCoords ? "Not captured." : "Geocode first."}</p>}
@@ -519,19 +531,61 @@ export default function PropertyDetailPage() {
                 <img src={satelliteImg.image_url} alt="Satellite View" className="w-48 h-32 rounded object-cover cursor-pointer hover:opacity-80 transition border" />
               </a>
               <div className="text-[9px] text-gray-400 mt-1">Click image to view full size</div>
-              {satelliteImg.vision_analysis && (
-                <div className="mt-1">
-                  <div className="flex items-center"><Datum label="Roof Material" value={satelliteImg.vision_analysis.roof_material} source={{ name: "Claude Vision", url: "https://console.anthropic.com", confidence: "estimated" }} /><RateBtn section="satellite" hash="roof_material" context={{ field: "roof_material", value: satelliteImg.vision_analysis.roof_material }} /></div>
-                  <div className="flex items-center"><Datum label="Roof Orientation" value={satelliteImg.vision_analysis.roof_orientation_estimate} source={{ name: "Claude Vision", url: "https://console.anthropic.com", confidence: "estimated" }} /><RateBtn section="satellite" hash="roof_orientation" context={{ field: "roof_orientation", value: satelliteImg.vision_analysis.roof_orientation_estimate }} /></div>
-                  <div className="flex items-center"><Datum label="Solar Panels" value={satelliteImg.vision_analysis.solar_installed ? "Visible" : "None visible"} source={{ name: "Claude Vision", url: "https://console.anthropic.com", confidence: "estimated" }} /><RateBtn section="satellite" hash="solar_installed" context={{ field: "solar_installed", value: satelliteImg.vision_analysis.solar_installed }} /></div>
-                  {satelliteImg.vision_analysis.nearby_negatives?.map((n: string, i: number) => (
-                    <div key={`neg-${i}`} className="flex items-center gap-1 mt-1"><span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold">⚠ {n}</span><RateBtn section="satellite" hash={`neg-${i}`} context={{ type: "nearby_negative", value: n }} /></div>
+              {satelliteImg.vision_analysis && (() => {
+                const satVA = satelliteImg.vision_analysis;
+                const satFindings = satVA.findings || [];
+                return (
+                <div className="mt-2 space-y-2">
+                  {/* Key metrics row */}
+                  <div className="flex gap-3 flex-wrap">
+                    <div className="bg-gray-50 rounded px-3 py-1.5 text-xs">
+                      <span className="text-gray-500">Roof: </span><span className="font-bold capitalize">{satVA.roof_material?.replace(/_/g, ' ') || 'unknown'}</span>
+                      <RateBtn section="satellite" hash="roof_material" context={{ field: "roof_material", value: satVA.roof_material }} />
+                    </div>
+                    <div className="bg-gray-50 rounded px-3 py-1.5 text-xs">
+                      <span className="text-gray-500">Orientation: </span><span className="font-bold capitalize">{satVA.roof_orientation_estimate || 'unclear'}</span>
+                      <RateBtn section="satellite" hash="roof_orientation" context={{ field: "roof_orientation", value: satVA.roof_orientation_estimate }} />
+                    </div>
+                    <div className="bg-gray-50 rounded px-3 py-1.5 text-xs">
+                      <span className="text-gray-500">Solar: </span><span className={`font-bold ${satVA.solar_installed ? 'text-green-600' : 'text-gray-500'}`}>{satVA.solar_installed ? 'Visible' : 'None'}</span>
+                      <RateBtn section="satellite" hash="solar_installed" context={{ field: "solar_installed", value: satVA.solar_installed }} />
+                    </div>
+                    {satVA.asbestos_indicators && (
+                      <div className="bg-red-50 rounded px-3 py-1.5 text-xs">
+                        <span className="text-red-700 font-bold">⚠ Asbestos indicators</span>
+                      </div>
+                    )}
+                    {satVA.security_visible && (
+                      <div className="bg-green-50 rounded px-3 py-1.5 text-xs">
+                        <span className="text-green-700 font-bold">Security visible</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Satellite findings */}
+                  {satFindings.length > 0 && (
+                    <div>
+                      <div className="text-[10px] text-gray-400 font-bold mb-1">Aerial Analysis ({satFindings.length} findings)</div>
+                      {satFindings.map((f: A, i: number) => (
+                        <div key={i} className="flex gap-1 items-start text-xs mt-1">
+                          <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
+                          <span className="flex-1">{f.observation}</span>
+                          <RateBtn section="satellite" hash={`finding-${i}`} context={{ observation: f.observation, severity: f.severity }} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Nearby positives/negatives */}
+                  {satVA.nearby_negatives?.map((n: string, i: number) => (
+                    <div key={`neg-${i}`} className="flex items-center gap-1"><span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold">⚠ {n}</span><RateBtn section="satellite" hash={`neg-${i}`} context={{ type: "nearby_negative", value: n }} /></div>
                   ))}
-                  {satelliteImg.vision_analysis.nearby_positives?.map((n: string, i: number) => (
-                    <div key={`pos-${i}`} className="flex items-center gap-1 mt-1"><span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded font-bold">✓ {n}</span><RateBtn section="satellite" hash={`pos-${i}`} context={{ type: "nearby_positive", value: n }} /></div>
+                  {satVA.nearby_positives?.map((n: string, i: number) => (
+                    <div key={`pos-${i}`} className="flex items-center gap-1"><span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded font-bold">✓ {n}</span><RateBtn section="satellite" hash={`pos-${i}`} context={{ type: "nearby_positive", value: n }} /></div>
                   ))}
                 </div>
-              )}
+                );
+              })()}
             </div>
           ) : <p className="text-sm text-gray-400">{hasCoords ? "Not captured." : "Geocode first."}</p>}
         </section>
@@ -1025,7 +1079,7 @@ export default function PropertyDetailPage() {
             <h2 className="font-bold text-sm">Area Risk Intelligence</h2>
             <div className="text-[10px] text-gray-400 mb-2">Suburb and city level risk data from government sources</div>
             <div className="space-y-1">
-              {data.area_risks.filter((r: A) => !["water_quality", "sewerage_quality", "crime_detailed", "social_concerns", "security_community"].includes(r.risk_type)).map((r: A, i: number) => (
+              {data.area_risks.filter((r: A) => !["water_quality", "sewerage_quality"].includes(r.risk_type)).map((r: A, i: number) => (
                 <div key={i} className="flex justify-between items-center text-sm bg-gray-50 rounded p-2">
                   <div>
                     <span className="capitalize font-medium">{r.risk_type.replace(/_/g, " ")}</span>
@@ -1043,12 +1097,107 @@ export default function PropertyDetailPage() {
           </section>
         )}
 
-        {/* Service providers link */}
-        {p.city && (
-          <a href="/admin/services" className="block text-sm text-blue-600 hover:underline mb-2">
-            View service providers in {p.city} &rarr;
-          </a>
-        )}
+        {/* ── MAINTENANCE COST & SERVICE PROVIDERS ── */}
+        {(() => {
+          // Calculate maintenance costs from vision findings
+          let totalMin = 0, totalMax = 0;
+          const repairsByTrade: Record<string, { items: A[]; min: number; max: number }> = {};
+          const tradeMap: Record<string, string> = {
+            roof: 'builder', walls: 'builder', structure: 'builder', extension: 'builder',
+            damp: 'builder', plumbing: 'plumber', electrical: 'electrician',
+            ceiling: 'painter', cosmetic: 'painter', environment: 'builder',
+          };
+
+          for (const f of findings) {
+            const cost = f.estimated_repair_cost_zar || {};
+            if (cost.max > 0) {
+              totalMin += cost.min || 0;
+              totalMax += cost.max || 0;
+              const trade = tradeMap[f.category] || 'builder';
+              if (!repairsByTrade[trade]) repairsByTrade[trade] = { items: [], min: 0, max: 0 };
+              repairsByTrade[trade].items.push(f);
+              repairsByTrade[trade].min += cost.min || 0;
+              repairsByTrade[trade].max += cost.max || 0;
+            }
+          }
+
+          const providers = data.service_providers || [];
+          const hasRepairs = totalMax > 0;
+          const hasProviders = providers.length > 0;
+
+          if (!hasRepairs && !hasProviders) return null;
+
+          return (
+            <section className="bg-white border rounded-lg p-4">
+              <h2 className="font-bold text-sm">Maintenance Cost Estimate & Service Providers</h2>
+              <div className="text-[10px] text-gray-400 mb-3">Based on vision analysis findings — estimates only, get quotes from local providers</div>
+
+              {hasRepairs && (
+                <>
+                  {/* Total cost summary */}
+                  <div className="flex gap-3 mb-3">
+                    <div className="bg-orange-50 rounded-lg p-3 flex-1 text-center">
+                      <div className="text-[10px] text-gray-500">Estimated Total</div>
+                      <div className="text-xl font-bold text-orange-700">{formatZAR(totalMin)} – {formatZAR(totalMax)}</div>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-3 flex-1 text-center">
+                      <div className="text-[10px] text-gray-500">Items Needing Attention</div>
+                      <div className="text-xl font-bold">{Object.values(repairsByTrade).reduce((s, t) => s + t.items.length, 0)}</div>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-3 flex-1 text-center">
+                      <div className="text-[10px] text-gray-500">Trades Needed</div>
+                      <div className="text-xl font-bold">{Object.keys(repairsByTrade).length}</div>
+                    </div>
+                  </div>
+
+                  {/* Breakdown by trade */}
+                  <div className="space-y-2 mb-4">
+                    {Object.entries(repairsByTrade).sort((a, b) => b[1].max - a[1].max).map(([trade, data]) => (
+                      <div key={trade} className="bg-gray-50 rounded p-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-bold capitalize">{trade}</span>
+                          <span className="text-xs text-orange-700 font-bold">{formatZAR(data.min)} – {formatZAR(data.max)}</span>
+                        </div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">{data.items.length} item{data.items.length !== 1 ? 's' : ''}: {data.items.slice(0, 2).map((f: A) => f.observation?.substring(0, 50) + '...').join('; ')}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Service providers */}
+              {hasProviders && (
+                <>
+                  <h3 className="text-xs font-bold mb-2">Local Service Providers in {p.city}</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(() => {
+                      // Show providers matching needed trades first, then others
+                      const neededTrades = new Set(Object.keys(repairsByTrade));
+                      const sorted = [...providers].sort((a: A, b: A) => {
+                        const aNeeded = neededTrades.has(a.trade) ? 1 : 0;
+                        const bNeeded = neededTrades.has(b.trade) ? 1 : 0;
+                        return bNeeded - aNeeded || (b.rating || 0) - (a.rating || 0);
+                      });
+                      return sorted.slice(0, 10).map((sp: A, i: number) => (
+                        <div key={i} className="bg-gray-50 rounded p-2 text-xs">
+                          <div className="flex justify-between">
+                            <span className="font-bold">{sp.name}</span>
+                            {sp.rating && <span className="text-yellow-600">{sp.rating} ★ ({sp.review_count})</span>}
+                          </div>
+                          <div className="flex justify-between mt-0.5">
+                            <span className="capitalize text-gray-500">{sp.trade}</span>
+                            {neededTrades.has(sp.trade) && <span className="text-[9px] bg-orange-100 text-orange-700 px-1 rounded font-bold">NEEDED</span>}
+                          </div>
+                          {sp.phone && <div className="text-gray-400 mt-0.5">{sp.phone}</div>}
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                </>
+              )}
+            </section>
+          );
+        })()}
 
         {/* ── LISTING DATA ── */}
         <section className="bg-white border rounded-lg p-4">

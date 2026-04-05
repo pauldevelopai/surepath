@@ -1206,6 +1206,41 @@ ${(() => {
     '</div>';
 })()}
 
+<!-- MAINTENANCE COST BREAKDOWN -->
+${totalRepairMax > 0 ? (() => {
+  const tradeMap = { roof: 'Roofing', walls: 'Builder', structure: 'Builder', extension: 'Builder', damp: 'Damp Specialist', plumbing: 'Plumber', electrical: 'Electrician', ceiling: 'Painter', cosmetic: 'Painter', environment: 'Builder' };
+  const byTrade = {};
+  for (const f of repairItems) {
+    const trade = tradeMap[f.category] || 'Builder';
+    if (!byTrade[trade]) byTrade[trade] = { items: [], min: 0, max: 0 };
+    byTrade[trade].items.push(f);
+    byTrade[trade].min += f.estimated_repair_cost_zar?.min || 0;
+    byTrade[trade].max += f.estimated_repair_cost_zar?.max || 0;
+  }
+  return `
+<h2>Maintenance Cost Breakdown</h2>
+<p style="font-size:11px;color:#666;margin-bottom:10px">Estimated costs based on visual inspection findings — get quotes from local professionals</p>
+<table>
+  <thead><tr><th>Trade</th><th style="text-align:center">Items</th><th style="text-align:right">Estimated Cost</th></tr></thead>
+  <tbody>
+    ${Object.entries(byTrade).sort((a, b) => b[1].max - a[1].max).map(([trade, data]) => `
+      <tr>
+        <td><strong>${trade}</strong></td>
+        <td style="text-align:center">${data.items.length}</td>
+        <td style="text-align:right;font-weight:bold;color:#E63946">${formatZAR(data.min)} – ${formatZAR(data.max)}</td>
+      </tr>
+    `).join('')}
+    <tr style="border-top:2px solid #0D1B2A">
+      <td><strong>Total</strong></td>
+      <td style="text-align:center"><strong>${repairItems.length}</strong></td>
+      <td style="text-align:right;font-weight:bold;font-size:14px">${formatZAR(totalRepairMin)} – ${formatZAR(totalRepairMax)}</td>
+    </tr>
+  </tbody>
+</table>
+<div style="font-size:10px;color:#888;margin-top:8px">These are estimated ranges based on 2025/2026 South African market rates. Actual costs depend on extent of damage, materials, and contractor rates in your area. Always get 3 quotes.</div>
+`;
+})() : ''}
+
 <!-- LISTING PHOTOS -->
 ${listingPhotos.length > 0 ? `
 <div class="page-break"></div>

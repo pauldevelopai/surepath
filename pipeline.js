@@ -604,6 +604,10 @@ async function generateReport(input, askingPrice, phoneNumber) {
               });
             } catch {}
 
+            // Description
+            const descEl = document.querySelector('[class*="description"], [class*="listing-body"], [class*="property-description"]');
+            r.description = descEl ? descEl.textContent.trim().substring(0, 3000) : null;
+
             return r;
           });
 
@@ -614,7 +618,11 @@ async function generateReport(input, askingPrice, phoneNumber) {
           if (p24Data.streetAddress) {
             address = `${p24Data.streetAddress}, ${address}`;
           }
-          log(1, `P24 Puppeteer: ${photoUrls.length} photos, price: R${askingPrice || '?'}, address: "${address}"`);
+          // Store description if we got one
+          if (p24Data.description && p24Data.description.length > 20 && propertyId) {
+            await pool.query('UPDATE properties SET description = COALESCE(NULLIF(description, $1), $2) WHERE id = $3 AND (description IS NULL OR LENGTH(description) < 10)', ['', p24Data.description, propertyId]).catch(() => {});
+          }
+          log(1, `P24 Puppeteer: ${photoUrls.length} photos, price: R${askingPrice || '?'}, desc: ${p24Data.description ? p24Data.description.length + ' chars' : 'none'}, address: "${address}"`);
         } catch (err) {
           log(1, `P24 Puppeteer failed: ${err.message} — using OG image only`);
           photoUrls = ogImage ? [ogImage] : [];
@@ -866,14 +874,8 @@ async function generateReport(input, askingPrice, phoneNumber) {
       return `/property-images/${filename}`;
     }
 
-    // Store listing photos — skip if already have listing photos for this property
-    const { rows: existingListingPhotos } = await pool.query(
-      "SELECT COUNT(*) AS c FROM property_images WHERE property_id = $1 AND image_type = 'listing'", [propertyId]
-    );
-    if (parseInt(existingListingPhotos[0].c) > 0) {
-      log(4, `Already have ${existingListingPhotos[0].c} listing photos — skipping`);
-    } else if (photoUrls.length > 0) {
-      // Filter out junk images (placeholders, icons, GIFs, SVGs, non-image URLs)
+    // Store listing photos — always try, ON CONFLICT skips duplicates
+    if (photoUrls.length > 0) {
       const validPhotos = photoUrls.filter(url => {
         const lower = url.toLowerCase();
         if (lower.includes('.gif') || lower.includes('.svg')) return false;
@@ -882,14 +884,16 @@ async function generateReport(input, askingPrice, phoneNumber) {
         if (lower.includes('/for-sale/') && !lower.includes('images.')) return false;
         return true;
       });
-      log(4, `Storing ${validPhotos.length} listing photos (filtered ${photoUrls.length - validPhotos.length} junk)`);
+      let added = 0;
       for (const url of validPhotos) {
-        await pool.query(
+        const { rowCount } = await pool.query(
           `INSERT INTO property_images (property_id, source, image_url, image_type)
            VALUES ($1, $2, $3, 'listing') ON CONFLICT (property_id, image_url) DO NOTHING`,
           [propertyId, isProperty24URL(input) ? 'property24' : 'privateproperty', url]
         );
+        if (rowCount > 0) added++;
       }
+      log(4, `${added} new photos added (${validPhotos.length - added} already existed)`);
     }
 
     // Street View — skip if already exists
@@ -944,7 +948,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
 
     // Only analyse photos that don't have vision_analysis yet — filter out junk (placeholders, icons, GIFs, SVGs)
     const { rows: unanalysedPhotos } = await pool.query(
-      `SELECT image_url FROM property_images WHERE property_id = $1 AND image_type = 'listing' AND vision_analysis IS NULL AND image_url LIKE 'http%'
+      `SELECT image_url FROM property_images WHERE property_id = $1 AND source IN ('property24', 'privateproperty') AND vision_analysis IS NULL AND image_url LIKE 'http%'
        AND image_url NOT LIKE '%.gif%' AND image_url NOT LIKE '%.svg%'
        AND image_url NOT LIKE '%NoImage%' AND image_url NOT LIKE '%blank%'
        AND image_url NOT LIKE '%loading%' AND image_url NOT LIKE '%icon%'
