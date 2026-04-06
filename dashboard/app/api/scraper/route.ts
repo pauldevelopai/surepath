@@ -145,6 +145,101 @@ export const POST = withAuth(async (req: NextRequest) => {
           process.exit(0);
         })();
       `];
+    } else if (source === "schools") {
+      scraperName = "schools";
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const { collectForProperty } = require('./collect-schools');
+        (async () => {
+          const { rows } = await pool.query(
+            "SELECT DISTINCT ON (p.suburb, p.city) p.id, p.suburb, p.city FROM properties p WHERE p.lat IS NOT NULL AND p.suburb IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'school_proximity') ORDER BY p.suburb, p.city, p.created_at DESC LIMIT 20"
+          );
+          console.log('Schools: ' + rows.length + ' suburbs to process');
+          for (const prop of rows) {
+            try { await collectForProperty(prop.id); } catch (e) { console.log('ERROR: ' + prop.suburb + ' — ' + e.message); }
+            await new Promise(r => setTimeout(r, 1000));
+          }
+          console.log('=== Schools complete ===');
+          await pool.end();
+        })();
+      `];
+    } else if (source === "climate") {
+      scraperName = "climate";
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const { collectForProperty } = require('./collect-climate');
+        (async () => {
+          const { rows } = await pool.query(
+            "SELECT DISTINCT ON (p.suburb, p.city) p.id, p.suburb, p.city FROM properties p WHERE p.lat IS NOT NULL AND p.suburb IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'climate') ORDER BY p.suburb, p.city, p.created_at DESC LIMIT 30"
+          );
+          console.log('Climate: ' + rows.length + ' suburbs to process');
+          for (const prop of rows) {
+            try { await collectForProperty(prop.id); } catch (e) { console.log('ERROR: ' + prop.suburb + ' — ' + e.message); }
+            await new Promise(r => setTimeout(r, 500));
+          }
+          console.log('=== Climate complete ===');
+          await pool.end();
+        })();
+      `];
+    } else if (source === "loadshedding") {
+      scraperName = "loadshedding";
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const { collectForProperty } = require('./collect-loadshedding');
+        (async () => {
+          const { rows } = await pool.query(
+            "SELECT DISTINCT ON (p.suburb, p.city) p.id, p.suburb, p.city FROM properties p WHERE p.lat IS NOT NULL AND p.suburb IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'loadshedding') ORDER BY p.suburb, p.city, p.created_at DESC LIMIT 20"
+          );
+          console.log('Load Shedding: ' + rows.length + ' suburbs to process');
+          for (const prop of rows) {
+            try { await collectForProperty(prop.id); } catch (e) { console.log('ERROR: ' + prop.suburb + ' — ' + e.message); }
+            await new Promise(r => setTimeout(r, 2000));
+          }
+          console.log('=== Load Shedding complete ===');
+          await pool.end();
+        })();
+      `];
+    } else if (source === "soldprices") {
+      scraperName = "soldprices";
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const { collectForProperty } = require('./collect-sold-prices');
+        (async () => {
+          const { rows } = await pool.query(
+            "SELECT DISTINCT ON (p.suburb, p.city) p.id, p.suburb, p.city FROM properties p WHERE p.suburb IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'sold_prices') ORDER BY p.suburb, p.city, p.created_at DESC LIMIT 15"
+          );
+          console.log('Sold Prices: ' + rows.length + ' suburbs to process');
+          for (const prop of rows) {
+            try { await collectForProperty(prop.id); } catch (e) { console.log('ERROR: ' + prop.suburb + ' — ' + e.message); }
+            await new Promise(r => setTimeout(r, 3000));
+          }
+          console.log('=== Sold Prices complete ===');
+          await pool.end();
+        })();
+      `];
+    } else if (source === "fibre") {
+      scraperName = "fibre";
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const { collectForProperty } = require('./collect-fibre');
+        (async () => {
+          const { rows } = await pool.query(
+            "SELECT DISTINCT ON (p.suburb, p.city) p.id, p.suburb, p.city FROM properties p WHERE p.lat IS NOT NULL AND p.suburb IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'fibre_coverage') ORDER BY p.suburb, p.city, p.created_at DESC LIMIT 20"
+          );
+          console.log('Fibre: ' + rows.length + ' suburbs to process');
+          for (const prop of rows) {
+            try { await collectForProperty(prop.id); } catch (e) { console.log('ERROR: ' + prop.suburb + ' — ' + e.message); }
+            await new Promise(r => setTimeout(r, 1000));
+          }
+          console.log('=== Fibre complete ===');
+          await pool.end();
+        })();
+      `];
     } else if (source === "water") {
       scraperName = "water";
       args = ["-e", `

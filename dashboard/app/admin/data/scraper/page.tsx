@@ -13,6 +13,11 @@ const SCRAPERS = [
   { id: "saps", label: "SAPS Stations", desc: "Police precincts + CPF contacts — enables crime suburb mapping", color: "bg-slate-700", hover: "hover:bg-slate-800" },
   { id: "assist247", label: "Assist247", desc: "Security companies mapped to suburbs — armed response coverage", color: "bg-teal-700", hover: "hover:bg-teal-800" },
   { id: "procompare", label: "Procompare", desc: "Security company ratings — supplements Assist247 coverage data", color: "bg-cyan-700", hover: "hover:bg-cyan-800" },
+  { id: "schools", label: "Schools", desc: "Google Places — school proximity and ratings within 3km", color: "bg-purple-700", hover: "hover:bg-purple-800" },
+  { id: "climate", label: "Climate", desc: "Open-Meteo — 5yr rainfall, humidity, wind, frost, damp risk", color: "bg-orange-700", hover: "hover:bg-orange-800" },
+  { id: "loadshedding", label: "Load Shedding", desc: "EskomSePush — schedules and stage by area", color: "bg-gray-700", hover: "hover:bg-gray-800" },
+  { id: "soldprices", label: "Sold Prices", desc: "Property24 — recent suburb sale prices for AVM", color: "bg-green-700", hover: "hover:bg-green-800" },
+  { id: "fibre", label: "Fibre Coverage", desc: "ISP coverage check — Openserve, Vumatel, Frogfoot", color: "bg-indigo-700", hover: "hover:bg-indigo-800" },
 ];
 
 export default function ScraperPage() {
@@ -59,14 +64,14 @@ export default function ScraperPage() {
   }
 
   async function runAll() {
-    await Promise.all(
-      SCRAPERS.filter(s => !isRunning(s.id)).map(s =>
-        fetch("/api/scraper", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "start", source: s.id }),
-        })
-      )
-    );
+    const toStart = SCRAPERS.filter(s => !isRunning(s.id));
+    for (const s of toStart) {
+      fetch("/api/scraper", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "start", source: s.id }),
+      });
+      await new Promise(r => setTimeout(r, 500)); // stagger launches by 500ms
+    }
     load();
   }
 
@@ -93,6 +98,11 @@ export default function ScraperPage() {
     saps:       { pending: (1154 - (s.saps_total || 0)), done: s.saps_total || 0,                unit: "stations" },
     assist247:  { pending: 0,                       done: s.assist247_suburbs || 0,               unit: "suburbs" },
     procompare: { pending: 0,                       done: s.procompare_companies || 0,            unit: "companies" },
+    schools:    { pending: s.schools_pending || 0, done: s.schools_total || 0,                   unit: "suburbs" },
+    climate:    { pending: s.climate_pending || 0, done: s.climate_total || 0,                   unit: "suburbs" },
+    loadshedding: { pending: 0,                    done: s.loadshedding_total || 0,              unit: "areas" },
+    soldprices: { pending: 0,                      done: s.soldprices_total || 0,                unit: "suburbs" },
+    fibre:      { pending: 0,                      done: s.fibre_total || 0,                     unit: "areas" },
   };
 
   return (
