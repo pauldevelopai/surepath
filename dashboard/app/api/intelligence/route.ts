@@ -283,6 +283,86 @@ export const GET = withAuth(async (req: NextRequest) => {
     }
   }
 
+  // ─── Daily Check: 10 random items from across the system to verify ──
+  if (section === "daily_check") {
+    const items: Record<string, unknown>[] = [];
+
+    // 2-3 vision findings with photos
+    const visionItems = await query(`
+      SELECT pi.id AS image_id, pi.image_url, pi.property_id,
+             f->>'category' AS category, f->>'severity' AS severity,
+             f->>'observation' AS observation,
+             p.address_raw, p.suburb, p.city
+      FROM property_images pi
+      JOIN properties p ON p.id = pi.property_id,
+      jsonb_array_elements(CASE WHEN jsonb_typeof(pi.vision_analysis->'findings') = 'array' THEN pi.vision_analysis->'findings' ELSE '[]'::jsonb END) AS f
+      WHERE pi.vision_analysis IS NOT NULL AND f->>'observation' IS NOT NULL
+      ORDER BY random() LIMIT 3
+    `);
+    for (const v of visionItems) {
+      items.push({ type: "vision_finding", ...v,
+        question: `Nico saw "${v.observation}" at ${v.address_raw || 'a property'}. Is this observation correct and useful?` });
+    }
+
+    // 2-3 report decisions
+    const reportItems = await query(`
+      SELECT pr.id, pr.decision, pr.decision_reasoning, pr.asking_price, pr.avm_low, pr.avm_high,
+             p.address_raw, p.suburb, p.city
+      FROM property_reports pr JOIN properties p ON p.id = pr.property_id
+      WHERE pr.status = 'complete' AND pr.decision_reasoning IS NOT NULL
+      ORDER BY random() LIMIT 3
+    `);
+    for (const r of reportItems) {
+      items.push({ type: "report_decision", ...r,
+        question: `Nico said "${r.decision}" for ${r.address_raw} because: "${r.decision_reasoning}". Does this make sense?` });
+    }
+
+    // 2 knowledge base entries
+    const kbItems = await query(`SELECT id, name, description, category, severity, cost_min_zar, cost_max_zar, sa_context, status FROM rag_knowledge_entries ORDER BY random() LIMIT 2`).catch(() => []);
+    for (const k of kbItems) {
+      items.push({ type: "knowledge_entry", ...k,
+        question: `KB entry: "${k.name}" — severity ${k.severity}/5, ${k.cost_min_zar ? 'R' + k.cost_min_zar + '–R' + k.cost_max_zar : 'no cost set'}. Is this accurate?` });
+    }
+
+    // 2 holly evidence items (if they exist)
+    const hollyItems = await query(`
+      SELECT he.id, he.observation, he.category, he.severity, he.confidence_tier, he.tier_reason,
+             he.output_language, he.limitations, he.image_url, p.address_raw, p.suburb
+      FROM holly_evidence he JOIN properties p ON p.id = he.property_id
+      ORDER BY random() LIMIT 2
+    `).catch(() => []);
+    for (const h of hollyItems) {
+      items.push({ type: "holly_evidence", ...h,
+        question: `Nico (Tier ${h.confidence_tier}) said: "${(h.output_language || '').substring(0, 150)}..." Is this the right call?` });
+    }
+
+    // Shuffle and take 10
+    const shuffled = items.sort(() => Math.random() - 0.5).slice(0, 10);
+    return NextResponse.json({ daily_check: shuffled });
+  }
+
+  // ─── Prompts: show all the prompts Nico uses ───────────────────────
+  if (section === "prompts") {
+    // Read prompts from the actual source files
+    const fs = await import("fs");
+    const path = await import("path");
+    const projectDir = path.default.resolve(process.cwd(), "..");
+
+    const prompts: Record<string, string>[] = [];
+    try {
+      const visionJs = fs.default.readFileSync(path.default.join(projectDir, "vision.js"), "utf8");
+      const hollyMatch = visionJs.match(/const HOLLY_SYSTEM_PROMPT = `([\s\S]*?)`;/);
+      if (hollyMatch) prompts.push({ name: "Vision Analysis (Holly/Nico)", source: "vision.js", prompt: hollyMatch[1].substring(0, 3000) });
+    } catch {}
+    try {
+      const synthJs = fs.default.readFileSync(path.default.join(projectDir, "synthesis.js"), "utf8");
+      const synthMatch = synthJs.match(/const SYNTHESIS_SYSTEM_PROMPT = `([\s\S]*?)`;/);
+      if (synthMatch) prompts.push({ name: "Report Synthesis", source: "synthesis.js", prompt: synthMatch[1].substring(0, 3000) });
+    } catch {}
+
+    return NextResponse.json({ prompts });
+  }
+
   return NextResponse.json({ ok: true, message: "Use ?section= param for specific data" });
 });
 
@@ -321,6 +401,22 @@ export const POST = withAuth(async (req: NextRequest) => {
       `UPDATE rag_knowledge_entries SET status = CASE WHEN status='active' THEN 'draft' ELSE 'active' END, updated_at=NOW() WHERE id=$1`,
       [id]
     );
+    return NextResponse.json({ ok: true });
+  }
+
+  // ─── Daily Check: confirm or reject an item ─────────────────────────
+  if (action === "confirm_check") {
+    const { item_type, item_id, verdict, reason, property_id } = body;
+    // verdict: "correct" | "incorrect" | "unsure"
+    await query(
+      `INSERT INTO data_feedback (property_id, section, field_name, feedback, rating, page_url)
+       VALUES ($1, $2, $3, $4, $5, '/admin/intelligence')`,
+      [property_id || null, `daily_check:${item_type}`, item_id ? String(item_id) : null, reason || verdict, verdict]
+    );
+    // If it's a KB entry marked incorrect, flag it
+    if (item_type === "knowledge_entry" && verdict === "incorrect" && item_id) {
+      await query("UPDATE rag_knowledge_entries SET status = 'draft', updated_at = NOW() WHERE id = $1", [item_id]);
+    }
     return NextResponse.json({ ok: true });
   }
 
