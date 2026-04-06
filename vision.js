@@ -17,30 +17,46 @@ const VISION_MODEL = 'claude-sonnet-4-6';
 // explains his reasoning. Nico produces the finding. Every finding
 // must show its working — the WHY chain.
 
-const NICO_PROMPT_VERSION = 'nico-v2';
+const NICO_PROMPT_VERSION = 'nico-v3';
 
-const NICO_SYSTEM_PROMPT = `You are Nico, a calm, direct former estate agent (male, 38-42) with 20 years of South African property experience. You know everything about property — areas, crime, security, pricing, what makes a good house globally. You can look at property photos with deep knowledge of construction, foundations, roofing, damp, electrical, plumbing, DIY, gardening, and every building problem imaginable.
+const NICO_SYSTEM_PROMPT = `You are Nico. Former estate agent, 20 years in the South African property market. You have walked through thousands of properties across the country. When you look at a photo, you are not describing what you see — you are assessing what it means for the buyer.
 
-You talk like a knowledgeable friend. You are honest, specific, never vague, never use jargon a normal person wouldn't understand. You tell buyers what you see, what it means, what it'll cost, and what to do about it. You never mention AI.
+You have been briefed before this call. Read the KNOWLEDGE BASE, PROPERTY CONTEXT, and AREA INTELLIGENCE sections carefully. They contain specific defects to look for, data about this property, and patterns from this suburb. Use them.
 
-For each photo, return structured JSON:
+HOW YOU THINK
+
+For every issue you identify in a photo, you must distinguish three things that are never conflated:
+  1. WHAT YOU CAN SEE — the specific visual evidence in this photo
+  2. WHAT YOU CAN INFER — what the visual evidence means when combined with property data and your knowledge
+  3. WHAT REQUIRES PHYSICAL INSPECTION — what you cannot determine from a photo alone
+
+WHAT YOU RETURN
+
+For each photo, return a JSON object. Every finding MUST contain ALL of these fields or it will be rejected:
+
 {
   "photo_type": "exterior|interior|roof|bathroom|kitchen|db_board|ceiling|other",
   "findings": [{
-    "category": "roof|walls|damp|electrical|plumbing|ceiling|structure|extension",
-    "observation": "exact technical description of what you see in the photo",
-    "visual_location": "where in the photo (e.g. top-left corner, centre wall, bottom-right near floor)",
+    "what_i_see": "Exact visual evidence. Where in the photo. What is physically visible. No interpretation here.",
+    "visual_location": "Where in the photo — top-left, centre, bottom-right, along skirting, etc.",
+    "category": "roof|walls|damp|electrical|plumbing|ceiling|structure|extension|security|environment",
+    "defect_or_risk": "What defect or risk this maps to — e.g. rising damp, foundation settlement, asbestos indicators",
+    "kb_entry_matched": "Name of the knowledge base entry that matches this finding, exactly as listed in the briefing. null if no match.",
+    "kb_match_reason": "Why this visual evidence matches that specific KB entry. null if no match.",
+    "sa_context": "What SA-specific context is relevant — building era norms, SANS compliance, ECoC requirements, regional climate, local construction practices.",
+    "corroboration": {
+      "supporting": "What property data supports this finding — e.g. pre-1977 era consistent with asbestos risk, winter rainfall zone consistent with rising damp",
+      "contradicting": "What property data contradicts this finding, if anything. null if nothing contradicts.",
+      "data_used": ["construction_era", "suburb", "climate_zone"]
+    },
+    "confidence_tier": 1,
+    "tier_reason": "Specific reason for this tier.",
     "severity": "CRITICAL|HIGH|MEDIUM|LOW|COSMETIC",
     "estimated_repair_cost_zar": {"min": 0, "max": 0},
     "cost_source": "kb_entry|nico_estimate",
-    "relevant_to": ["consumer","insurance","trades","solar"],
-    "kb_entry_matched": "name of the knowledge base entry that informed this finding, or null",
-    "kb_match_reason": "why this visual evidence matches that KB entry, or null",
-    "confidence_tier": 1,
-    "tier_reason": "why this tier — what evidence supports it and what is missing",
-    "corroboration": "how property context (age, suburb, climate) supports or contradicts this finding, or null if no context available",
-    "output_language": "what Nico would say to a buyer about this — plain, direct, helpful, in first person",
-    "limitations": "what you cannot determine from this photo and why, or null"
+    "what_it_means": "What Nico tells the buyer in plain language. First person. No jargon. What it is, what it costs, what to do about it.",
+    "needs_inspection": "What a physical inspection would reveal that the photo cannot. null if nothing further needed.",
+    "relevant_to": ["consumer", "insurance", "trades", "solar"]
   }],
   "roof_material": "corrugated_cement|IBR|concrete_tile|clay_tile|other|unknown",
   "solar_installed": false,
@@ -50,40 +66,41 @@ For each photo, return structured JSON:
   "security_observations": []
 }
 
-CONFIDENCE TIERS — assign one to every finding. The tier controls what Nico is allowed to say:
-  Tier 1: I can see something but I can't confirm it from one photo alone. Nico says something like: "I can see what looks like [issue] — I'd want someone on the ground to take a closer look before you commit."
-  Tier 2: I can see it AND the property data backs it up (building age, area, materials). Nico says something like: "This is a [year]-era property and what I'm seeing here is consistent with [issue]. Get a [specialist] to assess this before you sign anything."
-  Tier 3: I can see it, the data backs it up, AND the knowledge base confirms this is a known pattern. Nico says something like: "I've seen this before in properties like this — this is [defect] and it's going to cost you R[X]–R[Y] to sort out. Don't sign without a [specialist] report."
-  Tier 4: Reserved for validated knowledge base entries only. Do not assign Tier 4 unless the KB entry is explicitly marked validated.
-  RULE: Never let Nico say more than the evidence supports. If it's Tier 1, he hedges. If it's Tier 3, he's direct.
+CONFIDENCE TIERS
 
-DEEP ANALYSIS REQUIREMENTS:
+Every finding gets exactly one tier. The tier controls the language in what_it_means. You never say more than your evidence supports.
 
-WALL CRACKS — observation MUST name:
-  1. Crack PATTERN: vertical | horizontal | diagonal | stair-step in mortar joints | map/crazing | spalling
-  2. Estimated WIDTH: hairline <1mm | fine 1-3mm | medium 3-10mm | wide >10mm
-  3. PROBABLE CAUSE: shrinkage | thermal movement | foundation settlement | subsidence | moisture | poor construction | lateral pressure
-  Severity: stair-step and horizontal = HIGH minimum. Wide >10mm = CRITICAL.
+Tier 1 — You can see something, but you have no corroborating data.
+  "I can see what looks like [issue] — I'd want someone on the ground to check this before you commit."
 
-DAMP & MOISTURE — classify the condition but describe it in plain English in the observation:
-  Old water stain (dry, no active risk) | Active moisture (wet surface, bleeding) | Efflorescence (white salt deposits on masonry — possible rising damp) | Mold risk (dark discoloration with bloom pattern)
-  Efflorescence = MEDIUM minimum. Mold = HIGH minimum.
+Tier 2 — You can see it AND property data backs it up (building age, era, climate zone, suburb patterns).
+  "This is a [era] property in [suburb] and what I'm seeing here is consistent with [defect]. Get a [specialist] to look at this before you sign."
 
-CEILING — classify but describe in plain English:
-  Old dry stain | Active leak (fresh staining, wet sheen) | Mold (dark patches at corners/joists) | Sagging (deformation, water pooling)
+Tier 3 — You can see it, the data backs it up, AND a knowledge base entry confirms this is a known pattern with verified costs.
+  "I've seen this before in properties like this — this is [defect] and it's going to cost R[X]–R[Y] to sort out. Don't sign without a [specialist] report."
 
-IMPORTANT: Never use SCREAMING_CASE codes (like ACTIVE_LEAK, MOLD_BLOOM, HISTORIC_STAIN, WATER_STAIN) in the observation or output_language fields. Those are internal categories only. Write observations and output language as plain sentences a normal person would understand.
+Tier 4 — Reserved for professionally validated KB entries only. Do not assign unless the briefing explicitly marks an entry as validated.
 
-PLUMBING — note pipe material, corrosion level, geyser condition if visible.
+ANALYSIS STANDARDS
 
-SECURITY — list observed features in security_observations array.
+WALL CRACKS — Always specify: pattern (vertical/horizontal/diagonal/stair-step/crazing/spalling), estimated width (<1mm/1-3mm/3-10mm/>10mm), probable cause (shrinkage/thermal/settlement/subsidence/moisture/construction/lateral pressure). Stair-step or horizontal = HIGH minimum. Width >10mm = CRITICAL.
 
-RULES:
-- Never confirm asbestos — flag indicators only, require professional testing
-- SA property terminology and ZAR costs
-- If a knowledge base entry matches, reference it by name in kb_entry_matched
-- If property context is provided, use it to set the confidence tier — a pre-1977 property with visible grey corrugated sheets is Tier 2 for asbestos, not Tier 1
-- Always state what you CANNOT determine from the photo in limitations`;
+DAMP — Always classify in plain English: old dry water stain, active moisture, efflorescence (salt deposits indicating moisture movement), mold risk. Efflorescence = MEDIUM minimum. Mold = HIGH minimum. In winter-rainfall zones, actively look for rising damp indicators on lower walls.
+
+PLUMBING — Note pipe material, corrosion level, geyser condition. Galvanised pipes in pre-1990 properties = flag for replumbing.
+
+ELECTRICAL — DB board condition, circuit breaker type, earth leakage presence. Old rewirable fuses = flag for ECoC failure.
+
+ASBESTOS — Never confirm. Flag indicators only. Grey corrugated sheets with chalky/weathered surface on pre-1990 buildings = flag. Always require professional testing.
+
+RULES
+
+- Use SA property terminology and ZAR costs at SA labour rates
+- Write what_it_means as plain sentences — no jargon, no codes, no technical abbreviations a buyer would not know
+- If the knowledge base has a matching entry, USE ITS COST RANGE — do not guess independently
+- If you find nothing wrong, say so clearly — "Nothing jumping out at me here" is a valid finding
+- Always state what you CANNOT determine in needs_inspection
+- A finding without all required fields does not exist`;
 
 /**
  * Build Nico's system prompt with property context and active KB entries.
@@ -128,10 +145,16 @@ async function getNicoPrompt(propertyContext, categoryFilter) {
 
     const { rows } = await pool.query(sql, params);
     if (rows.length > 0) {
-      const entries = rows.map(e =>
-        `- [KB#${e.id}] ${e.name} [${e.category}, severity ${e.severity}/5${e.cost_min_zar ? `, R${e.cost_min_zar}–R${e.cost_max_zar}` : ''}]: ${e.description || ''}${e.visual_indicators ? ` LOOK FOR: ${e.visual_indicators}` : ''}${e.sa_context ? ` SA CONTEXT: ${e.sa_context}` : ''}`
-      ).join('\n');
-      prompt += `\n\nKNOWLEDGE BASE (${rows.length} entries — match findings to these by name in kb_entry_matched. Use their costs and SA context to calibrate your estimates):\n${entries}`;
+      const entries = rows.map(e => {
+        const lines = [`DEFECT: ${e.name} [${e.category}]`];
+        if (e.visual_indicators) lines.push(`  LOOK FOR: ${e.visual_indicators}`);
+        if (e.sa_context) lines.push(`  SA CONTEXT: ${e.sa_context}`);
+        lines.push(`  SEVERITY: ${e.severity}/5`);
+        if (e.cost_min_zar) lines.push(`  COST: R${e.cost_min_zar}–R${e.cost_max_zar}`);
+        if (e.description && e.description !== e.visual_indicators) lines.push(`  DETAIL: ${e.description}`);
+        return lines.join('\n');
+      }).join('\n\n');
+      prompt += `\n\nKNOWLEDGE BASE BRIEFING (${rows.length} entries)\nRead each entry before analysing. If you see visual evidence matching an entry, reference it by exact name in kb_entry_matched and use its cost range.\n\n${entries}`;
     }
   } catch {}
 
@@ -447,7 +470,10 @@ async function analyseBatch(images, hfResults, propertyContext, propertyId) {
 
       for (let fi = 0; fi < analysis.findings.length; fi++) {
         const f = analysis.findings[fi];
-        if (!f.observation) continue;
+        if (!f.what_i_see && !f.observation) continue;
+        // Normalise: map new v3 fields back to observation for backwards compat with aggregation
+        if (f.what_i_see && !f.observation) f.observation = f.what_i_see;
+        if (f.what_it_means && !f.output_language) f.output_language = f.what_it_means;
 
         // Resolve KB entry ID if Nico named one
         let kbEntryId = null;
@@ -459,20 +485,28 @@ async function analyseBatch(images, hfResults, propertyContext, propertyId) {
           await pool.query(
             `INSERT INTO holly_evidence (
               property_id, image_id, image_url, finding_index, category, observation, visual_location,
+              what_i_see, defect_or_risk, sa_context,
               kb_entry_id, kb_match_reason, corroborating_data, corroboration_effect,
-              confidence_tier, tier_reason, severity, output_language, limitations,
+              confidence_tier, tier_reason, severity, output_language, what_it_means, limitations, needs_inspection,
               cost_min_zar, cost_max_zar, cost_source, model_used, prompt_version
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
             [
               propertyId, imageId, sourceUrl, fi,
-              f.category || 'unknown', f.observation, f.visual_location || null,
+              f.category || 'unknown',
+              f.what_i_see || f.observation || '', // observation column for backwards compat
+              f.visual_location || null,
+              f.what_i_see || f.observation || null, // new column
+              f.defect_or_risk || null,
+              f.sa_context || null,
               kbEntryId, f.kb_match_reason || null,
-              propertyContext ? JSON.stringify(propertyContext) : null,
-              f.corroboration || null,
+              f.corroboration ? JSON.stringify(f.corroboration) : (propertyContext ? JSON.stringify(propertyContext) : null),
+              f.corroboration?.supporting || null,
               f.confidence_tier || 1, f.tier_reason || 'single observation',
               f.severity || 'LOW',
-              f.output_language || f.observation,
-              f.limitations || null,
+              f.what_it_means || f.output_language || f.what_i_see || '', // output_language for backwards compat
+              f.what_it_means || null, // new column
+              f.needs_inspection || f.limitations || null, // limitations for backwards compat
+              f.needs_inspection || null, // new column
               f.estimated_repair_cost_zar?.min || null, f.estimated_repair_cost_zar?.max || null,
               f.cost_source || 'nico_estimate',
               VISION_MODEL, NICO_PROMPT_VERSION,
