@@ -289,7 +289,7 @@ export const GET = withAuth(async (req: NextRequest) => {
 
     // 2-3 vision findings with photos
     const visionItems = await query(`
-      SELECT pi.id AS image_id, pi.image_url, pi.property_id,
+      SELECT pi.id AS image_id, pi.image_url, pi.property_id, pi.analysed_at AS created_at,
              f->>'category' AS category, f->>'severity' AS severity,
              f->>'observation' AS observation,
              p.address_raw, p.suburb, p.city
@@ -300,45 +300,105 @@ export const GET = withAuth(async (req: NextRequest) => {
       ORDER BY random() LIMIT 3
     `);
     for (const v of visionItems) {
-      items.push({ type: "vision_finding", ...v,
-        question: `Nico saw "${v.observation}" at ${v.address_raw || 'a property'}. Is this observation correct and useful?` });
+      items.push({ type: "vision_finding", ...v });
     }
 
-    // 2-3 report decisions
     const reportItems = await query(`
-      SELECT pr.id, pr.decision, pr.decision_reasoning, pr.asking_price, pr.avm_low, pr.avm_high,
+      SELECT pr.id, pr.property_id, pr.decision, pr.decision_reasoning, pr.asking_price,
+             pr.avm_low, pr.avm_high, pr.created_at,
              p.address_raw, p.suburb, p.city
       FROM property_reports pr JOIN properties p ON p.id = pr.property_id
       WHERE pr.status = 'complete' AND pr.decision_reasoning IS NOT NULL
       ORDER BY random() LIMIT 3
     `);
     for (const r of reportItems) {
-      items.push({ type: "report_decision", ...r,
-        question: `Nico said "${r.decision}" for ${r.address_raw} because: "${r.decision_reasoning}". Does this make sense?` });
+      items.push({ type: "report_decision", ...r });
     }
 
-    // 2 knowledge base entries
-    const kbItems = await query(`SELECT id, name, description, category, severity, cost_min_zar, cost_max_zar, sa_context, status FROM rag_knowledge_entries ORDER BY random() LIMIT 2`).catch(() => []);
+    const kbItems = await query(`SELECT id, name, description, category, severity, cost_min_zar, cost_max_zar, sa_context, status, created_at FROM rag_knowledge_entries ORDER BY random() LIMIT 2`).catch(() => []);
     for (const k of kbItems) {
-      items.push({ type: "knowledge_entry", ...k,
-        question: `KB entry: "${k.name}" — severity ${k.severity}/5, ${k.cost_min_zar ? 'R' + k.cost_min_zar + '–R' + k.cost_max_zar : 'no cost set'}. Is this accurate?` });
+      items.push({ type: "knowledge_entry", ...k });
     }
 
-    // 2 holly evidence items (if they exist)
-    const hollyItems = await query(`
-      SELECT he.id, he.observation, he.category, he.severity, he.confidence_tier, he.tier_reason,
-             he.output_language, he.limitations, he.image_url, p.address_raw, p.suburb
+    const evidenceItems = await query(`
+      SELECT he.id, he.property_id, he.observation, he.category, he.severity, he.confidence_tier,
+             he.tier_reason, he.output_language, he.limitations, he.image_url, he.created_at,
+             p.address_raw, p.suburb
       FROM holly_evidence he JOIN properties p ON p.id = he.property_id
       ORDER BY random() LIMIT 2
     `).catch(() => []);
-    for (const h of hollyItems) {
-      items.push({ type: "holly_evidence", ...h,
-        question: `Nico (Tier ${h.confidence_tier}) said: "${(h.output_language || '').substring(0, 150)}..." Is this the right call?` });
+    for (const h of evidenceItems) {
+      items.push({ type: "nico_evidence", ...h });
     }
 
     // Shuffle and take 10
     const shuffled = items.sort(() => Math.random() - 0.5).slice(0, 10);
     return NextResponse.json({ daily_check: shuffled });
+  }
+
+  // ─── Data Sources: every data element and its RAG status ────────────
+  if (section === "data_sources") {
+    const [propCoverage, areaCounts, imageCounts, otherCounts] = await Promise.all([
+      query(`SELECT
+        COUNT(*) as total, COUNT(lat) as geocoded, COUNT(construction_era) as with_era,
+        COUNT(roof_material) as with_roof, COUNT(suburb_crime_score) as with_crime_score,
+        COUNT(solar_ghi_kwh_year) as with_solar, COUNT(water_quality_score) as with_water,
+        COUNT(gvr_source) as with_gvr, COUNT(description) as with_description,
+        COUNT(asking_price) as with_price, COUNT(bedrooms) as with_bedrooms
+      FROM properties`),
+      query(`SELECT risk_type, COUNT(DISTINCT (suburb || '|' || city)) as suburbs FROM area_risk_data GROUP BY risk_type`),
+      query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE vision_analysis IS NOT NULL) as analysed FROM property_images`),
+      Promise.all([
+        query(`SELECT COUNT(DISTINCT property_id) as c FROM deeds_data`).then(r => r[0]?.c || 0),
+        query(`SELECT COUNT(*) as c FROM crime_incidents`).then(r => r[0]?.c || 0),
+        query(`SELECT COUNT(*) as c FROM saps_precincts`).catch(() => [{ c: 0 }]).then(r => r[0]?.c || 0),
+        query(`SELECT COUNT(*) as c FROM security_companies`).catch(() => [{ c: 0 }]).then(r => r[0]?.c || 0),
+        query(`SELECT COUNT(*) as c FROM property_reports WHERE status = 'complete'`).then(r => r[0]?.c || 0),
+        query(`SELECT COUNT(*) as c FROM holly_evidence`).catch(() => [{ c: 0 }]).then(r => r[0]?.c || 0),
+        query(`SELECT COUNT(*) as c FROM rag_knowledge_entries WHERE status = 'active'`).catch(() => [{ c: 0 }]).then(r => r[0]?.c || 0),
+        query(`SELECT COUNT(*) as c FROM data_feedback`).catch(() => [{ c: 0 }]).then(r => r[0]?.c || 0),
+      ]),
+    ]);
+
+    const areaMap: Record<string, number> = {};
+    for (const r of areaCounts) areaMap[r.risk_type] = Number(r.suburbs);
+    const [deeds, crimes, precincts, securityCos, reports, evidence, kbActive, feedback] = otherCounts;
+    const p = propCoverage[0];
+    const img = imageCounts[0];
+
+    return NextResponse.json({ data_sources: [
+      { name: "Properties", count: p.total, in_rag: true, detail: "Base property records" },
+      { name: "Listings (description)", count: p.with_description, in_rag: true, detail: "Property descriptions from portals" },
+      { name: "Prices", count: p.with_price, in_rag: true, detail: "Asking prices from listings" },
+      { name: "Geocoded", count: p.geocoded, in_rag: true, detail: "Lat/lng — enables all location-based data" },
+      { name: "Photos (total)", count: img.total, in_rag: false, detail: "Raw photos from listings" },
+      { name: "Photos (analysed)", count: img.analysed, in_rag: true, detail: "Vision analysis completed" },
+      { name: "Vision evidence", count: evidence, in_rag: true, detail: "Structured WHY chain per finding" },
+      { name: "Reports", count: reports, in_rag: true, detail: "Complete property reports with decisions" },
+      { name: "Knowledge base", count: kbActive, in_rag: true, detail: "Active entries in Nico's prompt" },
+      { name: "Deeds", count: deeds, in_rag: true, detail: "Ownership and municipal values" },
+      { name: "Construction era", count: p.with_era, in_rag: true, detail: "Building age — drives risk matrix" },
+      { name: "Roof material", count: p.with_roof, in_rag: true, detail: "Identified from vision analysis" },
+      { name: "Crime incidents", count: crimes, in_rag: true, detail: "SAPS data from CrimeHub" },
+      { name: "Crime by suburb", count: p.with_crime_score, in_rag: true, detail: "Properties with crime scores" },
+      { name: "Crime detailed", count: areaMap.crime_detailed || 0, in_rag: true, detail: "Suburbs with full crime breakdown" },
+      { name: "Security coverage", count: areaMap.security_community || 0, in_rag: true, detail: "Armed response + CPF + NHW" },
+      { name: "Security companies", count: securityCos, in_rag: false, detail: "Company records (feeds coverage)" },
+      { name: "SAPS precincts", count: precincts, in_rag: false, detail: "Police station records" },
+      { name: "Solar data", count: p.with_solar, in_rag: true, detail: "PVGIS irradiance measurements" },
+      { name: "Water quality", count: p.with_water, in_rag: true, detail: "DWS Blue/Green Drop scores" },
+      { name: "Water detailed", count: areaMap.water_quality || 0, in_rag: true, detail: "Suburbs with water data" },
+      { name: "GVR municipal", count: p.with_gvr, in_rag: true, detail: "Valuation roll data" },
+      { name: "Dolomite risk", count: areaMap.dolomite || 0, in_rag: true, detail: "Geological risk areas" },
+      { name: "Social concerns", count: areaMap.social_concerns || 0, in_rag: false, detail: "Google Places review sentiment" },
+      { name: "Schools", count: areaMap.school_proximity || 0, in_rag: true, detail: "School proximity scores" },
+      { name: "Climate", count: areaMap.climate || 0, in_rag: true, detail: "Rainfall, humidity, damp risk" },
+      { name: "Load shedding", count: areaMap.loadshedding || 0, in_rag: false, detail: "Schedule data (when available)" },
+      { name: "Sold prices", count: areaMap.sold_prices || 0, in_rag: true, detail: "Suburb sale price history" },
+      { name: "Fibre coverage", count: areaMap.fibre_coverage || 0, in_rag: false, detail: "ISP availability" },
+      { name: "Sewerage quality", count: areaMap.sewerage_quality || 0, in_rag: true, detail: "DWS Green Drop scores" },
+      { name: "User feedback", count: feedback, in_rag: true, detail: "Your corrections and confirmations" },
+    ]});
   }
 
   // ─── Prompts: show all the prompts Nico uses ───────────────────────
@@ -351,8 +411,8 @@ export const GET = withAuth(async (req: NextRequest) => {
     const prompts: Record<string, string>[] = [];
     try {
       const visionJs = fs.default.readFileSync(path.default.join(projectDir, "vision.js"), "utf8");
-      const hollyMatch = visionJs.match(/const HOLLY_SYSTEM_PROMPT = `([\s\S]*?)`;/);
-      if (hollyMatch) prompts.push({ name: "Vision Analysis (Holly/Nico)", source: "vision.js", prompt: hollyMatch[1].substring(0, 3000) });
+      const nicoVisionMatch = visionJs.match(/const NICO_SYSTEM_PROMPT = `([\s\S]*?)`;/);
+      if (nicoVisionMatch) prompts.push({ name: "Nico — Vision Analysis", source: "vision.js", prompt: nicoVisionMatch[1].substring(0, 3000) });
     } catch {}
     try {
       const synthJs = fs.default.readFileSync(path.default.join(projectDir, "synthesis.js"), "utf8");

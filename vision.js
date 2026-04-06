@@ -12,16 +12,16 @@ const client = new Anthropic();
 const BATCH_SIZE = 6;
 const VISION_MODEL = 'claude-sonnet-4-6';
 
-// ─── Holly: the vision reasoning system ───────────────────────────────
-// Holly sees the photo. Holly matches it against what she knows. Holly
-// explains her reasoning. Holly produces the finding. Every finding
+// ─── Nico: the vision reasoning system ────────────────────────────────
+// Nico sees the photo. Nico matches it against what he knows. Nico
+// explains his reasoning. Nico produces the finding. Every finding
 // must show its working — the WHY chain.
 
-const HOLLY_PROMPT_VERSION = 'holly-v2-nico';
+const NICO_PROMPT_VERSION = 'nico-v2';
 
-const HOLLY_SYSTEM_PROMPT = `You are Holly, Surepath's property vision analyst. You have 20 years of South African property inspection experience. You analyse property photos and produce findings that show their full reasoning.
+const NICO_SYSTEM_PROMPT = `You are Nico, a calm, direct former estate agent (male, 38-42) with 20 years of South African property experience. You know everything about property — areas, crime, security, pricing, what makes a good house globally. You can look at property photos with deep knowledge of construction, foundations, roofing, damp, electrical, plumbing, DIY, gardening, and every building problem imaginable.
 
-Your output_language field is written in Nico's voice — a calm, direct former estate agent (male, 38-42) who talks like a knowledgeable friend. Nico is honest, specific, never vague, never uses jargon a normal person wouldn't understand. He tells you what he sees, what it means, what it'll cost, and what to do about it. He never mentions AI.
+You talk like a knowledgeable friend. You are honest, specific, never vague, never use jargon a normal person wouldn't understand. You tell buyers what you see, what it means, what it'll cost, and what to do about it. You never mention AI.
 
 For each photo, return structured JSON:
 {
@@ -32,7 +32,7 @@ For each photo, return structured JSON:
     "visual_location": "where in the photo (e.g. top-left corner, centre wall, bottom-right near floor)",
     "severity": "CRITICAL|HIGH|MEDIUM|LOW|COSMETIC",
     "estimated_repair_cost_zar": {"min": 0, "max": 0},
-    "cost_source": "kb_entry|holly_estimate",
+    "cost_source": "kb_entry|nico_estimate",
     "relevant_to": ["consumer","insurance","trades","solar"],
     "kb_entry_matched": "name of the knowledge base entry that informed this finding, or null",
     "kb_match_reason": "why this visual evidence matches that KB entry, or null",
@@ -85,14 +85,14 @@ RULES:
 - Always state what you CANNOT determine from the photo in limitations`;
 
 /**
- * Build Holly's system prompt with property context and active KB entries.
+ * Build Nico's system prompt with property context and active KB entries.
  * @param {object} propertyContext - { construction_era, suburb, city, roof_material, ... }
  * @param {string[]} categoryFilter - optional, limit KB entries to these categories
  */
-async function getHollyPrompt(propertyContext, categoryFilter) {
-  let prompt = HOLLY_SYSTEM_PROMPT;
+async function getNicoPrompt(propertyContext, categoryFilter) {
+  let prompt = NICO_SYSTEM_PROMPT;
 
-  // Append property context so Holly can corroborate findings
+  // Append property context so Nico can corroborate findings
   if (propertyContext && Object.keys(propertyContext).length > 0) {
     const ctx = [];
     if (propertyContext.construction_era) ctx.push(`Construction era: ${propertyContext.construction_era}`);
@@ -140,9 +140,9 @@ async function getHollyPrompt(propertyContext, categoryFilter) {
 }
 
 // Legacy aliases for callers that haven't been updated yet
-async function getEnhancedPrompt() { return getHollyPrompt(null); }
-async function getEnhancedStreetViewPrompt() { return getHollyPrompt(null, ['walls', 'damp', 'structure', 'roof', 'security']); }
-async function getEnhancedSatellitePrompt() { return getHollyPrompt(null, ['roof', 'structure']); }
+async function getEnhancedPrompt() { return getNicoPrompt(null); }
+async function getEnhancedStreetViewPrompt() { return getNicoPrompt(null, ['walls', 'damp', 'structure', 'roof', 'security']); }
+async function getEnhancedSatellitePrompt() { return getNicoPrompt(null, ['roof', 'structure']); }
 
 const STREETVIEW_PROMPT = `You are a certified property inspector with 20 years of South African experience.
 Analyse this Google Street View image of a property exterior. Focus specifically on:
@@ -312,7 +312,7 @@ function parseVisionResponse(text) {
  * @returns {Array<object>} Parsed analysis for each image
  */
 /**
- * Analyse a batch of images with Holly.
+ * Analyse a batch of images with Nico.
  * @param {Array} images - [{ url, base64, mediaType }]
  * @param {Array} hfResults - optional HuggingFace pre-analysis results
  * @param {object} propertyContext - property data for corroboration
@@ -347,7 +347,7 @@ async function analyseBatch(images, hfResults, propertyContext, propertyId) {
       : 'Analyse this photo. Return ONLY the JSON object. No prose, no explanation, just the JSON starting with { and ending with }.',
   });
 
-  const systemPrompt = await getHollyPrompt(propertyContext);
+  const systemPrompt = await getNicoPrompt(propertyContext);
   const message = await client.messages.create({
     model: VISION_MODEL,
     max_tokens: 8192,
@@ -358,13 +358,13 @@ async function analyseBatch(images, hfResults, propertyContext, propertyId) {
   // Log cost
   try {
     const { logClaude } = require('./costs');
-    await logClaude(VISION_MODEL, message.usage.input_tokens, message.usage.output_tokens, 'holly/analyse_batch');
+    await logClaude(VISION_MODEL, message.usage.input_tokens, message.usage.output_tokens, 'nico/analyse_batch');
   } catch {}
 
   const parsed = parseVisionResponse(message.content[0].text);
   const results = Array.isArray(parsed) ? parsed : [parsed];
 
-  // Store Holly evidence for each finding
+  // Store Nico evidence for each finding
   if (propertyId) {
     for (let imgIdx = 0; imgIdx < results.length; imgIdx++) {
       const analysis = results[imgIdx];
@@ -394,7 +394,7 @@ async function analyseBatch(images, hfResults, propertyContext, propertyId) {
         const f = analysis.findings[fi];
         if (!f.observation) continue;
 
-        // Resolve KB entry ID if Holly named one
+        // Resolve KB entry ID if Nico named one
         let kbEntryId = null;
         if (f.kb_entry_matched) {
           kbEntryId = kbEntries[f.kb_entry_matched.toLowerCase()] || null;
@@ -419,12 +419,12 @@ async function analyseBatch(images, hfResults, propertyContext, propertyId) {
               f.output_language || f.observation,
               f.limitations || null,
               f.estimated_repair_cost_zar?.min || null, f.estimated_repair_cost_zar?.max || null,
-              f.cost_source || 'holly_estimate',
-              VISION_MODEL, HOLLY_PROMPT_VERSION,
+              f.cost_source || 'nico_estimate',
+              VISION_MODEL, NICO_PROMPT_VERSION,
             ]
           );
         } catch (err) {
-          console.error(`[holly] Failed to store evidence for finding ${fi}:`, err.message);
+          console.error(`[nico] Failed to store evidence for finding ${fi}:`, err.message);
         }
       }
     }
@@ -443,7 +443,7 @@ async function analyseBatch(images, hfResults, propertyContext, propertyId) {
  * @returns {{ analyses: object[], aggregated: object }}
  */
 async function analysePropertyImages(imageUrls, propertyId) {
-  // Step 0: Load property context for Holly's corroboration
+  // Step 0: Load property context for Nico's corroboration
   let propertyContext = null;
   try {
     const { rows } = await pool.query(
@@ -467,13 +467,13 @@ async function analysePropertyImages(imageUrls, propertyId) {
         }
       } catch {}
     }
-    console.log(`[holly] Property context loaded: era=${propertyContext?.construction_era || 'unknown'}, suburb=${propertyContext?.suburb || 'unknown'}`);
+    console.log(`[nico] Property context loaded: era=${propertyContext?.construction_era || 'unknown'}, suburb=${propertyContext?.suburb || 'unknown'}`);
   } catch (err) {
-    console.error('[holly] Failed to load property context:', err.message);
+    console.error('[nico] Failed to load property context:', err.message);
   }
 
   // Step 1: Download all images and convert to base64
-  console.log(`[holly] Downloading ${imageUrls.length} images...`);
+  console.log(`[nico] Downloading ${imageUrls.length} images...`);
   const images = [];
   for (const url of imageUrls) {
     try {
@@ -500,12 +500,12 @@ async function analysePropertyImages(imageUrls, propertyId) {
     batches.push(images.slice(i, i + BATCH_SIZE));
   }
 
-  // Step 3: Call Holly on each batch
-  console.log(`[holly] Analysing ${images.length} images in ${batches.length} batch(es)...`);
+  // Step 3: Call Nico on each batch
+  console.log(`[nico] Analysing ${images.length} images in ${batches.length} batch(es)...`);
   const allAnalyses = [];
 
   for (let i = 0; i < batches.length; i++) {
-    console.log(`[holly] Batch ${i + 1}/${batches.length} (${batches[i].length} images)...`);
+    console.log(`[nico] Batch ${i + 1}/${batches.length} (${batches[i].length} images)...`);
     const batchResults = await analyseBatch(batches[i], null, propertyContext, propertyId);
 
     // Ensure every image in the batch gets a result — even if parse failed
@@ -562,7 +562,7 @@ async function analysePropertyImages(imageUrls, propertyId) {
  * Focus: exterior condition, wall cracking, roof condition, damp staining.
  */
 async function analyseStreetView(imageBase64, propertyContext) {
-  const streetViewPrompt = await getHollyPrompt(propertyContext, ['walls', 'damp', 'structure', 'roof', 'security']);
+  const streetViewPrompt = await getNicoPrompt(propertyContext, ['walls', 'damp', 'structure', 'roof', 'security']);
   const message = await client.messages.create({
     model: VISION_MODEL,
     max_tokens: 8192,
@@ -589,7 +589,7 @@ async function analyseStreetView(imageBase64, propertyContext) {
  * Focus: roof material, solar panels, outbuildings, roof orientation.
  */
 async function analyseSatellite(imageBase64, propertyContext) {
-  const satellitePrompt = await getHollyPrompt(propertyContext, ['roof', 'structure']);
+  const satellitePrompt = await getNicoPrompt(propertyContext, ['roof', 'structure']);
   const message = await client.messages.create({
     model: VISION_MODEL,
     max_tokens: 8192,
@@ -906,7 +906,7 @@ async function analyseWithHFPrestage(propertyId, imageUrls) {
     hfBatches.push(hfResults.slice(i, i + BATCH_SIZE));
   }
 
-  // Load property context for Holly
+  // Load property context for Nico
   let propertyContext = null;
   try {
     const { rows } = await pool.query(
@@ -923,11 +923,11 @@ async function analyseWithHFPrestage(propertyId, imageUrls) {
     }
   } catch {}
 
-  console.log(`[holly+hf] Analysing ${images.length} images in ${batches.length} batch(es)...`);
+  console.log(`[nico+hf] Analysing ${images.length} images in ${batches.length} batch(es)...`);
   const allAnalyses = [];
 
   for (let i = 0; i < batches.length; i++) {
-    console.log(`[holly+hf] Batch ${i + 1}/${batches.length} (${batches[i].length} images)...`);
+    console.log(`[nico+hf] Batch ${i + 1}/${batches.length} (${batches[i].length} images)...`);
     const batchResults = await analyseBatch(batches[i], hfBatches[i], propertyContext, propertyId);
 
     // Ensure every image in the batch gets a result — even if parse failed
