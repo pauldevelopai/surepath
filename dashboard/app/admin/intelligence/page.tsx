@@ -84,6 +84,8 @@ export default function IntelligenceHubPage() {
   const [qSaving, setQSaving] = useState(false);
   const [expandedRun, setExpandedRun] = useState<number | null>(null);
   const [topTab, setTopTab] = useState<"hub" | "pipeline" | "combined">("hub");
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [agentResult, setAgentResult] = useState<A | null>(null);
 
   const loadSection = useCallback(async (section: string) => {
     const data = await (await fetch(`/api/intelligence?section=${section}`)).json();
@@ -499,8 +501,30 @@ export default function IntelligenceHubPage() {
           KNOWLEDGE BASE MANAGER
           ═══════════════════════════════════════════════════════════════ */}
       <div id="kb-section" className="bg-white border rounded-lg p-4 shadow-sm mb-6">
-        <h2 className="font-bold text-sm mb-1">Knowledge Base</h2>
-        <p className="text-xs text-gray-400 mb-3">Real photos linked to real findings and verified costs. Active entries are included as reference examples in every vision analysis.</p>
+        <div className="flex justify-between items-start mb-3">
+          <div>
+            <h2 className="font-bold text-sm mb-1">Knowledge Base</h2>
+            <p className="text-xs text-gray-400">Real photos linked to real findings and verified costs. Active entries feed into every vision analysis.</p>
+          </div>
+          <button onClick={async () => {
+            setAgentRunning(true); setAgentResult(null);
+            const data = await (await fetch("/api/intelligence", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "run_kb_agent" }),
+            })).json();
+            setAgentResult(data);
+            setAgentRunning(false);
+            loadSection("knowledge"); loadSection("summary");
+          }} disabled={agentRunning}
+            className="px-4 py-2 bg-[#E63946] text-white text-xs rounded font-bold hover:bg-red-700 disabled:opacity-50 shrink-0">
+            {agentRunning ? "Agent reviewing photos..." : "Run AI Agent"}
+          </button>
+        </div>
+        {agentResult && (
+          <div className={`text-xs p-2 rounded mb-3 ${agentResult.ok ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>
+            {agentResult.message} {agentResult.created > 0 && "— review the new draft entries below and activate the good ones."}
+          </div>
+        )}
 
         {/* KB Entry Form */}
         {kbForm && (

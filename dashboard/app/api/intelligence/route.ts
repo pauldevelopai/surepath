@@ -409,5 +409,126 @@ Rules: Never confirm asbestos — flag indicators only. SA terminology. ZAR cost
     });
   }
 
+  // ─── AI Agent: auto-review findings and build KB entries ─────────────
+  if (action === "run_kb_agent") {
+    // Get all findings with their photos, excluding ones already in KB
+    const existingObs = await query("SELECT description FROM rag_knowledge_entries");
+    const existingSet = new Set(existingObs.map((r: Record<string, unknown>) => (r.description as string || "").substring(0, 80)));
+
+    const photos = await query(`
+      SELECT pi.id AS image_id, pi.property_id, pi.image_url, pi.image_type,
+             pi.vision_analysis->'findings' AS findings,
+             pi.vision_analysis->>'photo_type' AS photo_type,
+             p.address_raw, p.suburb, p.city, p.construction_era
+      FROM property_images pi
+      JOIN properties p ON p.id = pi.property_id
+      WHERE pi.vision_analysis IS NOT NULL
+        AND jsonb_typeof(pi.vision_analysis->'findings') = 'array'
+        AND jsonb_array_length(pi.vision_analysis->'findings') > 0
+      ORDER BY pi.analysed_at DESC NULLS LAST
+      LIMIT 100
+    `);
+
+    // Flatten all findings with their photo context
+    const candidates: { finding: Record<string, unknown>; photo: Record<string, unknown> }[] = [];
+    for (const photo of photos) {
+      const findings = photo.findings || [];
+      for (const f of findings) {
+        // Skip cosmetic/low findings and ones already in KB
+        if (f.severity === "COSMETIC") continue;
+        if (f.observation && existingSet.has(f.observation.substring(0, 80))) continue;
+        // Skip generic "good condition" observations
+        if (f.observation && /good condition|no visible|appears? (to be )?in good|well.maintained/i.test(f.observation)) continue;
+        candidates.push({ finding: f, photo });
+      }
+    }
+
+    if (candidates.length === 0) {
+      return NextResponse.json({ ok: true, message: "No new findings to review", created: 0 });
+    }
+
+    // Send candidates to Claude for KB evaluation — batch of up to 30
+    const batch = candidates.slice(0, 30);
+    const findingsText = batch.map((c, i) =>
+      `[${i}] Category: ${c.finding.category} | Severity: ${c.finding.severity} | Observation: ${c.finding.observation} | Photo: ${c.photo.photo_type || c.photo.image_type} | Property: ${c.photo.address_raw}, ${c.photo.suburb} | Cost: R${(c.finding.estimated_repair_cost_zar as Record<string, number>)?.min || '?'}–R${(c.finding.estimated_repair_cost_zar as Record<string, number>)?.max || '?'}`
+    ).join('\n');
+
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const claude = new Anthropic();
+
+    const evaluation = await claude.messages.create({
+      model: "claude-3-haiku-20240307",
+      max_tokens: 4096,
+      system: `You are a South African property defect expert reviewing vision analysis findings to build a knowledge base for improving future property inspections.
+
+Select findings that would make good knowledge base entries — things that teach the vision system about SA-specific defects, materials, costs, and regional patterns.
+
+GOOD entries: real defects (cracks, damp, asbestos indicators, electrical issues, plumbing problems), SA-specific materials, region-specific patterns (Cape Town damp, Joburg dolomite), things with actual cost implications.
+
+BAD entries: generic observations ("walls in good condition"), cosmetic notes, vague structural comments, vegetation observations, interior decor descriptions.
+
+For each finding you select, return a JSON array of objects:
+[{
+  "index": 0,
+  "name": "Short defect name (e.g. 'Efflorescence — Cape Town face brick')",
+  "visual_indicators": "What to look for in similar photos",
+  "sa_context": "Why this matters in South Africa — regional context, local costs, common causes",
+  "severity": 1-5,
+  "cost_min_zar": number or null,
+  "cost_max_zar": number or null
+}]
+
+Only select findings worth teaching the system about. It's better to select 3 good ones than 15 mediocre ones. Return ONLY valid JSON array.`,
+      messages: [{ role: "user", content: `Review these ${batch.length} findings and select the ones worth adding to the SA property defect knowledge base:\n\n${findingsText}` }],
+    });
+
+    // Parse Claude's selections
+    let selections: { index: number; name: string; visual_indicators: string; sa_context: string; severity: number; cost_min_zar: number | null; cost_max_zar: number | null }[] = [];
+    try {
+      let text = evaluation.content[0].type === "text" ? evaluation.content[0].text.trim() : "[]";
+      if (text.includes("```")) text = text.replace(/```(?:json)?\s*/g, "").replace(/```/g, "");
+      const jStart = text.indexOf("[");
+      const jEnd = text.lastIndexOf("]");
+      if (jStart >= 0 && jEnd > jStart) text = text.substring(jStart, jEnd + 1);
+      selections = JSON.parse(text);
+    } catch {
+      return NextResponse.json({ ok: false, message: "Agent returned unparseable response", created: 0 });
+    }
+
+    // Create KB entries for selected findings
+    let created = 0;
+    for (const sel of selections) {
+      const c = batch[sel.index];
+      if (!c) continue;
+
+      await query(
+        `INSERT INTO rag_knowledge_entries (name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status, image_id, image_url, property_id, original_finding)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$11,$12)`,
+        [
+          sel.name,
+          c.finding.observation,
+          sel.visual_indicators,
+          sel.sa_context,
+          sel.severity,
+          sel.cost_min_zar || (c.finding.estimated_repair_cost_zar as Record<string, number>)?.min || null,
+          sel.cost_max_zar || (c.finding.estimated_repair_cost_zar as Record<string, number>)?.max || null,
+          c.finding.category,
+          c.photo.image_id,
+          c.photo.image_url,
+          c.photo.property_id,
+          JSON.stringify(c.finding),
+        ]
+      );
+      created++;
+    }
+
+    return NextResponse.json({
+      ok: true,
+      message: `Agent reviewed ${batch.length} findings, created ${created} draft KB entries`,
+      reviewed: batch.length,
+      created,
+    });
+  }
+
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 });
