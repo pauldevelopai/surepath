@@ -132,8 +132,62 @@ async function getNicoPrompt(propertyContext, categoryFilter) {
       ).join('\n');
       prompt += `\n\nKNOWLEDGE BASE (${rows.length} entries — match findings to these by name in kb_entry_matched. Use their costs and SA context to calibrate your estimates):\n${entries}`;
     }
-  } catch {
-    // KB table doesn't exist yet — continue without
+  } catch {}
+
+  // ── Cross-property intelligence for this suburb ──────────────────
+  if (propertyContext?.suburb) {
+    try {
+      // What Nico has found before in this suburb
+      const { rows: suburbPatterns } = await pool.query(
+        `SELECT f->>'category' AS category, f->>'severity' AS severity, COUNT(*) AS c
+         FROM property_images pi
+         JOIN properties p ON p.id = pi.property_id,
+         jsonb_array_elements(CASE WHEN jsonb_typeof(pi.vision_analysis->'findings') = 'array' THEN pi.vision_analysis->'findings' ELSE '[]'::jsonb END) AS f
+         WHERE pi.vision_analysis IS NOT NULL AND p.suburb ILIKE $1
+         GROUP BY category, severity HAVING COUNT(*) >= 2
+         ORDER BY c DESC LIMIT 10`,
+        [propertyContext.suburb]
+      );
+      if (suburbPatterns.length > 0) {
+        const patterns = suburbPatterns.map(p => `${p.category} (${p.severity}): found ${p.c} times`).join(', ');
+        prompt += `\n\nSUBURB PATTERNS (what you've found before in ${propertyContext.suburb}):\n${patterns}`;
+      }
+    } catch {}
+
+    try {
+      // Area data from scrapers — climate, schools, crime
+      const { rows: areaData } = await pool.query(
+        `SELECT risk_type, risk_level, risk_score, details FROM area_risk_data
+         WHERE suburb ILIKE $1 AND risk_type IN ('climate', 'school_proximity', 'crime_detailed', 'security_community', 'sold_prices')
+         LIMIT 5`,
+        [propertyContext.suburb]
+      );
+      if (areaData.length > 0) {
+        const areaCtx = areaData.map(a => {
+          const d = typeof a.details === 'string' ? JSON.parse(a.details) : a.details;
+          if (a.risk_type === 'climate') return `Climate: ${d?.annual_rainfall_mm}mm/yr, ${d?.avg_humidity}% humidity, damp risk ${d?.damp_risk}, ${d?.climate_zone}`;
+          if (a.risk_type === 'crime_detailed') return `Crime: ${a.risk_level} (score ${a.risk_score}/10)`;
+          if (a.risk_type === 'security_community') return `Security: ${a.risk_level} coverage`;
+          if (a.risk_type === 'sold_prices') return `Recent sales: avg R${d?.avg_price?.toLocaleString()}, median R${d?.median_price?.toLocaleString()}`;
+          if (a.risk_type === 'school_proximity') return `Schools: score ${a.risk_score}/10, ${d?.within_1km || 0} within 1km`;
+          return `${a.risk_type}: ${a.risk_level}`;
+        }).join('\n');
+        prompt += `\n\nAREA INTELLIGENCE (${propertyContext.suburb}):\n${areaCtx}`;
+      }
+    } catch {}
+
+    try {
+      // User corrections — what the human has told us was wrong
+      const { rows: corrections } = await pool.query(
+        `SELECT df.section, df.feedback, df.rating FROM data_feedback df
+         WHERE df.rating = 'incorrect' AND df.section LIKE 'daily_check:%'
+         ORDER BY df.created_at DESC LIMIT 5`
+      );
+      if (corrections.length > 0) {
+        const corr = corrections.map(c => `- ${c.section.replace('daily_check:', '')}: "${c.feedback || 'marked incorrect'}"`).join('\n');
+        prompt += `\n\nUSER CORRECTIONS (things the human reviewer has flagged as wrong — avoid these patterns):\n${corr}`;
+      }
+    } catch {}
   }
 
   return prompt;

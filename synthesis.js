@@ -275,6 +275,26 @@ async function synthesiseReport(propertyId, askingPrice) {
     }
   } catch {}
 
+  // Add climate, schools, sold prices data if available
+  try {
+    const { rows: areaRows } = await pool.query(
+      "SELECT risk_type, risk_level, risk_score, details FROM area_risk_data WHERE suburb ILIKE $1 AND city ILIKE $2 AND risk_type IN ('climate', 'school_proximity', 'sold_prices')",
+      [property.suburb || '', property.city || '']
+    );
+    for (const row of areaRows) {
+      const d = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+      if (row.risk_type === 'climate' && d) {
+        context.climate = { annual_rainfall_mm: d.annual_rainfall_mm, avg_humidity: d.avg_humidity, damp_risk: d.damp_risk, climate_zone: d.climate_zone, wind_risk: d.wind_risk };
+      }
+      if (row.risk_type === 'school_proximity' && d) {
+        context.schools = { score: row.risk_score, total: d.total_found || d.schools?.length, within_1km: d.within_1km };
+      }
+      if (row.risk_type === 'sold_prices' && d) {
+        context.sold_prices = { avg_price: d.avg_price, median_price: d.median_price, sales_count: d.sales_count };
+      }
+    }
+  } catch {}
+
   // Step 5: Call Claude Opus for synthesis
   console.log('[synthesis] Calling Claude Opus for report synthesis...');
 
