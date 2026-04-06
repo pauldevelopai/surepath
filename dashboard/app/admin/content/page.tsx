@@ -100,8 +100,8 @@ export default function ContentPage() {
       {/* Tease Insights from WhatsApp */}
       {insights.length > 0 && (
         <div className="bg-white border rounded-lg p-4 mb-6">
-          <h2 className="font-bold text-sm mb-2">Property Insights from WhatsApp</h2>
-          <p className="text-xs text-gray-500 mb-3">These are real risk findings from properties analysed via WhatsApp. Click one to turn it into a video script.</p>
+          <h2 className="font-bold text-sm mb-2">Nico's Best Findings</h2>
+          <p className="text-xs text-gray-500 mb-3">Real property findings from WhatsApp teases, vision analysis, and Nico's evidence. Click one to turn it into a video script.</p>
           <div className="space-y-2 max-h-64 overflow-y-auto">
             {insights.map((ins, i) => (
               <div key={i}
@@ -109,8 +109,11 @@ export default function ContentPage() {
                 onClick={() => generateFromInsight(ins)}>
                 <div className="flex justify-between items-start">
                   <div>
-                    <div className="font-medium text-sm">{ins.address}</div>
-                    <div className="text-xs text-gray-500 mt-0.5">{ins.nicoTease?.substring(0, 120)}...</div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm">{ins.address}</span>
+                      <span className={`px-1 py-0.5 rounded text-[7px] font-bold ${ins.source === "whatsapp" ? "bg-green-100 text-green-700" : ins.source === "nico_evidence" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-600"}`}>{ins.source === "whatsapp" ? "WhatsApp" : ins.source === "nico_evidence" ? "Nico" : "Vision"}</span>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-0.5">{(ins.nicoTease || ins.topRiskFlags?.[0] || "").substring(0, 150)}</div>
                   </div>
                   <div className="text-right shrink-0 ml-3">
                     {ins.askingPrice && <div className="font-bold text-sm">{formatZAR(ins.askingPrice)}</div>}

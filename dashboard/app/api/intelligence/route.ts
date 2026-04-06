@@ -36,6 +36,14 @@ export const GET = withAuth(async (req: NextRequest) => {
       query(`SELECT COUNT(*) AS runs, AVG((score_specificity + score_accuracy + score_actionability + score_consistency) / 4.0) AS avg_score FROM rag_quality_runs WHERE score_specificity IS NOT NULL`).catch(() => [{ runs: 0, avg_score: null }]),
     ]);
 
+    const feedbackStats = await query(`
+      SELECT COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE rating IN ('correct', 'good')) AS positive,
+        COUNT(*) FILTER (WHERE rating IN ('incorrect', 'bad')) AS negative,
+        COUNT(*) FILTER (WHERE rating = 'unsure') AS unsure
+      FROM data_feedback
+    `).catch(() => [{ total: 0, positive: 0, negative: 0, unsure: 0 }]);
+
     const summary = {
       reports: reportStats[0],
       images: imageStats[0],
@@ -44,6 +52,7 @@ export const GET = withAuth(async (req: NextRequest) => {
       crime: crimeStats[0],
       knowledge_base: kbStats[0] || { total: 0, active: 0 },
       quality: qualityStats[0] || { runs: 0, avg_score: null },
+      feedback: feedbackStats[0] || { total: 0, positive: 0, negative: 0, unsure: 0 },
     };
 
     if (section === "summary") return NextResponse.json({ summary });

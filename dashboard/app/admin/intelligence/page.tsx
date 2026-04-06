@@ -81,6 +81,7 @@ export default function IntelligenceHubPage() {
           <div className="flex gap-3 mt-2 text-[8px] text-gray-400">
             <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500" /> In Nico's RAG</span>
             <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-gray-300" /> Collected but not in RAG yet</span>
+            {summary?.feedback && <span className="ml-auto">Your feedback: {summary.feedback.positive} confirmed, {summary.feedback.negative} corrected — all feeding Nico's prompt</span>}
           </div>
         </div>
       )}

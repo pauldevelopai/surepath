@@ -77,6 +77,35 @@ export const GET = withAuth(async (req: NextRequest) => {
       }
     }
 
+    // From Nico's evidence (holly_evidence) — compelling buyer-facing statements
+    try {
+      const evidence = await query(`
+        SELECT he.what_it_means, he.defect_or_risk, he.severity, he.confidence_tier,
+               he.image_url, he.property_id,
+               p.address_raw, p.suburb, p.asking_price
+        FROM holly_evidence he
+        JOIN properties p ON p.id = he.property_id
+        WHERE he.what_it_means IS NOT NULL AND he.what_it_means != ''
+          AND he.severity IN ('CRITICAL', 'HIGH', 'MEDIUM')
+        ORDER BY he.created_at DESC LIMIT 10
+      `);
+      for (const e of evidence) {
+        const addr = e.address_raw;
+        if (seenAddresses.has(addr)) continue;
+        seenAddresses.add(addr);
+        insights.push({
+          source: "nico_evidence",
+          address: addr,
+          askingPrice: e.asking_price,
+          nicoTease: e.what_it_means,
+          topRiskFlags: [e.defect_or_risk].filter(Boolean),
+          propertyId: e.property_id,
+          severity: e.severity,
+          tier: e.confidence_tier,
+        });
+      }
+    } catch {}
+
     return NextResponse.json({ insights });
   }
 

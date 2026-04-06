@@ -201,15 +201,32 @@ async function getNicoPrompt(propertyContext, categoryFilter) {
     } catch {}
 
     try {
-      // User corrections — what the human has told us was wrong
+      // User feedback — both daily check corrections and arrow up/down ratings from inspect pages
       const { rows: corrections } = await pool.query(
-        `SELECT df.section, df.feedback, df.rating FROM data_feedback df
-         WHERE df.rating = 'incorrect' AND df.section LIKE 'daily_check:%'
-         ORDER BY df.created_at DESC LIMIT 5`
+        `SELECT df.section, df.feedback, df.rating, df.finding_hash,
+                df.context->>'observation' AS observation
+         FROM data_feedback df
+         WHERE df.rating IN ('incorrect', 'bad')
+         ORDER BY df.created_at DESC LIMIT 10`
       );
       if (corrections.length > 0) {
-        const corr = corrections.map(c => `- ${c.section.replace('daily_check:', '')}: "${c.feedback || 'marked incorrect'}"`).join('\n');
-        prompt += `\n\nUSER CORRECTIONS (things the human reviewer has flagged as wrong — avoid these patterns):\n${corr}`;
+        const corr = corrections.map(c => {
+          const what = c.observation || c.feedback || c.finding_hash || 'marked as wrong';
+          return `- ${c.section}: "${what}"`;
+        }).join('\n');
+        prompt += `\n\nUSER CORRECTIONS (the human reviewer has flagged these as wrong or inaccurate — learn from these, avoid repeating the same mistakes):\n${corr}`;
+      }
+
+      // Positive feedback — things marked correct or good (reinforcement)
+      const { rows: positives } = await pool.query(
+        `SELECT df.section, df.context->>'observation' AS observation
+         FROM data_feedback df
+         WHERE df.rating IN ('correct', 'good')
+         ORDER BY df.created_at DESC LIMIT 5`
+      );
+      if (positives.length > 0) {
+        const pos = positives.map(p => `- ${p.section}: "${p.observation || 'confirmed correct'}"`).join('\n');
+        prompt += `\n\nCONFIRMED CORRECT (the human reviewer has validated these — this is the standard to aim for):\n${pos}`;
       }
     } catch {}
   }
