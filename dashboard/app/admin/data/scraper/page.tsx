@@ -5,12 +5,14 @@ import { useEffect, useState, useRef, useCallback } from "react";
 type A = Record<string, any>;
 
 const SCRAPERS = [
-  { id: "pp", label: "PrivateProperty", desc: "Newest listings first, all provinces", color: "bg-blue-600", hover: "hover:bg-blue-700" },
-  { id: "crime", label: "Crime Data", desc: "CrimeHub / SAPS — all police stations", color: "bg-red-700", hover: "hover:bg-red-800" },
-  { id: "solar", label: "Solar Data", desc: "PVGIS — satellite-measured irradiance", color: "bg-yellow-600", hover: "hover:bg-yellow-700" },
-  { id: "saps", label: "SAPS Stations", desc: "~1,154 police stations + CPF contacts — saps.gov.za", color: "bg-slate-700", hover: "hover:bg-slate-800" },
-  { id: "assist247", label: "Assist247", desc: "Security companies mapped to suburbs — assist247.co.za", color: "bg-teal-700", hover: "hover:bg-teal-800" },
-  { id: "procompare", label: "Procompare", desc: "Security companies with ratings — procompare.co.za", color: "bg-cyan-700", hover: "hover:bg-cyan-800" },
+  { id: "pp", label: "PrivateProperty", desc: "Listings, photos, pricing — the raw property data that starts every report", color: "bg-blue-600", hover: "hover:bg-blue-700" },
+  { id: "crime", label: "Crime Data", desc: "CrimeHub / SAPS — suburb crime stats for risk scoring", color: "bg-red-700", hover: "hover:bg-red-800" },
+  { id: "solar", label: "Solar Data", desc: "PVGIS — satellite-measured irradiance for solar scoring", color: "bg-yellow-600", hover: "hover:bg-yellow-700" },
+  { id: "water", label: "Water Quality", desc: "DWS Blue/Green Drop — municipal water & sewerage scores", color: "bg-sky-700", hover: "hover:bg-sky-800" },
+  { id: "gvr", label: "Municipal GVR", desc: "Valuation rolls — stand size, zoning, municipal values (6 metros)", color: "bg-emerald-700", hover: "hover:bg-emerald-800" },
+  { id: "saps", label: "SAPS Stations", desc: "Police precincts + CPF contacts — enables crime suburb mapping", color: "bg-slate-700", hover: "hover:bg-slate-800" },
+  { id: "assist247", label: "Assist247", desc: "Security companies mapped to suburbs — armed response coverage", color: "bg-teal-700", hover: "hover:bg-teal-800" },
+  { id: "procompare", label: "Procompare", desc: "Security company ratings — supplements Assist247 coverage data", color: "bg-cyan-700", hover: "hover:bg-cyan-800" },
 ];
 
 export default function ScraperPage() {
@@ -57,16 +59,17 @@ export default function ScraperPage() {
   }
 
   async function runAll() {
-    for (const s of SCRAPERS) {
-      if (!isRunning(s.id)) {
-        await fetch("/api/scraper", {
+    await Promise.all(
+      SCRAPERS.filter(s => !isRunning(s.id)).map(s =>
+        fetch("/api/scraper", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "start", source: s.id }),
-        });
-      }
-    }
+        })
+      )
+    );
     load();
   }
+
 
   function isRunning(id: string) {
     return (data?.scraper_processes || []).some((p: A) => p.name === id && p.running);
@@ -85,6 +88,8 @@ export default function ScraperPage() {
     pp:         { pending: (s.pp_universe || 0) - (s.pp_total || totals.pp_properties || 0), done: s.pp_total || totals.pp_properties || 0, unit: "listings" },
     crime:      { pending: s.crime_pending || 0,   done: s.crime_total || 0,                     unit: "suburbs" },
     solar:      { pending: s.solar_pending || 0,   done: s.solar_total || 0,                     unit: "properties" },
+    water:      { pending: s.water_pending || 0,   done: s.water_total || 0,                     unit: "cities" },
+    gvr:        { pending: 0,                       done: s.gvr_total || 0,                       unit: "properties" },
     saps:       { pending: (1154 - (s.saps_total || 0)), done: s.saps_total || 0,                unit: "stations" },
     assist247:  { pending: 0,                       done: s.assist247_suburbs || 0,               unit: "suburbs" },
     procompare: { pending: 0,                       done: s.procompare_companies || 0,            unit: "companies" },

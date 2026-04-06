@@ -3,7 +3,7 @@ import { query } from "@/lib/db";
 import { withAuth } from "@/lib/auth";
 
 export const GET = withAuth(async () => {
-  const [crimePending, crimeTotal, solarPending, solarTotal, ppTotal, ppLatest, suburbs, suburbsWithListings, securityPending, securityTotal, sapsTotal, assist247Suburbs, procompareCompanies] = await Promise.all([
+  const [crimePending, crimeTotal, solarPending, solarTotal, ppTotal, ppLatest, suburbs, suburbsWithListings, securityPending, securityTotal, sapsTotal, assist247Suburbs, procompareCompanies, waterPending, waterTotal, gvrTotal] = await Promise.all([
     query(`SELECT COUNT(DISTINCT (p.suburb || '|' || p.city)) as cnt FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'crime_detailed')`),
     query(`SELECT COUNT(*) as cnt FROM area_risk_data WHERE risk_type = 'crime_detailed'`),
@@ -19,6 +19,9 @@ export const GET = withAuth(async () => {
     query(`SELECT COUNT(*) as cnt FROM saps_precincts`).catch(() => [{ cnt: 0 }]),
     query(`SELECT COUNT(DISTINCT suburb) as cnt FROM suburb_security_coverage WHERE source = 'assist247'`).catch(() => [{ cnt: 0 }]),
     query(`SELECT COUNT(*) as cnt FROM security_companies`).catch(() => [{ cnt: 0 }]),
+    query(`SELECT COUNT(DISTINCT p.city) as cnt FROM properties p WHERE p.city IS NOT NULL AND p.water_quality_score IS NULL`).catch(() => [{ cnt: 0 }]),
+    query(`SELECT COUNT(*) as cnt FROM properties WHERE water_quality_score IS NOT NULL`).catch(() => [{ cnt: 0 }]),
+    query(`SELECT COUNT(*) as cnt FROM properties WHERE gvr_source IS NOT NULL`).catch(() => [{ cnt: 0 }]),
   ]);
 
   return NextResponse.json({
@@ -36,5 +39,8 @@ export const GET = withAuth(async () => {
     saps_total: parseInt(sapsTotal[0].cnt),
     assist247_suburbs: parseInt(assist247Suburbs[0].cnt),
     procompare_companies: parseInt(procompareCompanies[0].cnt),
+    water_pending: parseInt(waterPending[0].cnt),
+    water_total: parseInt(waterTotal[0].cnt),
+    gvr_total: parseInt(gvrTotal[0].cnt),
   });
 });

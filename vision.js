@@ -69,12 +69,73 @@ Rules: Never confirm asbestos — flag indicators only requiring professional te
 
 IMPORTANT: If system context is provided about this specific property, use it to guide your analysis. For example, if the property is pre-1977, pay extra attention to asbestos indicators. If the area has dolomite risk, look for foundation cracks that could indicate ground movement.`;
 
-function getEnhancedPrompt() {
+/**
+ * Build the vision system prompt with optional property context and
+ * active knowledge base entries from the RAG defect library.
+ */
+async function getEnhancedPrompt() {
+  let prompt = VISION_SYSTEM_PROMPT;
+
+  // Append per-property context if set via env
   const context = process.env.SUREPATH_VISION_CONTEXT;
   if (context) {
-    return VISION_SYSTEM_PROMPT + `\n\nSYSTEM CONTEXT FOR THIS PROPERTY:\n${context}`;
+    prompt += `\n\nSYSTEM CONTEXT FOR THIS PROPERTY:\n${context}`;
   }
-  return VISION_SYSTEM_PROMPT;
+
+  // Append active knowledge base entries from RAG defect library
+  try {
+    const { rows } = await pool.query(
+      `SELECT name, category, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar
+       FROM rag_knowledge_entries WHERE status = 'active' ORDER BY severity DESC`
+    );
+    if (rows.length > 0) {
+      const entries = rows.map(e =>
+        `- ${e.name} [${e.category}, severity ${e.severity}/5${e.cost_min_zar ? `, R${e.cost_min_zar}–R${e.cost_max_zar}` : ''}]: ${e.description || ''}${e.visual_indicators ? ` LOOK FOR: ${e.visual_indicators}` : ''}${e.sa_context ? ` SA CONTEXT: ${e.sa_context}` : ''}`
+      ).join('\n');
+      prompt += `\n\nSA DEFECT KNOWLEDGE BASE (${rows.length} entries — use these to identify region-specific defects and calibrate severity/cost estimates):\n${entries}`;
+    }
+  } catch {
+    // Table doesn't exist yet or query failed — continue without KB
+  }
+
+  return prompt;
+}
+
+/**
+ * Build the Street View / Satellite prompt with KB entries appended.
+ */
+async function getEnhancedStreetViewPrompt() {
+  let prompt = STREETVIEW_PROMPT;
+  try {
+    const { rows } = await pool.query(
+      `SELECT name, category, visual_indicators, sa_context, severity
+       FROM rag_knowledge_entries WHERE status = 'active' AND category IN ('walls', 'damp', 'structure', 'roof', 'security') ORDER BY severity DESC`
+    );
+    if (rows.length > 0) {
+      const entries = rows.map(e =>
+        `- ${e.name} [${e.category}, severity ${e.severity}/5]: ${e.visual_indicators || ''}${e.sa_context ? ` SA: ${e.sa_context}` : ''}`
+      ).join('\n');
+      prompt += `\n\nSA DEFECT REFERENCE (exterior-relevant entries):\n${entries}`;
+    }
+  } catch {}
+  return prompt;
+}
+
+async function getEnhancedSatellitePrompt() {
+  let prompt = SATELLITE_PROMPT;
+  try {
+    const { rows } = await pool.query(
+      `SELECT name, category, visual_indicators, sa_context, severity
+       FROM rag_knowledge_entries WHERE status = 'active' AND category IN ('roof', 'structure') ORDER BY severity DESC`
+    );
+    if (rows.length > 0) {
+      const entries = rows.map(e =>
+        `- ${e.name} [${e.category}, severity ${e.severity}/5]: ${e.visual_indicators || ''}${e.sa_context ? ` SA: ${e.sa_context}` : ''}`
+      ).join('\n');
+      prompt += `\n\nSA DEFECT REFERENCE (roof/structure entries):\n${entries}`;
+    }
+  } catch {}
+  return prompt;
 }
 
 const STREETVIEW_PROMPT = `You are a certified property inspector with 20 years of South African experience.
@@ -274,10 +335,11 @@ async function analyseBatch(images, hfResults) {
       : 'Analyse this photo. Return ONLY the JSON object. No prose, no explanation, just the JSON starting with { and ending with }.',
   });
 
+  const systemPrompt = await getEnhancedPrompt();
   const message = await client.messages.create({
     model: VISION_MODEL,
     max_tokens: 8192,
-    system: getEnhancedPrompt(),
+    system: systemPrompt,
     messages: [{ role: 'user', content }],
   });
 
@@ -394,10 +456,11 @@ async function analysePropertyImages(imageUrls, propertyId) {
  * Focus: exterior condition, wall cracking, roof condition, damp staining.
  */
 async function analyseStreetView(imageBase64) {
+  const streetViewPrompt = await getEnhancedStreetViewPrompt();
   const message = await client.messages.create({
     model: VISION_MODEL,
     max_tokens: 8192,
-    system: STREETVIEW_PROMPT,
+    system: streetViewPrompt,
     messages: [{
       role: 'user',
       content: [
@@ -420,10 +483,11 @@ async function analyseStreetView(imageBase64) {
  * Focus: roof material, solar panels, outbuildings, roof orientation.
  */
 async function analyseSatellite(imageBase64) {
+  const satellitePrompt = await getEnhancedSatellitePrompt();
   const message = await client.messages.create({
     model: VISION_MODEL,
     max_tokens: 8192,
-    system: SATELLITE_PROMPT,
+    system: satellitePrompt,
     messages: [{
       role: 'user',
       content: [

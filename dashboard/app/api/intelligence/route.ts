@@ -1,0 +1,403 @@
+import { NextRequest, NextResponse } from "next/server";
+import { query } from "@/lib/db";
+import { withAuth } from "@/lib/auth";
+
+// ─── GET: Load all data for the Intelligence Hub page ─────────────────
+export const GET = withAuth(async (req: NextRequest) => {
+  const section = req.nextUrl.searchParams.get("section");
+
+  // ─── Summary cards (always returned) ────────────────────────────────
+  if (section === "summary" || !section) {
+    const [reportStats, imageStats, propertyStats, deedsStats, crimeStats, kbStats, qualityStats] = await Promise.all([
+      query(`SELECT
+        COUNT(DISTINCT property_id) AS unique_properties,
+        COUNT(*) AS total_reports,
+        COUNT(*) FILTER (WHERE status = 'complete') AS complete_reports,
+        COUNT(*) FILTER (WHERE insurance_risk_score IS NOT NULL) AS with_scores,
+        COUNT(*) FILTER (WHERE structural_flags IS NOT NULL AND jsonb_typeof(structural_flags) = 'array' AND jsonb_array_length(structural_flags) > 0) AS with_structural,
+        COUNT(*) FILTER (WHERE generation_cost_zar IS NOT NULL AND generation_cost_zar > 0) AS with_cost
+      FROM property_reports`),
+      query(`SELECT
+        (SELECT COUNT(DISTINCT property_id) FROM property_images WHERE vision_analysis IS NOT NULL) AS properties_analysed,
+        (SELECT COUNT(*) FROM property_images) AS total_images,
+        (SELECT COUNT(*) FROM property_images WHERE vision_analysis IS NOT NULL) AS analysed_images,
+        (SELECT SUM(jsonb_array_length(vision_analysis->'findings')) FROM property_images WHERE vision_analysis IS NOT NULL AND jsonb_typeof(vision_analysis->'findings') = 'array') AS total_findings
+      `),
+      query(`SELECT
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE lat IS NOT NULL) AS geocoded,
+        COUNT(*) FILTER (WHERE construction_era IS NOT NULL) AS with_era,
+        COUNT(*) FILTER (WHERE roof_material IS NOT NULL) AS with_roof,
+        COUNT(*) FILTER (WHERE suburb_crime_score IS NOT NULL) AS with_crime
+      FROM properties`),
+      query(`SELECT COUNT(DISTINCT property_id) AS c FROM deeds_data`),
+      query(`SELECT COUNT(DISTINCT suburb) AS suburbs, COUNT(*) AS incidents FROM crime_incidents`),
+      query(`SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE status = 'active') AS active FROM rag_knowledge_entries`).catch(() => [{ total: 0, active: 0 }]),
+      query(`SELECT COUNT(*) AS runs, AVG((score_specificity + score_accuracy + score_actionability + score_consistency) / 4.0) AS avg_score FROM rag_quality_runs WHERE score_specificity IS NOT NULL`).catch(() => [{ runs: 0, avg_score: null }]),
+    ]);
+
+    const summary = {
+      reports: reportStats[0],
+      images: imageStats[0],
+      properties: propertyStats[0],
+      deeds_coverage: Number(deedsStats[0]?.c || 0),
+      crime: crimeStats[0],
+      knowledge_base: kbStats[0] || { total: 0, active: 0 },
+      quality: qualityStats[0] || { runs: 0, avg_score: null },
+    };
+
+    if (section === "summary") return NextResponse.json({ summary });
+  }
+
+  // ─── Section 1: Pipeline Monitor ────────────────────────────────────
+  // Show latest report per property (deduplicated), with image-level finding counts
+  if (section === "pipeline" || !section) {
+    const recentRuns = await query(`
+      SELECT DISTINCT ON (pr.property_id)
+             pr.id, pr.property_id, pr.status, pr.decision, pr.decision_reasoning,
+             pr.asking_price, pr.avm_low, pr.avm_high, pr.price_verdict,
+             pr.asbestos_risk, pr.insurance_risk_score, pr.crime_risk_score,
+             pr.solar_suitability_score, pr.generation_cost_zar,
+             pr.vision_findings, pr.structural_flags, pr.compliance_flags,
+             pr.repair_estimates, pr.negotiation_intel, pr.insurance_flags,
+             pr.suburb_intelligence, pr.created_at,
+             p.erf_number, p.address_raw, p.address_normalised, p.suburb, p.city,
+             p.construction_era, p.roof_material,
+             d.registered_owner, d.municipal_value, d.title_deed_ref
+      FROM property_reports pr
+      JOIN properties p ON p.id = pr.property_id
+      LEFT JOIN LATERAL (
+        SELECT registered_owner, municipal_value, title_deed_ref
+        FROM deeds_data WHERE property_id = p.id ORDER BY fetched_at DESC LIMIT 1
+      ) d ON true
+      ORDER BY pr.property_id, pr.created_at DESC
+    `);
+
+    // Sort by most recent report first (DISTINCT ON requires ORDER BY property_id first)
+    recentRuns.sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
+      new Date(b.created_at as string).getTime() - new Date(a.created_at as string).getTime()
+    );
+
+    // Get image counts and finding counts from property_images (the real source)
+    for (const run of recentRuns) {
+      const imgs = await query(
+        `SELECT COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE vision_analysis IS NOT NULL) AS analysed,
+                SUM(CASE WHEN vision_analysis IS NOT NULL AND jsonb_typeof(vision_analysis->'findings') = 'array'
+                    THEN jsonb_array_length(vision_analysis->'findings') ELSE 0 END) AS finding_count
+         FROM property_images WHERE property_id = $1`,
+        [run.property_id]
+      );
+      run.image_count = Number(imgs[0]?.total || 0);
+      run.analysed_count = Number(imgs[0]?.analysed || 0);
+      run.finding_count = Number(imgs[0]?.finding_count || 0);
+    }
+
+    if (section === "pipeline") return NextResponse.json({ pipeline: recentRuns });
+  }
+
+  // ─── Section 2: Knowledge Base ──────────────────────────────────────
+  if (section === "knowledge" || !section) {
+    let knowledgeEntries: Record<string, unknown>[] = [];
+    try {
+      knowledgeEntries = await query(
+        `SELECT * FROM rag_knowledge_entries ORDER BY category, severity DESC`
+      );
+    } catch { /* table doesn't exist yet */ }
+
+    // Aggregate observed finding categories from actual vision analyses on images
+    const findingPatterns = await query(`
+      SELECT f->>'category' AS category,
+             f->>'severity' AS severity,
+             f->>'observation' AS observation,
+             COUNT(*) AS occurrences
+      FROM property_images pi,
+      jsonb_array_elements(
+        CASE WHEN jsonb_typeof(pi.vision_analysis->'findings') = 'array'
+             THEN pi.vision_analysis->'findings' ELSE '[]'::jsonb END
+      ) AS f
+      WHERE pi.vision_analysis IS NOT NULL
+      GROUP BY category, severity, observation
+      ORDER BY occurrences DESC LIMIT 50
+    `);
+
+    const sourceCoverage = await query(`
+      SELECT
+        COUNT(*) AS total_properties,
+        COUNT(*) FILTER (WHERE lat IS NOT NULL) AS geocoded,
+        COUNT(*) FILTER (WHERE construction_era IS NOT NULL) AS with_era,
+        COUNT(*) FILTER (WHERE roof_material IS NOT NULL) AS with_roof,
+        COUNT(*) FILTER (WHERE suburb_crime_score IS NOT NULL) AS with_crime
+      FROM properties
+    `);
+
+    const [deedsCoverage, visionCoverage] = await Promise.all([
+      query(`SELECT COUNT(DISTINCT property_id) AS properties_with_deeds FROM deeds_data`),
+      query(`SELECT COUNT(DISTINCT property_id) AS properties_with_vision FROM property_images WHERE vision_analysis IS NOT NULL`),
+    ]);
+
+    if (section === "knowledge") {
+      return NextResponse.json({
+        knowledge: {
+          entries: knowledgeEntries,
+          finding_patterns: findingPatterns,
+          coverage: {
+            ...sourceCoverage[0],
+            properties_with_deeds: Number(deedsCoverage[0]?.properties_with_deeds || 0),
+            properties_with_vision: Number(visionCoverage[0]?.properties_with_vision || 0),
+          },
+        },
+      });
+    }
+  }
+
+  // ─── Section 3: Quality ─────────────────────────────────────────────
+  if (section === "quality" || !section) {
+    let qualityRuns: Record<string, unknown>[] = [];
+    try {
+      qualityRuns = await query(`
+        SELECT qr.*, p.address_raw, p.suburb
+        FROM rag_quality_runs qr
+        LEFT JOIN properties p ON p.id = qr.property_id
+        ORDER BY qr.created_at DESC LIMIT 30
+      `);
+    } catch {}
+
+    let scoreTrajectory: Record<string, unknown>[] = [];
+    try {
+      scoreTrajectory = await query(`
+        SELECT created_at::date AS day, run_type, rag_system,
+               AVG(score_specificity) AS avg_specificity,
+               AVG(score_accuracy) AS avg_accuracy,
+               AVG(score_actionability) AS avg_actionability,
+               AVG(score_consistency) AS avg_consistency,
+               COUNT(*) AS runs
+        FROM rag_quality_runs
+        WHERE score_specificity IS NOT NULL
+        GROUP BY day, run_type, rag_system
+        ORDER BY day
+      `);
+    } catch {}
+
+    if (section === "quality") {
+      return NextResponse.json({ quality: { runs: qualityRuns, trajectory: scoreTrajectory } });
+    }
+  }
+
+  // ─── Section 4: Combined Report View ────────────────────────────────
+  // Latest report per property, only those with real synthesis data
+  if (section === "combined" || !section) {
+    const combinedReports = await query(`
+      SELECT DISTINCT ON (pr.property_id)
+             pr.id, pr.property_id, pr.decision, pr.decision_reasoning,
+             pr.asking_price, pr.avm_low, pr.avm_high,
+             pr.vision_findings, pr.structural_flags, pr.repair_estimates,
+             pr.negotiation_intel, pr.insurance_flags, pr.asbestos_risk,
+             pr.suburb_intelligence, pr.compliance_flags,
+             pr.insurance_risk_score, pr.crime_risk_score,
+             pr.solar_suitability_score, pr.maintenance_cost_estimate,
+             pr.generation_cost_zar, pr.created_at,
+             p.erf_number, p.address_raw, p.suburb, p.city,
+             p.construction_era, p.roof_material, p.solar_installed,
+             p.security_visible,
+             d.registered_owner, d.municipal_value, d.transfer_history
+      FROM property_reports pr
+      JOIN properties p ON p.id = pr.property_id
+      LEFT JOIN LATERAL (
+        SELECT registered_owner, municipal_value, transfer_history
+        FROM deeds_data WHERE property_id = p.id ORDER BY fetched_at DESC LIMIT 1
+      ) d ON true
+      WHERE pr.status = 'complete'
+      ORDER BY pr.property_id, pr.created_at DESC
+    `);
+
+    combinedReports.sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
+      new Date(b.created_at as string).getTime() - new Date(a.created_at as string).getTime()
+    );
+
+    let combinedQuality: Record<string, unknown>[] = [];
+    try {
+      combinedQuality = await query(`
+        SELECT * FROM rag_quality_runs WHERE run_type = 'combined' ORDER BY created_at DESC LIMIT 10
+      `);
+    } catch {}
+
+    if (section === "combined") {
+      return NextResponse.json({ combined: { reports: combinedReports, quality: combinedQuality } });
+    }
+  }
+
+  // ─── Section 5: Applications ────────────────────────────────────────
+  if (section === "applications" || !section) {
+    const stats = await query(`
+      SELECT
+        COUNT(*) AS total_reports,
+        COUNT(DISTINCT property_id) AS unique_properties,
+        COUNT(*) FILTER (WHERE status = 'complete') AS complete_reports,
+        COUNT(*) FILTER (WHERE insurance_risk_score IS NOT NULL) AS with_scores,
+        COUNT(*) FILTER (WHERE vision_findings IS NOT NULL AND jsonb_typeof(vision_findings) = 'array' AND jsonb_array_length(vision_findings) > 0) AS with_vision
+      FROM property_reports
+    `);
+
+    const visionStats = await query(`
+      SELECT COUNT(DISTINCT property_id) AS properties_analysed,
+             COUNT(*) AS total_images_analysed
+      FROM property_images WHERE vision_analysis IS NOT NULL
+    `);
+
+    let knowledgeCount = 0;
+    try {
+      const kc = await query(`SELECT COUNT(*) AS c FROM rag_knowledge_entries WHERE status = 'active'`);
+      knowledgeCount = Number(kc[0]?.c || 0);
+    } catch {}
+
+    let qualityAvg: Record<string, unknown>[] = [];
+    try {
+      qualityAvg = await query(`
+        SELECT rag_system,
+               AVG(score_specificity) AS avg_specificity,
+               AVG(score_accuracy) AS avg_accuracy,
+               AVG(score_actionability) AS avg_actionability,
+               AVG(score_consistency) AS avg_consistency,
+               COUNT(*) AS total_runs
+        FROM rag_quality_runs WHERE score_specificity IS NOT NULL GROUP BY rag_system
+      `);
+    } catch {}
+
+    const apiUsage = await query(`
+      SELECT endpoint, COUNT(*) AS calls,
+             COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days') AS calls_30d
+      FROM api_usage GROUP BY endpoint
+    `);
+
+    if (section === "applications") {
+      return NextResponse.json({
+        applications: {
+          report_stats: stats[0],
+          vision_stats: visionStats[0],
+          knowledge_entries: knowledgeCount,
+          quality_scores: qualityAvg,
+          api_usage: apiUsage,
+        },
+      });
+    }
+  }
+
+  return NextResponse.json({ ok: true, message: "Use ?section= param for specific data" });
+});
+
+// ─── POST: Knowledge base CRUD and quality run creation ───────────────
+export const POST = withAuth(async (req: NextRequest) => {
+  const body = await req.json();
+  const { action } = body;
+
+  if (action === "save_knowledge") {
+    const { id, name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status } = body;
+    if (!name) return NextResponse.json({ error: "name required" }, { status: 400 });
+
+    if (id) {
+      await query(
+        `UPDATE rag_knowledge_entries SET name=$1, description=$2, visual_indicators=$3, sa_context=$4,
+           severity=$5, cost_min_zar=$6, cost_max_zar=$7, category=$8, status=$9, updated_at=NOW() WHERE id=$10`,
+        [name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status || 'draft', id]
+      );
+      return NextResponse.json({ ok: true, id });
+    } else {
+      const rows = await query(
+        `INSERT INTO rag_knowledge_entries (name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        [name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status || 'draft']
+      );
+      return NextResponse.json({ ok: true, id: rows[0].id });
+    }
+  }
+
+  if (action === "toggle_knowledge") {
+    const { id } = body;
+    await query(
+      `UPDATE rag_knowledge_entries SET status = CASE WHEN status='active' THEN 'draft' ELSE 'active' END, updated_at=NOW() WHERE id=$1`,
+      [id]
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "save_quality_run") {
+    const { run_type, rag_system, query_text, image_url, property_id, rag_context,
+            response_without_rag, response_with_rag,
+            score_specificity, score_accuracy, score_actionability, score_consistency, notes } = body;
+    const rows = await query(
+      `INSERT INTO rag_quality_runs (run_type, rag_system, query_text, image_url, property_id, rag_context,
+        response_without_rag, response_with_rag, score_specificity, score_accuracy, score_actionability, score_consistency, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+      [run_type, rag_system, query_text, image_url, property_id,
+       rag_context ? JSON.stringify(rag_context) : null,
+       response_without_rag, response_with_rag,
+       score_specificity, score_accuracy, score_actionability, score_consistency, notes]
+    );
+    return NextResponse.json({ ok: true, id: rows[0].id });
+  }
+
+  if (action === "run_comparison") {
+    const { rag_system, query_text, property_id } = body;
+    if (!query_text) return NextResponse.json({ error: "query_text required" }, { status: 400 });
+
+    let ragContext: Record<string, unknown> = {};
+
+    if (rag_system === "property_intelligence" && property_id) {
+      const props = await query("SELECT * FROM properties WHERE id = $1", [property_id]);
+      const deeds = await query("SELECT * FROM deeds_data WHERE property_id = $1 ORDER BY fetched_at DESC LIMIT 1", [property_id]);
+      const crime = await query(
+        "SELECT incident_type, COUNT(*) AS cnt FROM crime_incidents WHERE suburb ILIKE $1 AND city ILIKE $2 GROUP BY incident_type",
+        [props[0]?.suburb || '', props[0]?.city || '']
+      );
+      ragContext = { property: props[0], deeds: deeds[0] || null, crime };
+    }
+
+    if (rag_system === "vision_condition") {
+      let kbEntries: Record<string, unknown>[] = [];
+      try {
+        kbEntries = await query("SELECT name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category FROM rag_knowledge_entries WHERE status = 'active'");
+      } catch {}
+      if (property_id) {
+        const findings = await query(
+          "SELECT vision_analysis FROM property_images WHERE property_id = $1 AND vision_analysis IS NOT NULL", [property_id]
+        );
+        ragContext = { knowledge_base: kbEntries, existing_findings: findings.map((f: Record<string, unknown>) => f.vision_analysis) };
+      } else {
+        ragContext = { knowledge_base: kbEntries };
+      }
+    }
+
+    const nicoSystem = `You are Nico, a calm, direct former estate agent (male, 38-42). You are honest and precise. You are contrarian where data supports it. You never mention AI or that you are an AI assistant. You give property advice like a knowledgeable friend who happens to know the SA property market inside out.`;
+
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const claude = new Anthropic();
+
+    const withoutRag = await claude.messages.create({
+      model: "claude-3-haiku-20240307",
+      max_tokens: 1024,
+      system: nicoSystem,
+      messages: [{ role: "user", content: query_text }],
+    });
+
+    const ragPrompt = `${query_text}\n\nUse the following verified data to inform your response:\n${JSON.stringify(ragContext, null, 2)}`;
+    const withRag = await claude.messages.create({
+      model: "claude-3-haiku-20240307",
+      max_tokens: 1024,
+      system: nicoSystem,
+      messages: [{ role: "user", content: ragPrompt }],
+    });
+
+    const responseWithout = withoutRag.content[0].type === "text" ? withoutRag.content[0].text : "";
+    const responseWith = withRag.content[0].type === "text" ? withRag.content[0].text : "";
+
+    return NextResponse.json({
+      ok: true,
+      response_without_rag: responseWithout,
+      response_with_rag: responseWith,
+      rag_context: ragContext,
+    });
+  }
+
+  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+});

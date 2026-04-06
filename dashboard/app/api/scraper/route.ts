@@ -131,6 +131,43 @@ export const POST = withAuth(async (req: NextRequest) => {
     } else if (source === "procompare") {
       scraperName = "procompare";
       args = [scriptPath("scrape-procompare.js"), "--delay", "3"];
+    } else if (source === "gvr") {
+      scraperName = "gvr";
+      args = ["-e", `
+        require('dotenv').config();
+        const { collectAllGVRs } = require('./collect-gvr');
+        (async () => {
+          console.log('GVR: Starting municipal valuation roll collection for all metros...');
+          try {
+            const result = await collectAllGVRs();
+            console.log('=== GVR complete: ' + JSON.stringify(result) + ' ===');
+          } catch (e) { console.error('GVR failed:', e.message); }
+          process.exit(0);
+        })();
+      `];
+    } else if (source === "water") {
+      scraperName = "water";
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const { collectForProperty } = require('./collect-municipal');
+        (async () => {
+          const { rows } = await pool.query(
+            "SELECT DISTINCT ON (p.city) p.id, p.city FROM properties p WHERE p.city IS NOT NULL AND p.water_quality_score IS NULL ORDER BY p.city, p.created_at DESC LIMIT 30"
+          );
+          console.log('Water Quality: ' + rows.length + ' cities to process');
+          let ok = 0, skip = 0;
+          for (const prop of rows) {
+            try {
+              const r = await collectForProperty(prop.id);
+              if (r?.water_quality_score) { console.log('OK: ' + prop.city + ' → water ' + r.water_quality_score + '/10, sewerage ' + (r.sewerage_quality_score || '?') + '/10'); ok++; }
+              else { console.log('SKIP: ' + prop.city + ' — not in DWS dataset'); skip++; }
+            } catch (e) { console.log('ERROR: ' + prop.city + ' — ' + e.message); skip++; }
+          }
+          console.log('=== Water Quality complete: ' + ok + ' OK, ' + skip + ' skipped ===');
+          await pool.end();
+        })();
+      `];
     } else {
       scraperName = `p24${suburb ? '_' + suburb.substring(0, 15) : ''}`;
       args = [scriptPath("scrape-p24.js")];

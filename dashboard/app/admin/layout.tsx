@@ -25,6 +25,12 @@ const sections = [
     ],
   },
   {
+    label: "INTELLIGENCE",
+    items: [
+      { href: "/admin/intelligence", label: "RAG Hub" },
+    ],
+  },
+  {
     label: "API",
     items: [
       { href: "/admin/api", label: "Clients & Docs" },
