@@ -12,6 +12,10 @@ type A = Record<string, any>;
 export default function PropertiesPage() {
   const router = useRouter();
 
+  // Analytics
+  const [analytics, setAnalytics] = useState<A | null>(null);
+  useEffect(() => { fetch("/api/analytics").then(r => r.json()).then(setAnalytics); }, []);
+
   // Add property
   const [input, setInput] = useState("");
   const [addLoading, setAddLoading] = useState(false);
@@ -161,8 +165,54 @@ export default function PropertiesPage() {
   const gs = globalStats;
   const gsTotal = gs.total || totalRows;
 
+  const DECISION_COLORS: Record<string, string> = { BUY: "bg-green-500", NEGOTIATE: "bg-yellow-500", INSPECT_FIRST: "bg-orange-500", WALK_AWAY: "bg-red-500" };
+
   return (
     <div>
+      {/* Property Intelligence */}
+      {analytics && (
+        <div className="grid grid-cols-3 gap-4 mb-6">
+          {/* Top Suburbs */}
+          <div className="bg-white border rounded-lg p-3">
+            <div className="text-[9px] text-gray-500 uppercase font-bold mb-2">Top Suburbs This Month</div>
+            {analytics.top_suburbs?.length > 0 ? analytics.top_suburbs.slice(0, 6).map((s: A, i: number) => (
+              <div key={i} className="flex justify-between text-xs border-b border-gray-50 py-0.5">
+                <span>{s.suburb}</span><span className="font-mono text-gray-400">{s.c}</span>
+              </div>
+            )) : <span className="text-xs text-gray-300">No orders yet</span>}
+          </div>
+
+          {/* Decision Distribution */}
+          <div className="bg-white border rounded-lg p-3">
+            <div className="text-[9px] text-gray-500 uppercase font-bold mb-2">Decisions This Month</div>
+            <div className="space-y-1">
+              {analytics.decisions?.map((d: A, i: number) => {
+                const total = analytics.decisions.reduce((s: number, x: A) => s + Number(x.c), 0) || 1;
+                return (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <div className={`w-2 h-2 rounded-full ${DECISION_COLORS[d.decision] || "bg-gray-400"}`} />
+                    <span className="w-24">{d.decision}</span>
+                    <div className="flex-1 bg-gray-100 rounded-full h-1.5"><div className={`h-1.5 rounded-full ${DECISION_COLORS[d.decision] || "bg-gray-400"}`} style={{ width: `${(Number(d.c) / total) * 100}%` }} /></div>
+                    <span className="font-mono text-gray-400 w-6 text-right">{d.c}</span>
+                  </div>
+                );
+              })}
+              {(!analytics.decisions || analytics.decisions.length === 0) && <span className="text-xs text-gray-300">No reports yet</span>}
+            </div>
+          </div>
+
+          {/* Common Defects */}
+          <div className="bg-white border rounded-lg p-3">
+            <div className="text-[9px] text-gray-500 uppercase font-bold mb-2">Most Common Defects</div>
+            {analytics.defects?.length > 0 ? analytics.defects.slice(0, 6).map((d: A, i: number) => (
+              <div key={i} className="flex justify-between text-xs border-b border-gray-50 py-0.5">
+                <span className="capitalize">{d.category}</span><span className="font-mono text-gray-400">{d.c}</span>
+              </div>
+            )) : <span className="text-xs text-gray-300">No defects found yet</span>}
+          </div>
+        </div>
+      )}
+
       {/* Search / Add Property */}
       <div className="bg-white border rounded-lg p-4 mb-6">
         <div className="flex gap-3 items-end">
