@@ -231,18 +231,18 @@ export default function PropertyDetailPage() {
     for (const step of steps) {
       setRunAllStep(step.label);
       try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 300000); // 5 min per step
         const res = await fetch(`/api/collect/${id}`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: step.action }),
+          signal: controller.signal,
         });
+        clearTimeout(timeout);
         const json = await res.json();
-        if (json.ok) {
-          results.push(`${step.label}: ${json.message}`);
-        } else {
-          results.push(`${step.label}: skipped — ${json.message}`);
-        }
+        results.push(`${step.label}: ${json.ok ? json.message || "done" : "skipped — " + (json.message || json.error || "unknown")}`);
       } catch (err) {
-        results.push(`${step.label}: error`);
+        results.push(`${step.label}: ${err instanceof Error && err.name === "AbortError" ? "timed out (5 min)" : "error — " + (err instanceof Error ? err.message : "unknown")}`);
       }
     }
 
@@ -624,7 +624,7 @@ export default function PropertyDetailPage() {
         <section className="bg-white border rounded-lg p-4">
           <div className="flex justify-between items-start mb-2">
             <div>
-              <h2 className="font-bold text-sm">Vision Analysis ({findings.length} findings)</h2>
+              <h2 className="font-bold text-sm">What is wrong with this property? ({findings.length} findings)</h2>
               {sectionUpdated("roof_material", "security_visible") && <span className="text-[9px] text-gray-300 ml-2">Updated: {sectionUpdated("roof_material", "security_visible")}</span>}
               <div className="text-[10px] text-gray-400"><a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Anthropic Claude</a> &middot; estimated</div>
             </div>
@@ -953,7 +953,7 @@ export default function PropertyDetailPage() {
           <div className="space-y-2">
             {p.water_quality_score != null && (
               <div className="bg-gray-50 rounded p-2">
-                <Datum label="Water Quality" value={`${p.water_quality_score}/10`} source={src("water_quality_score")} />
+                <Datum label={`Water Quality — ${p.city || "unknown city"}`} value={`${p.water_quality_score}/10`} source={src("water_quality_score")} />
                 <p className="text-xs text-gray-500 mt-1">{
                   p.water_quality_score >= 8 ? "Good — municipal water supply meets national standards. Safe for drinking."
                   : p.water_quality_score >= 5 ? "Moderate — water supply is functional but has some quality concerns. Consider a water filter."
@@ -963,7 +963,7 @@ export default function PropertyDetailPage() {
             )}
             {p.sewerage_quality_score != null && (
               <div className={`rounded p-2 ${p.sewerage_quality_score <= 4 ? "bg-red-50" : "bg-gray-50"}`}>
-                <Datum label="Sewerage Quality" value={`${p.sewerage_quality_score}/10`} source={src("sewerage_quality_score")} />
+                <Datum label={`Sewerage Quality — ${p.city || "unknown city"}`} value={`${p.sewerage_quality_score}/10`} source={src("sewerage_quality_score")} />
                 <p className="text-xs text-gray-500 mt-1">{
                   p.sewerage_quality_score >= 7 ? "Good — sewerage infrastructure is well maintained. Low risk of backflows or contamination."
                   : p.sewerage_quality_score >= 4 ? "Concerning — sewerage treatment is below national standards. Some risk of overflows during heavy rain. Check for damp in lower areas of property."
@@ -1073,27 +1073,46 @@ export default function PropertyDetailPage() {
           </section>
         )}
 
-        {/* ── AREA RISK DATA ── */}
-        {data.area_risks?.length > 0 && (
+        {/* ── SCHOOLS & CLIMATE (from new scrapers) ── */}
+        {data.area_risks?.some((r: A) => r.risk_type === "school_proximity") && (
           <section className="bg-white border rounded-lg p-4">
-            <h2 className="font-bold text-sm">Area Risk Intelligence</h2>
-            <div className="text-[10px] text-gray-400 mb-2">Suburb and city level risk data from government sources</div>
-            <div className="space-y-1">
-              {data.area_risks.filter((r: A) => !["water_quality", "sewerage_quality"].includes(r.risk_type)).map((r: A, i: number) => (
-                <div key={i} className="flex justify-between items-center text-sm bg-gray-50 rounded p-2">
-                  <div>
-                    <span className="capitalize font-medium">{r.risk_type.replace(/_/g, " ")}</span>
-                    {r.risk_level && <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                      r.risk_level === "CRITICAL" || r.risk_level === "HIGH" ? "bg-red-100 text-red-700" :
-                      r.risk_level === "MEDIUM" ? "bg-yellow-100 text-yellow-700" :
-                      "bg-green-100 text-green-700"
-                    }`}>{r.risk_level}</span>}
-                    {r.risk_score != null && <span className="ml-2 text-xs text-gray-500">{r.risk_score}/10</span>}
+            <h2 className="font-bold text-sm">Schools Nearby</h2>
+            {data.area_risks.filter((r: A) => r.risk_type === "school_proximity").map((r: A, i: number) => {
+              const d = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
+              return (
+                <div key={i}>
+                  <div className="flex gap-4 mt-2 mb-2">
+                    <div className="bg-gray-50 rounded p-2 text-center"><div className="text-xl font-bold">{r.risk_score}/10</div><div className="text-[9px] text-gray-500">School Score</div></div>
+                    <div className="bg-gray-50 rounded p-2 text-center"><div className="text-xl font-bold">{d?.total_found || d?.schools?.length || 0}</div><div className="text-[9px] text-gray-500">Within 3km</div></div>
+                    <div className="bg-gray-50 rounded p-2 text-center"><div className="text-xl font-bold">{d?.within_1km || 0}</div><div className="text-[9px] text-gray-500">Within 1km</div></div>
                   </div>
-                  <a href={r.source_url} target="_blank" rel="noreferrer" className="text-[9px] text-blue-500 hover:underline">{r.source_name}</a>
+                  {d?.schools?.slice(0, 5).map((s: A, si: number) => (
+                    <div key={si} className="flex justify-between text-xs border-b border-gray-100 py-1">
+                      <span>{s.name}</span>
+                      <span className="text-gray-400">{s.distance_km}km{s.rating ? ` · ${s.rating} stars` : ""}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              );
+            })}
+          </section>
+        )}
+
+        {data.area_risks?.some((r: A) => r.risk_type === "climate") && (
+          <section className="bg-white border rounded-lg p-4">
+            <h2 className="font-bold text-sm">Climate Profile</h2>
+            {data.area_risks.filter((r: A) => r.risk_type === "climate").map((r: A, i: number) => {
+              const d = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
+              if (!d) return null;
+              return (
+                <div key={i} className="grid grid-cols-4 gap-2 mt-2">
+                  <div className="bg-gray-50 rounded p-2 text-center"><div className="text-lg font-bold">{d.annual_rainfall_mm}mm</div><div className="text-[9px] text-gray-500">Annual Rain</div></div>
+                  <div className="bg-gray-50 rounded p-2 text-center"><div className="text-lg font-bold">{d.avg_humidity}%</div><div className="text-[9px] text-gray-500">Avg Humidity</div></div>
+                  <div className={`rounded p-2 text-center ${d.damp_risk === "HIGH" ? "bg-red-50" : "bg-gray-50"}`}><div className="text-lg font-bold">{d.damp_risk}</div><div className="text-[9px] text-gray-500">Damp Risk</div></div>
+                  <div className="bg-gray-50 rounded p-2 text-center"><div className="text-lg font-bold">{d.climate_zone?.replace(/_/g, " ")}</div><div className="text-[9px] text-gray-500">Zone</div></div>
+                </div>
+              );
+            })}
           </section>
         )}
 
