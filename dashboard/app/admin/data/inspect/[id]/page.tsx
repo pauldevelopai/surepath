@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { formatZAR, formatDate, severityColor } from "@/lib/format";
+import { formatZAR, formatDate, severityColor, humanize } from "@/lib/format";
 import { propertyTitle, propertySubtitle } from "@/lib/property-title";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -492,7 +492,7 @@ export default function PropertyDetailPage() {
               {streetviewImg.vision_analysis?.findings?.map((f: A, i: number) => (
                 <div key={i} className="flex gap-1 items-start text-xs mt-1">
                   <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
-                  <span className="flex-1">{f.observation}</span>
+                  <span className="flex-1">{humanize(f.observation)}</span>
                   <RateBtn section="streetview" hash={`sv-${i}`} context={{ observation: f.observation, severity: f.severity }} />
                 </div>
               ))}
@@ -569,7 +569,7 @@ export default function PropertyDetailPage() {
                       {satFindings.map((f: A, i: number) => (
                         <div key={i} className="flex gap-1 items-start text-xs mt-1">
                           <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
-                          <span className="flex-1">{f.observation}</span>
+                          <span className="flex-1">{humanize(f.observation)}</span>
                           <RateBtn section="satellite" hash={`finding-${i}`} context={{ observation: f.observation, severity: f.severity }} />
                         </div>
                       ))}
@@ -641,7 +641,7 @@ export default function PropertyDetailPage() {
                   <div key={`${sev}-${i}`} className="flex gap-2 items-start text-xs bg-gray-50 p-2 rounded">
                     <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
                     <div className="flex-1">
-                      <span>{f.observation || f.finding}</span>
+                      <span>{humanize(f.observation || f.finding || "")}</span>
                       {f.estimated_repair_cost_zar && <span className="text-gray-400 ml-1">({formatZAR(f.estimated_repair_cost_zar.min)}–{formatZAR(f.estimated_repair_cost_zar.max)})</span>}
                       {f.source_photo && <a href={f.source_photo} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline ml-2">[photo]</a>}
                     </div>

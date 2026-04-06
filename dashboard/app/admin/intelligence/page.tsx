@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
-import { formatZAR, formatDate, formatDateTime, severityColor } from "@/lib/format";
+import { formatZAR, formatDate, formatDateTime, severityColor, humanize } from "@/lib/format";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type A = Record<string, any>;
@@ -29,6 +29,8 @@ export default function IntelligenceHubPage() {
   const [qScores, setQScores] = useState<Record<string, number>>({});
   const [qSaving, setQSaving] = useState(false);
   const [verdicts, setVerdicts] = useState<Record<number, string>>({});
+  const [wrongIdx, setWrongIdx] = useState<number | null>(null);
+  const [wrongReason, setWrongReason] = useState("");
 
   const load = useCallback(async (s: string) => {
     const d = await (await fetch(`/api/intelligence?section=${s}`)).json();
@@ -49,7 +51,7 @@ export default function IntelligenceHubPage() {
   function handlePhoto(f: File) { const r = new FileReader(); r.onload = e => { const d = e.target?.result as string; setQPreview(d); const [h, b] = d.split(","); setQImage(b); setQMedia(h.match(/:(.*?);/)?.[1] || "image/jpeg"); }; r.readAsDataURL(f); }
   async function runCompare() { if (!qImage) return; setQRunning(true); setQResult(null); const d = await (await fetch("/api/intelligence", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "run_comparison", image_base64: qImage, image_media_type: qMedia }) })).json(); setQResult(d); setQRunning(false); }
   async function saveScore() { if (!qResult) return; setQSaving(true); await fetch("/api/intelligence", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "save_quality_run", run_type: "isolated", rag_system: "vision", query_text: "Photo comparison", response_without_rag: qResult.response_without_rag, response_with_rag: qResult.response_with_rag, ...Object.fromEntries(SCORE_LABELS.map(l => [`score_${l.toLowerCase()}`, qScores[l.toLowerCase()]])), notes: `KB: ${qResult.kb_entries_used || 0}` }) }); setQSaving(false); setQResult(null); setQScores({}); setQImage(null); setQPreview(null); load("quality"); }
-  async function submitCheck(i: number, v: string) { const item = dailyCheck?.[i]; if (!item) return; setVerdicts(prev => ({ ...prev, [i]: v })); await fetch("/api/intelligence", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "confirm_check", item_type: item.type, item_id: item.id || item.image_id, verdict: v, property_id: item.property_id }) }); }
+  async function submitCheck(i: number, v: string, reason?: string) { const item = dailyCheck?.[i]; if (!item) return; setVerdicts(prev => ({ ...prev, [i]: v })); await fetch("/api/intelligence", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "confirm_check", item_type: item.type, item_id: item.id || item.image_id, verdict: v, reason: reason || undefined, property_id: item.property_id }) }); }
 
   const now = new Date().toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" });
 
@@ -115,10 +117,10 @@ export default function IntelligenceHubPage() {
 
                   {/* Full content — never truncated */}
                   <div className="text-xs text-gray-800 mb-1.5">
-                    {item.type === "vision_finding" && <>{item.observation}</>}
-                    {item.type === "report_decision" && <>Decision: <span className="font-bold">{item.decision}</span> — {item.decision_reasoning}{item.asking_price ? ` (asking ${formatZAR(item.asking_price)})` : ""}</>}
-                    {item.type === "knowledge_entry" && <>{item.name}: {item.description}{item.sa_context ? <><br /><span className="text-blue-600">SA: {item.sa_context}</span></> : ""}{item.cost_min_zar ? ` — ${formatZAR(item.cost_min_zar)}–${formatZAR(item.cost_max_zar)}` : ""}</>}
-                    {item.type === "nico_evidence" && <>{item.output_language}{item.tier_reason ? <><br /><span className="text-gray-500 text-[10px]">Reason: {item.tier_reason}</span></> : ""}{item.limitations ? <><br /><span className="text-gray-400 text-[10px]">Can't tell: {item.limitations}</span></> : ""}</>}
+                    {item.type === "vision_finding" && <>{humanize(item.observation)}</>}
+                    {item.type === "report_decision" && <>Decision: <span className="font-bold">{humanize(item.decision)}</span> — {humanize(item.decision_reasoning)}{item.asking_price ? ` (asking ${formatZAR(item.asking_price)})` : ""}</>}
+                    {item.type === "knowledge_entry" && <>{item.name}: {humanize(item.description || "")}{item.sa_context ? <><br /><span className="text-blue-600">SA: {item.sa_context}</span></> : ""}{item.cost_min_zar ? ` — ${formatZAR(item.cost_min_zar)}–${formatZAR(item.cost_max_zar)}` : ""}</>}
+                    {item.type === "nico_evidence" && <>{humanize(item.output_language || "")}{item.tier_reason ? <><br /><span className="text-gray-500 text-[10px]">Reason: {humanize(item.tier_reason)}</span></> : ""}{item.limitations ? <><br /><span className="text-gray-400 text-[10px]">Can't tell: {humanize(item.limitations)}</span></> : ""}</>}
                   </div>
 
                   {/* Property link + image */}
@@ -130,11 +132,19 @@ export default function IntelligenceHubPage() {
 
                   {/* Verdict buttons */}
                   {!v ? (
-                    <div className="flex gap-1">
-                      <button onClick={() => submitCheck(idx, "correct")} className="px-2 py-0.5 text-[9px] bg-green-100 text-green-700 rounded hover:bg-green-200">Correct</button>
-                      <button onClick={() => submitCheck(idx, "incorrect")} className="px-2 py-0.5 text-[9px] bg-red-100 text-red-700 rounded hover:bg-red-200">Wrong</button>
-                      <button onClick={() => submitCheck(idx, "unsure")} className="px-2 py-0.5 text-[9px] bg-gray-100 text-gray-500 rounded hover:bg-gray-200">Unsure</button>
-                    </div>
+                    wrongIdx === idx ? (
+                      <div className="flex gap-1 items-center">
+                        <input className="border rounded px-1.5 py-0.5 text-[9px] w-40" placeholder="What's wrong? (optional)" value={wrongReason} onChange={e => setWrongReason(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { submitCheck(idx, "incorrect", wrongReason); setWrongIdx(null); setWrongReason(""); } }} autoFocus />
+                        <button onClick={() => { submitCheck(idx, "incorrect", wrongReason); setWrongIdx(null); setWrongReason(""); }} className="px-2 py-0.5 text-[9px] bg-red-500 text-white rounded">Submit</button>
+                        <button onClick={() => { setWrongIdx(null); setWrongReason(""); }} className="text-[9px] text-gray-400">x</button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-1">
+                        <button onClick={() => submitCheck(idx, "correct")} className="px-2 py-0.5 text-[9px] bg-green-100 text-green-700 rounded hover:bg-green-200">Correct</button>
+                        <button onClick={() => setWrongIdx(idx)} className="px-2 py-0.5 text-[9px] bg-red-100 text-red-700 rounded hover:bg-red-200">Wrong</button>
+                        <button onClick={() => submitCheck(idx, "unsure")} className="px-2 py-0.5 text-[9px] bg-gray-100 text-gray-500 rounded hover:bg-gray-200">Unsure</button>
+                      </div>
+                    )
                   ) : <span className={`text-[9px] font-bold ${v === "correct" ? "text-green-600" : v === "incorrect" ? "text-red-600" : "text-gray-400"}`}>Marked: {v}</span>}
                 </div>
               );

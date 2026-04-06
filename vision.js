@@ -65,13 +65,14 @@ WALL CRACKS — observation MUST name:
   3. PROBABLE CAUSE: shrinkage | thermal movement | foundation settlement | subsidence | moisture | poor construction | lateral pressure
   Severity: stair-step and horizontal = HIGH minimum. Wide >10mm = CRITICAL.
 
-DAMP & MOISTURE — classify as:
-  WATER_STAIN | ACTIVE_MOISTURE | EFFLORESCENCE | MOLD_GROWTH_RISK
-  Efflorescence = MEDIUM minimum, include "possible rising damp".
-  Mold = HIGH minimum.
+DAMP & MOISTURE — classify the condition but describe it in plain English in the observation:
+  Old water stain (dry, no active risk) | Active moisture (wet surface, bleeding) | Efflorescence (white salt deposits on masonry — possible rising damp) | Mold risk (dark discoloration with bloom pattern)
+  Efflorescence = MEDIUM minimum. Mold = HIGH minimum.
 
-CEILING — classify as:
-  HISTORIC_STAIN | ACTIVE_LEAK | MOLD_BLOOM | SAG
+CEILING — classify but describe in plain English:
+  Old dry stain | Active leak (fresh staining, wet sheen) | Mold (dark patches at corners/joists) | Sagging (deformation, water pooling)
+
+IMPORTANT: Never use SCREAMING_CASE codes (like ACTIVE_LEAK, MOLD_BLOOM, HISTORIC_STAIN, WATER_STAIN) in the observation or output_language fields. Those are internal categories only. Write observations and output language as plain sentences a normal person would understand.
 
 PLUMBING — note pipe material, corrosion level, geyser condition if visible.
 
