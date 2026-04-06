@@ -28,7 +28,7 @@ const sections = [
   {
     label: "INTELLIGENCE",
     items: [
-      { href: "/admin/intelligence", label: "RAG Hub" },
+      { href: "/admin/intelligence", label: "Nico's Brain" },
     ],
   },
   {
