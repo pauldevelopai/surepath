@@ -12,131 +12,135 @@ const client = new Anthropic();
 const BATCH_SIZE = 6;
 const VISION_MODEL = 'claude-sonnet-4-6';
 
-const VISION_SYSTEM_PROMPT = `You are a certified property inspector with 20 years of South African experience.
-Analyse these property photos. Identify every visible risk, defect, or flag
-that would concern a buyer, an insurer, or a trades professional.
+// ─── Holly: the vision reasoning system ───────────────────────────────
+// Holly sees the photo. Holly matches it against what she knows. Holly
+// explains her reasoning. Holly produces the finding. Every finding
+// must show its working — the WHY chain.
 
-Return structured JSON per photo:
+const HOLLY_PROMPT_VERSION = 'holly-v1';
+
+const HOLLY_SYSTEM_PROMPT = `You are Holly, Surepath's property vision analyst. You have 20 years of South African property inspection experience. You analyse property photos and produce findings that show their full reasoning.
+
+For each photo, return structured JSON:
 {
-  photo_type: 'exterior|interior|roof|bathroom|kitchen|db_board|ceiling|other',
-  findings: [{
-    category: 'roof|walls|damp|electrical|plumbing|ceiling|structure|extension',
-    observation: 'exact description of what you see',
-    confidence: 'CONFIRMED_VISIBLE|PROBABLE|POSSIBLE|NOT_DETECTABLE',
-    severity: 'CRITICAL|HIGH|MEDIUM|LOW|COSMETIC',
-    estimated_repair_cost_zar: { min: 0, max: 0 },
-    relevant_to: ['consumer','insurance','trades','solar']
+  "photo_type": "exterior|interior|roof|bathroom|kitchen|db_board|ceiling|other",
+  "findings": [{
+    "category": "roof|walls|damp|electrical|plumbing|ceiling|structure|extension",
+    "observation": "exact description of what you see in the photo",
+    "visual_location": "where in the photo (e.g. top-left corner, centre wall, bottom-right near floor)",
+    "severity": "CRITICAL|HIGH|MEDIUM|LOW|COSMETIC",
+    "estimated_repair_cost_zar": {"min": 0, "max": 0},
+    "cost_source": "kb_entry|holly_estimate",
+    "relevant_to": ["consumer","insurance","trades","solar"],
+    "kb_entry_matched": "name of the knowledge base entry that informed this finding, or null",
+    "kb_match_reason": "why this visual evidence matches that KB entry, or null",
+    "confidence_tier": 1,
+    "tier_reason": "why this tier — what evidence supports it and what is missing",
+    "corroboration": "how property context (age, suburb, climate) supports or contradicts this finding, or null if no context available",
+    "output_language": "the exact sentence for the buyer report",
+    "limitations": "what you cannot determine from this photo and why, or null"
   }],
-  roof_material: 'corrugated_cement|IBR|concrete_tile|clay_tile|other|unknown',
-  solar_installed: boolean,
-  roof_orientation_estimate: 'north|south|east|west|unclear',
-  asbestos_indicators: boolean,
-  security_visible: boolean,
-  security_observations: ['array of observed security features or gaps']
+  "roof_material": "corrugated_cement|IBR|concrete_tile|clay_tile|other|unknown",
+  "solar_installed": false,
+  "roof_orientation_estimate": "north|south|east|west|unclear",
+  "asbestos_indicators": false,
+  "security_visible": false,
+  "security_observations": []
 }
+
+CONFIDENCE TIERS — assign one to every finding:
+  Tier 1: Single visual observation, no corroboration. Output: "Possible [defect] visible — physical inspection recommended."
+  Tier 2: Observation corroborated by building age, construction era, or suburb data. Output: "Visual indicators consistent with [defect] in a property of this age and type — professional assessment recommended."
+  Tier 3: Pattern confirmed by knowledge base entry with consistent evidence. Output: "Strong indicators of [defect] based on visual evidence and property profile — professional assessment required before purchase."
+  Tier 4: Reserved for formally validated KB entries only. Do not assign Tier 4 unless the matched KB entry is explicitly marked as validated.
+  RULE: Never produce language above the tier the evidence supports.
 
 DEEP ANALYSIS REQUIREMENTS:
 
-WALL CRACKS — For every wall crack found, the observation MUST name:
+WALL CRACKS — observation MUST name:
   1. Crack PATTERN: vertical | horizontal | diagonal | stair-step in mortar joints | map/crazing | spalling
   2. Estimated WIDTH: hairline <1mm | fine 1-3mm | medium 3-10mm | wide >10mm
   3. PROBABLE CAUSE: shrinkage | thermal movement | foundation settlement | subsidence | moisture | poor construction | lateral pressure
-  Severity rules: stair-step and horizontal patterns = HIGH minimum. Wide cracks (>10mm) = CRITICAL minimum.
+  Severity: stair-step and horizontal = HIGH minimum. Wide >10mm = CRITICAL.
 
-DAMP & MOISTURE — For category 'damp', the observation must classify the condition:
-  - WATER_STAIN: past event, now dry, no active risk
-  - ACTIVE_MOISTURE: current bleeding or wet surface, high risk
-  - EFFLORESCENCE: white salt crystalline deposits on brick or plaster indicating chronic moisture movement through masonry. Rate MEDIUM minimum. Include "possible rising damp — recommend damp survey".
-  - MOLD_GROWTH_RISK: dark discoloration with bloom pattern or texture variation. Rate HIGH minimum.
+DAMP & MOISTURE — classify as:
+  WATER_STAIN | ACTIVE_MOISTURE | EFFLORESCENCE | MOLD_GROWTH_RISK
+  Efflorescence = MEDIUM minimum, include "possible rising damp".
+  Mold = HIGH minimum.
 
-CEILING — For category 'ceiling', the observation must distinguish:
-  - HISTORIC_STAIN: old stain, appears dry
-  - ACTIVE_LEAK: fresh staining, wet sheen, or progressive ring pattern
-  - MOLD_BLOOM: dark patches with texture, particularly at corners or along joists
-  - SAG: deformation indicating water pooling above ceiling board
+CEILING — classify as:
+  HISTORIC_STAIN | ACTIVE_LEAK | MOLD_BLOOM | SAG
 
-PLUMBING — When pipes are visible, the observation must note:
-  - Pipe material if discernible: copper | galvanised | CPVC | PVC | flexi hose | unknown
-  - Visible corrosion: none | surface rust | active corrosion with mineral deposits | weeping joint
-  - If a geyser is visible: approximate age condition (new | mid-life | old and corroded | not visible)
+PLUMBING — note pipe material, corrosion level, geyser condition if visible.
 
-SECURITY — Populate the security_observations array with observed features:
-  boundary wall height estimate, electric fence present/absent, burglar bars on windows,
-  security gate at front door, CCTV camera visible, motion sensor lights,
-  perimeter type (brick | pre-cast | palisade | none visible).
+SECURITY — list observed features in security_observations array.
 
-Rules: Never confirm asbestos — flag indicators only requiring professional testing. Use SA property terminology. Cost estimates in ZAR for SA labour rates.
-
-IMPORTANT: If system context is provided about this specific property, use it to guide your analysis. For example, if the property is pre-1977, pay extra attention to asbestos indicators. If the area has dolomite risk, look for foundation cracks that could indicate ground movement.`;
+RULES:
+- Never confirm asbestos — flag indicators only, require professional testing
+- SA property terminology and ZAR costs
+- If a knowledge base entry matches, reference it by name in kb_entry_matched
+- If property context is provided, use it to set the confidence tier — a pre-1977 property with visible grey corrugated sheets is Tier 2 for asbestos, not Tier 1
+- Always state what you CANNOT determine from the photo in limitations`;
 
 /**
- * Build the vision system prompt with optional property context and
- * active knowledge base entries from the RAG defect library.
+ * Build Holly's system prompt with property context and active KB entries.
+ * @param {object} propertyContext - { construction_era, suburb, city, roof_material, ... }
+ * @param {string[]} categoryFilter - optional, limit KB entries to these categories
  */
-async function getEnhancedPrompt() {
-  let prompt = VISION_SYSTEM_PROMPT;
+async function getHollyPrompt(propertyContext, categoryFilter) {
+  let prompt = HOLLY_SYSTEM_PROMPT;
 
-  // Append per-property context if set via env
-  const context = process.env.SUREPATH_VISION_CONTEXT;
-  if (context) {
-    prompt += `\n\nSYSTEM CONTEXT FOR THIS PROPERTY:\n${context}`;
+  // Append property context so Holly can corroborate findings
+  if (propertyContext && Object.keys(propertyContext).length > 0) {
+    const ctx = [];
+    if (propertyContext.construction_era) ctx.push(`Construction era: ${propertyContext.construction_era}`);
+    if (propertyContext.suburb) ctx.push(`Suburb: ${propertyContext.suburb}, ${propertyContext.city || ''}`);
+    if (propertyContext.roof_material) ctx.push(`Known roof material: ${propertyContext.roof_material}`);
+    if (propertyContext.building_age_risk) ctx.push(`Building age risk: asbestos=${propertyContext.building_age_risk.asbestos}, electrical=${propertyContext.building_age_risk.electrical}, plumbing=${propertyContext.building_age_risk.plumbing}`);
+    if (propertyContext.water_quality_score) ctx.push(`Water quality: ${propertyContext.water_quality_score}/10`);
+    if (propertyContext.dolomite_risk) ctx.push(`Dolomite risk: ${propertyContext.dolomite_risk}`);
+    if (propertyContext.flood_zone) ctx.push(`Flood zone: ${propertyContext.flood_zone}`);
+    if (propertyContext.municipal_value) ctx.push(`Municipal value: R${propertyContext.municipal_value}`);
+    if (ctx.length > 0) {
+      prompt += `\n\nPROPERTY CONTEXT (use this to corroborate findings and set confidence tiers):\n${ctx.join('\n')}`;
+    }
   }
 
-  // Append active knowledge base entries from RAG defect library
+  // Append per-property env context (legacy support)
+  const envContext = process.env.SUREPATH_VISION_CONTEXT;
+  if (envContext) {
+    prompt += `\n\nADDITIONAL CONTEXT:\n${envContext}`;
+  }
+
+  // Append active knowledge base entries
   try {
-    const { rows } = await pool.query(
-      `SELECT name, category, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar
-       FROM rag_knowledge_entries WHERE status = 'active' ORDER BY severity DESC`
-    );
+    let sql = `SELECT id, name, category, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar
+       FROM rag_knowledge_entries WHERE status = 'active'`;
+    const params = [];
+    if (categoryFilter && categoryFilter.length > 0) {
+      sql += ` AND category = ANY($1)`;
+      params.push(categoryFilter);
+    }
+    sql += ' ORDER BY severity DESC';
+
+    const { rows } = await pool.query(sql, params);
     if (rows.length > 0) {
       const entries = rows.map(e =>
-        `- ${e.name} [${e.category}, severity ${e.severity}/5${e.cost_min_zar ? `, R${e.cost_min_zar}–R${e.cost_max_zar}` : ''}]: ${e.description || ''}${e.visual_indicators ? ` LOOK FOR: ${e.visual_indicators}` : ''}${e.sa_context ? ` SA CONTEXT: ${e.sa_context}` : ''}`
+        `- [KB#${e.id}] ${e.name} [${e.category}, severity ${e.severity}/5${e.cost_min_zar ? `, R${e.cost_min_zar}–R${e.cost_max_zar}` : ''}]: ${e.description || ''}${e.visual_indicators ? ` LOOK FOR: ${e.visual_indicators}` : ''}${e.sa_context ? ` SA CONTEXT: ${e.sa_context}` : ''}`
       ).join('\n');
-      prompt += `\n\nSA DEFECT KNOWLEDGE BASE (${rows.length} entries — use these to identify region-specific defects and calibrate severity/cost estimates):\n${entries}`;
+      prompt += `\n\nKNOWLEDGE BASE (${rows.length} entries — match findings to these by name in kb_entry_matched. Use their costs and SA context to calibrate your estimates):\n${entries}`;
     }
   } catch {
-    // Table doesn't exist yet or query failed — continue without KB
+    // KB table doesn't exist yet — continue without
   }
 
   return prompt;
 }
 
-/**
- * Build the Street View / Satellite prompt with KB entries appended.
- */
-async function getEnhancedStreetViewPrompt() {
-  let prompt = STREETVIEW_PROMPT;
-  try {
-    const { rows } = await pool.query(
-      `SELECT name, category, visual_indicators, sa_context, severity
-       FROM rag_knowledge_entries WHERE status = 'active' AND category IN ('walls', 'damp', 'structure', 'roof', 'security') ORDER BY severity DESC`
-    );
-    if (rows.length > 0) {
-      const entries = rows.map(e =>
-        `- ${e.name} [${e.category}, severity ${e.severity}/5]: ${e.visual_indicators || ''}${e.sa_context ? ` SA: ${e.sa_context}` : ''}`
-      ).join('\n');
-      prompt += `\n\nSA DEFECT REFERENCE (exterior-relevant entries):\n${entries}`;
-    }
-  } catch {}
-  return prompt;
-}
-
-async function getEnhancedSatellitePrompt() {
-  let prompt = SATELLITE_PROMPT;
-  try {
-    const { rows } = await pool.query(
-      `SELECT name, category, visual_indicators, sa_context, severity
-       FROM rag_knowledge_entries WHERE status = 'active' AND category IN ('roof', 'structure') ORDER BY severity DESC`
-    );
-    if (rows.length > 0) {
-      const entries = rows.map(e =>
-        `- ${e.name} [${e.category}, severity ${e.severity}/5]: ${e.visual_indicators || ''}${e.sa_context ? ` SA: ${e.sa_context}` : ''}`
-      ).join('\n');
-      prompt += `\n\nSA DEFECT REFERENCE (roof/structure entries):\n${entries}`;
-    }
-  } catch {}
-  return prompt;
-}
+// Legacy aliases for callers that haven't been updated yet
+async function getEnhancedPrompt() { return getHollyPrompt(null); }
+async function getEnhancedStreetViewPrompt() { return getHollyPrompt(null, ['walls', 'damp', 'structure', 'roof', 'security']); }
+async function getEnhancedSatellitePrompt() { return getHollyPrompt(null, ['roof', 'structure']); }
 
 const STREETVIEW_PROMPT = `You are a certified property inspector with 20 years of South African experience.
 Analyse this Google Street View image of a property exterior. Focus specifically on:
@@ -305,11 +309,17 @@ function parseVisionResponse(text) {
  * @param {Array<object>} [hfResults] - Optional HF pre-classification results (one per image)
  * @returns {Array<object>} Parsed analysis for each image
  */
-async function analyseBatch(images, hfResults) {
+/**
+ * Analyse a batch of images with Holly.
+ * @param {Array} images - [{ url, base64, mediaType }]
+ * @param {Array} hfResults - optional HuggingFace pre-analysis results
+ * @param {object} propertyContext - property data for corroboration
+ * @param {number} propertyId - for storing evidence
+ */
+async function analyseBatch(images, hfResults, propertyContext, propertyId) {
   const content = [];
 
   for (let i = 0; i < images.length; i++) {
-    // Prepend HF context if available
     let photoLabel = `Photo ${i + 1}:`;
     if (hfResults && hfResults[i] && hfResults[i].space_type !== 'unknown') {
       const hf = hfResults[i];
@@ -335,7 +345,7 @@ async function analyseBatch(images, hfResults) {
       : 'Analyse this photo. Return ONLY the JSON object. No prose, no explanation, just the JSON starting with { and ending with }.',
   });
 
-  const systemPrompt = await getEnhancedPrompt();
+  const systemPrompt = await getHollyPrompt(propertyContext);
   const message = await client.messages.create({
     model: VISION_MODEL,
     max_tokens: 8192,
@@ -346,14 +356,79 @@ async function analyseBatch(images, hfResults) {
   // Log cost
   try {
     const { logClaude } = require('./costs');
-    await logClaude(VISION_MODEL, message.usage.input_tokens, message.usage.output_tokens, 'vision/analyse_batch');
+    await logClaude(VISION_MODEL, message.usage.input_tokens, message.usage.output_tokens, 'holly/analyse_batch');
   } catch {}
 
   const parsed = parseVisionResponse(message.content[0].text);
+  const results = Array.isArray(parsed) ? parsed : [parsed];
 
-  // Normalise: always return an array
-  if (Array.isArray(parsed)) return parsed;
-  return [parsed];
+  // Store Holly evidence for each finding
+  if (propertyId) {
+    for (let imgIdx = 0; imgIdx < results.length; imgIdx++) {
+      const analysis = results[imgIdx];
+      const sourceUrl = images[imgIdx]?.url || 'unknown';
+      if (!Array.isArray(analysis?.findings)) continue;
+
+      // Find or create the image record to get image_id
+      let imageId = null;
+      try {
+        const { rows } = await pool.query(
+          'SELECT id FROM property_images WHERE property_id = $1 AND image_url = $2 LIMIT 1',
+          [propertyId, sourceUrl]
+        );
+        imageId = rows[0]?.id;
+      } catch {}
+
+      if (!imageId) continue;
+
+      // Resolve KB entry IDs from names
+      let kbEntries = {};
+      try {
+        const { rows } = await pool.query('SELECT id, name FROM rag_knowledge_entries WHERE status = $1', ['active']);
+        for (const r of rows) kbEntries[r.name.toLowerCase()] = r.id;
+      } catch {}
+
+      for (let fi = 0; fi < analysis.findings.length; fi++) {
+        const f = analysis.findings[fi];
+        if (!f.observation) continue;
+
+        // Resolve KB entry ID if Holly named one
+        let kbEntryId = null;
+        if (f.kb_entry_matched) {
+          kbEntryId = kbEntries[f.kb_entry_matched.toLowerCase()] || null;
+        }
+
+        try {
+          await pool.query(
+            `INSERT INTO holly_evidence (
+              property_id, image_id, image_url, finding_index, category, observation, visual_location,
+              kb_entry_id, kb_match_reason, corroborating_data, corroboration_effect,
+              confidence_tier, tier_reason, severity, output_language, limitations,
+              cost_min_zar, cost_max_zar, cost_source, model_used, prompt_version
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+            [
+              propertyId, imageId, sourceUrl, fi,
+              f.category || 'unknown', f.observation, f.visual_location || null,
+              kbEntryId, f.kb_match_reason || null,
+              propertyContext ? JSON.stringify(propertyContext) : null,
+              f.corroboration || null,
+              f.confidence_tier || 1, f.tier_reason || 'single observation',
+              f.severity || 'LOW',
+              f.output_language || f.observation,
+              f.limitations || null,
+              f.estimated_repair_cost_zar?.min || null, f.estimated_repair_cost_zar?.max || null,
+              f.cost_source || 'holly_estimate',
+              VISION_MODEL, HOLLY_PROMPT_VERSION,
+            ]
+          );
+        } catch (err) {
+          console.error(`[holly] Failed to store evidence for finding ${fi}:`, err.message);
+        }
+      }
+    }
+  }
+
+  return results;
 }
 
 // ─── Main pipeline ─────────────────────────────────────────────────────
@@ -366,8 +441,37 @@ async function analyseBatch(images, hfResults) {
  * @returns {{ analyses: object[], aggregated: object }}
  */
 async function analysePropertyImages(imageUrls, propertyId) {
+  // Step 0: Load property context for Holly's corroboration
+  let propertyContext = null;
+  try {
+    const { rows } = await pool.query(
+      `SELECT p.construction_era, p.suburb, p.city, p.roof_material, p.solar_installed,
+              p.water_quality_score, p.dolomite_risk, p.flood_zone, p.security_visible,
+              d.municipal_value, d.registered_owner
+       FROM properties p
+       LEFT JOIN deeds_data d ON d.property_id = p.id
+       WHERE p.id = $1
+       ORDER BY d.fetched_at DESC NULLS LAST LIMIT 1`,
+      [propertyId]
+    );
+    if (rows[0]) {
+      propertyContext = rows[0];
+      // Add building age risk if era is known
+      try {
+        const { classifyEra, AGE_RISK_MATRIX } = require('./synthesis');
+        const eraKey = classifyEra(rows[0].construction_era);
+        if (eraKey && AGE_RISK_MATRIX[eraKey]) {
+          propertyContext.building_age_risk = AGE_RISK_MATRIX[eraKey];
+        }
+      } catch {}
+    }
+    console.log(`[holly] Property context loaded: era=${propertyContext?.construction_era || 'unknown'}, suburb=${propertyContext?.suburb || 'unknown'}`);
+  } catch (err) {
+    console.error('[holly] Failed to load property context:', err.message);
+  }
+
   // Step 1: Download all images and convert to base64
-  console.log(`Downloading ${imageUrls.length} images...`);
+  console.log(`[holly] Downloading ${imageUrls.length} images...`);
   const images = [];
   for (const url of imageUrls) {
     try {
@@ -394,13 +498,13 @@ async function analysePropertyImages(imageUrls, propertyId) {
     batches.push(images.slice(i, i + BATCH_SIZE));
   }
 
-  // Step 3: Call Claude Vision on each batch
-  console.log(`Analysing ${images.length} images in ${batches.length} batch(es)...`);
+  // Step 3: Call Holly on each batch
+  console.log(`[holly] Analysing ${images.length} images in ${batches.length} batch(es)...`);
   const allAnalyses = [];
 
   for (let i = 0; i < batches.length; i++) {
-    console.log(`  Batch ${i + 1}/${batches.length} (${batches[i].length} images)...`);
-    const batchResults = await analyseBatch(batches[i]);
+    console.log(`[holly] Batch ${i + 1}/${batches.length} (${batches[i].length} images)...`);
+    const batchResults = await analyseBatch(batches[i], null, propertyContext, propertyId);
 
     // Ensure every image in the batch gets a result — even if parse failed
     for (let j = 0; j < batches[i].length; j++) {
@@ -455,8 +559,8 @@ async function analysePropertyImages(imageUrls, propertyId) {
  * Analyse a Street View image (base64) with claude-sonnet-4-5.
  * Focus: exterior condition, wall cracking, roof condition, damp staining.
  */
-async function analyseStreetView(imageBase64) {
-  const streetViewPrompt = await getEnhancedStreetViewPrompt();
+async function analyseStreetView(imageBase64, propertyContext) {
+  const streetViewPrompt = await getHollyPrompt(propertyContext, ['walls', 'damp', 'structure', 'roof', 'security']);
   const message = await client.messages.create({
     model: VISION_MODEL,
     max_tokens: 8192,
@@ -482,8 +586,8 @@ async function analyseStreetView(imageBase64) {
  * Analyse a satellite image (base64) with claude-sonnet-4-5.
  * Focus: roof material, solar panels, outbuildings, roof orientation.
  */
-async function analyseSatellite(imageBase64) {
-  const satellitePrompt = await getEnhancedSatellitePrompt();
+async function analyseSatellite(imageBase64, propertyContext) {
+  const satellitePrompt = await getHollyPrompt(propertyContext, ['roof', 'structure']);
   const message = await client.messages.create({
     model: VISION_MODEL,
     max_tokens: 8192,
@@ -800,12 +904,29 @@ async function analyseWithHFPrestage(propertyId, imageUrls) {
     hfBatches.push(hfResults.slice(i, i + BATCH_SIZE));
   }
 
-  console.log(`[vision+hf] Analysing ${images.length} images in ${batches.length} batch(es) with Claude Vision...`);
+  // Load property context for Holly
+  let propertyContext = null;
+  try {
+    const { rows } = await pool.query(
+      `SELECT p.construction_era, p.suburb, p.city, p.roof_material, p.water_quality_score, p.dolomite_risk, p.flood_zone
+       FROM properties p WHERE p.id = $1`, [propertyId]
+    );
+    if (rows[0]) {
+      propertyContext = rows[0];
+      try {
+        const { classifyEra, AGE_RISK_MATRIX } = require('./synthesis');
+        const eraKey = classifyEra(rows[0].construction_era);
+        if (eraKey && AGE_RISK_MATRIX[eraKey]) propertyContext.building_age_risk = AGE_RISK_MATRIX[eraKey];
+      } catch {}
+    }
+  } catch {}
+
+  console.log(`[holly+hf] Analysing ${images.length} images in ${batches.length} batch(es)...`);
   const allAnalyses = [];
 
   for (let i = 0; i < batches.length; i++) {
-    console.log(`  Batch ${i + 1}/${batches.length} (${batches[i].length} images)...`);
-    const batchResults = await analyseBatch(batches[i], hfBatches[i]);
+    console.log(`[holly+hf] Batch ${i + 1}/${batches.length} (${batches[i].length} images)...`);
+    const batchResults = await analyseBatch(batches[i], hfBatches[i], propertyContext, propertyId);
 
     // Ensure every image in the batch gets a result — even if parse failed
     for (let j = 0; j < batches[i].length; j++) {
