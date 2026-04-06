@@ -5,8 +5,6 @@ import { formatZAR, formatDate, severityColor } from "@/lib/format";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type A = Record<string, any>;
 
-const NICO_DESCRIPTION = "Calm, direct, former estate agent. Male 38–42. Honest and precise, contrarian where data supports it. No AI mention ever.";
-
 const APPLICATIONS: { system: string; name: string; segment: string; status: string; description: string }[] = [
   { system: "property_intelligence", name: "Consumer Buyer Reports", segment: "consumer", status: "primary", description: "Full property inspection reports for individual buyers" },
   { system: "property_intelligence", name: "Insurance Risk Scoring API", segment: "b2b", status: "planned", description: "Risk score endpoint for insurance underwriters" },
@@ -77,9 +75,9 @@ export default function IntelligenceHubPage() {
 
   const [kbForm, setKbForm] = useState<A | null>(null);
   const [kbSaving, setKbSaving] = useState(false);
-  const [qSystem, setQSystem] = useState("property_intelligence");
-  const [qQuery, setQQuery] = useState("");
-  const [qPropertyId, setQPropertyId] = useState("");
+  const [qImage, setQImage] = useState<string | null>(null);
+  const [qImagePreview, setQImagePreview] = useState<string | null>(null);
+  const [qMediaType, setQMediaType] = useState("image/jpeg");
   const [qRunning, setQRunning] = useState(false);
   const [qResult, setQResult] = useState<A | null>(null);
   const [qScores, setQScores] = useState<Record<string, number>>({});
@@ -129,18 +127,33 @@ export default function IntelligenceHubPage() {
   }
 
   async function runComparison() {
-    if (!qQuery) return;
+    if (!qImage) return;
     setQRunning(true);
     setQResult(null);
     const data = await (await fetch("/api/intelligence", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        action: "run_comparison", rag_system: qSystem, query_text: qQuery,
-        property_id: qPropertyId ? parseInt(qPropertyId) : null,
+        action: "run_comparison",
+        image_base64: qImage,
+        image_media_type: qMediaType,
       }),
     })).json();
     setQResult(data);
     setQRunning(false);
+  }
+
+  function handlePhotoDrop(file: File) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      setQImagePreview(dataUrl);
+      // Extract base64 and media type
+      const [header, base64] = dataUrl.split(",");
+      const mediaType = header.match(/:(.*?);/)?.[1] || "image/jpeg";
+      setQImage(base64);
+      setQMediaType(mediaType);
+    };
+    reader.readAsDataURL(file);
   }
 
   async function saveQualityRun() {
@@ -149,18 +162,20 @@ export default function IntelligenceHubPage() {
     await fetch("/api/intelligence", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        action: "save_quality_run", run_type: "isolated", rag_system: qSystem,
-        query_text: qQuery, property_id: qPropertyId ? parseInt(qPropertyId) : null,
-        rag_context: qResult.rag_context, response_without_rag: qResult.response_without_rag,
+        action: "save_quality_run", run_type: "isolated", rag_system: "vision_condition",
+        query_text: "Photo comparison", image_url: qImagePreview?.substring(0, 200),
+        response_without_rag: qResult.response_without_rag,
         response_with_rag: qResult.response_with_rag,
         score_specificity: qScores.specificity, score_accuracy: qScores.accuracy,
         score_actionability: qScores.actionability, score_consistency: qScores.consistency,
+        notes: `KB entries used: ${qResult.kb_entries_used || 0}`,
       }),
     });
     setQSaving(false);
     setQResult(null);
     setQScores({});
-    setQQuery("");
+    setQImage(null);
+    setQImagePreview(null);
     loadSection("quality");
     loadSection("summary");
   }
@@ -484,51 +499,33 @@ export default function IntelligenceHubPage() {
           KNOWLEDGE BASE MANAGER
           ═══════════════════════════════════════════════════════════════ */}
       <div id="kb-section" className="bg-white border rounded-lg p-4 shadow-sm mb-6">
-        <div className="flex justify-between items-start mb-3">
-          <div>
-            <h2 className="font-bold text-sm">Knowledge Base Manager</h2>
-            <p className="text-xs text-gray-400">Active entries are injected into vision.js prompts on every report run — they directly improve defect identification and cost calibration</p>
-          </div>
-          <button onClick={() => setKbForm({ name: "", description: "", visual_indicators: "", sa_context: "", severity: 3, cost_min_zar: "", cost_max_zar: "", category: "", status: "draft" })} className="px-3 py-1 bg-[#0D1B2A] text-white text-xs rounded hover:bg-[#1a2d42]">
-            + Add Entry
-          </button>
-        </div>
+        <h2 className="font-bold text-sm mb-1">Knowledge Base</h2>
+        <p className="text-xs text-gray-400 mb-3">Real photos linked to real findings and verified costs. Active entries are included as reference examples in every vision analysis.</p>
 
-        {knowledge?.coverage && (
-          <div className="grid grid-cols-6 gap-2 mb-4">
-            {[
-              { label: "Properties", val: knowledge.coverage.total_properties },
-              { label: "Geocoded", val: knowledge.coverage.geocoded },
-              { label: "With Deeds", val: knowledge.coverage.properties_with_deeds },
-              { label: "Vision Analysed", val: knowledge.coverage.properties_with_vision },
-              { label: "With Roof ID", val: knowledge.coverage.with_roof },
-              { label: "With Crime Score", val: knowledge.coverage.with_crime },
-            ].map(c => (
-              <div key={c.label} className="bg-gray-50 rounded p-2 text-center">
-                <div className="text-lg font-bold">{c.val}</div>
-                <div className="text-[9px] text-gray-500 uppercase">{c.label}</div>
-              </div>
-            ))}
-          </div>
-        )}
-
+        {/* KB Entry Form */}
         {kbForm && (
           <div className="border rounded p-3 mb-4 bg-blue-50">
-            <div className="text-xs font-bold mb-2">{kbForm.id ? "Edit" : "New"} Defect Entry</div>
+            <div className="text-xs font-bold mb-2">{kbForm.id ? "Edit" : "New"} Knowledge Entry</div>
+            {kbForm.image_url && (
+              <div className="mb-2">
+                <img src={kbForm.image_url} alt="" className="w-48 h-32 object-cover rounded border" />
+                <div className="text-[9px] text-gray-400 mt-1">Linked photo from {kbForm.address_raw || `property ${kbForm.property_id}`}</div>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2 mb-2">
-              <input className="border rounded px-2 py-1 text-xs" placeholder="Defect name" value={kbForm.name} onChange={e => setKbForm({ ...kbForm, name: e.target.value })} />
+              <input className="border rounded px-2 py-1 text-xs" placeholder="Defect name (e.g. Rising Damp — Cape Town)" value={kbForm.name} onChange={e => setKbForm({ ...kbForm, name: e.target.value })} />
               <select className="border rounded px-2 py-1 text-xs" value={kbForm.category} onChange={e => setKbForm({ ...kbForm, category: e.target.value })}>
                 <option value="">Category...</option>
-                {["roof", "walls", "damp", "electrical", "plumbing", "ceiling", "structure", "extension", "security", "general"].map(c => <option key={c} value={c}>{c}</option>)}
+                {["roof", "walls", "damp", "electrical", "plumbing", "ceiling", "structure", "extension", "security", "vegetation", "environment", "general"].map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
-            <textarea className="border rounded px-2 py-1 text-xs w-full mb-2" rows={2} placeholder="Description" value={kbForm.description} onChange={e => setKbForm({ ...kbForm, description: e.target.value })} />
-            <textarea className="border rounded px-2 py-1 text-xs w-full mb-2" rows={2} placeholder="Visual indicators (what to look for in photos)" value={kbForm.visual_indicators} onChange={e => setKbForm({ ...kbForm, visual_indicators: e.target.value })} />
-            <textarea className="border rounded px-2 py-1 text-xs w-full mb-2" rows={2} placeholder="SA-specific context (regional patterns, materials, climate)" value={kbForm.sa_context} onChange={e => setKbForm({ ...kbForm, sa_context: e.target.value })} />
+            <textarea className="border rounded px-2 py-1 text-xs w-full mb-2" rows={2} placeholder="What Claude found in this photo" value={kbForm.description} onChange={e => setKbForm({ ...kbForm, description: e.target.value })} />
+            <textarea className="border rounded px-2 py-1 text-xs w-full mb-2" rows={2} placeholder="What to look for in similar photos (visual indicators)" value={kbForm.visual_indicators} onChange={e => setKbForm({ ...kbForm, visual_indicators: e.target.value })} />
+            <textarea className="border rounded px-2 py-1 text-xs w-full mb-2" rows={2} placeholder="SA-specific context — why this matters in this region, local costs, common causes" value={kbForm.sa_context} onChange={e => setKbForm({ ...kbForm, sa_context: e.target.value })} />
             <div className="grid grid-cols-4 gap-2 mb-2">
               <div><label className="text-[9px] text-gray-500">Severity (1-5)</label><select className="border rounded px-2 py-1 text-xs w-full" value={kbForm.severity} onChange={e => setKbForm({ ...kbForm, severity: Number(e.target.value) })}>{[1,2,3,4,5].map(n => <option key={n} value={n}>{n}</option>)}</select></div>
-              <div><label className="text-[9px] text-gray-500">Cost Min (ZAR)</label><input className="border rounded px-2 py-1 text-xs w-full" type="number" placeholder="0" value={kbForm.cost_min_zar} onChange={e => setKbForm({ ...kbForm, cost_min_zar: e.target.value })} /></div>
-              <div><label className="text-[9px] text-gray-500">Cost Max (ZAR)</label><input className="border rounded px-2 py-1 text-xs w-full" type="number" placeholder="0" value={kbForm.cost_max_zar} onChange={e => setKbForm({ ...kbForm, cost_max_zar: e.target.value })} /></div>
+              <div><label className="text-[9px] text-gray-500">Actual Cost Min (ZAR)</label><input className="border rounded px-2 py-1 text-xs w-full" type="number" placeholder="0" value={kbForm.cost_min_zar} onChange={e => setKbForm({ ...kbForm, cost_min_zar: e.target.value })} /></div>
+              <div><label className="text-[9px] text-gray-500">Actual Cost Max (ZAR)</label><input className="border rounded px-2 py-1 text-xs w-full" type="number" placeholder="0" value={kbForm.cost_max_zar} onChange={e => setKbForm({ ...kbForm, cost_max_zar: e.target.value })} /></div>
               <div><label className="text-[9px] text-gray-500">Status</label><select className="border rounded px-2 py-1 text-xs w-full" value={kbForm.status} onChange={e => setKbForm({ ...kbForm, status: e.target.value })}><option value="draft">Draft</option><option value="active">Active</option></select></div>
             </div>
             <div className="flex gap-2">
@@ -538,37 +535,80 @@ export default function IntelligenceHubPage() {
           </div>
         )}
 
+        {/* Active KB entries with photos */}
         {knowledge?.entries && knowledge.entries.length > 0 && (
           <div className="mb-4">
-            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-2">Curated Defect Library ({knowledge.entries.length} entries)</div>
-            <table className="w-full text-xs border-collapse">
-              <thead><tr className="text-left text-gray-500 border-b"><th className="pb-1 px-1">Name</th><th className="pb-1 px-1">Category</th><th className="pb-1 px-1">Severity</th><th className="pb-1 px-1">Cost Range</th><th className="pb-1 px-1">Status</th><th className="pb-1 px-1"></th></tr></thead>
-              <tbody>
-                {knowledge.entries.map((e: A) => (
-                  <tr key={e.id} className="border-b hover:bg-gray-50">
-                    <td className="py-1.5 px-1 font-medium">{e.name}</td>
-                    <td className="py-1.5 px-1 capitalize text-gray-500">{e.category}</td>
-                    <td className="py-1.5 px-1"><span className={`px-1.5 py-0.5 rounded text-[10px] ${e.severity >= 4 ? "bg-red-100 text-red-800" : e.severity === 3 ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-600"}`}>{e.severity}/5</span></td>
-                    <td className="py-1.5 px-1 font-mono text-gray-500">{e.cost_min_zar && e.cost_max_zar ? `${formatZAR(e.cost_min_zar)} – ${formatZAR(e.cost_max_zar)}` : "—"}</td>
-                    <td className="py-1.5 px-1"><button onClick={() => toggleKnowledge(e.id)} className={`px-1.5 py-0.5 rounded text-[10px] ${e.status === "active" ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-500"}`}>{e.status}</button></td>
-                    <td className="py-1.5 px-1"><button onClick={() => setKbForm(e)} className="text-[10px] text-blue-500 hover:underline">Edit</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-2">{knowledge.entries.filter((e: A) => e.status === "active").length} active / {knowledge.entries.length} total entries</div>
+            <div className="grid grid-cols-1 gap-2">
+              {knowledge.entries.map((e: A) => (
+                <div key={e.id} className={`border rounded p-2 flex gap-3 ${e.status === "active" ? "border-green-200 bg-green-50/30" : "border-gray-200"}`}>
+                  {e.image_url ? (
+                    <img src={e.image_url} alt="" className="w-24 h-16 object-cover rounded shrink-0" />
+                  ) : (
+                    <div className="w-24 h-16 bg-gray-100 rounded shrink-0 flex items-center justify-center text-[9px] text-gray-400">No photo</div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium">{e.name}</span>
+                      <span className={`px-1 rounded text-[9px] ${severityColor[e.severity >= 4 ? "HIGH" : e.severity === 3 ? "MEDIUM" : "LOW"] || "bg-gray-200"}`}>{e.severity}/5</span>
+                      <span className="capitalize text-[9px] text-gray-400">{e.category}</span>
+                      {e.cost_min_zar && <span className="text-[9px] font-mono text-gray-500">{formatZAR(e.cost_min_zar)}–{formatZAR(e.cost_max_zar)}</span>}
+                    </div>
+                    {e.description && <div className="text-[10px] text-gray-600 mt-0.5 truncate">{e.description}</div>}
+                    {e.sa_context && <div className="text-[10px] text-blue-600 mt-0.5 truncate">SA: {e.sa_context}</div>}
+                  </div>
+                  <div className="flex flex-col gap-1 shrink-0">
+                    <button onClick={() => toggleKnowledge(e.id)} className={`px-2 py-0.5 rounded text-[9px] font-bold ${e.status === "active" ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-500"}`}>{e.status}</button>
+                    <button onClick={() => setKbForm(e)} className="px-2 py-0.5 rounded text-[9px] bg-blue-50 text-blue-600">Edit</button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
-        {knowledge?.finding_patterns && knowledge.finding_patterns.length > 0 && (
+        {/* Photo browser — analysed photos with findings, click to add to KB */}
+        {knowledge?.analysed_photos && knowledge.analysed_photos.length > 0 && (
           <div>
-            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-2">Observed Patterns (from {knowledge.coverage?.properties_with_vision || 0} analysed properties)</div>
-            <div className="grid grid-cols-2 gap-2">
-              {knowledge.finding_patterns.slice(0, 20).map((p: A, i: number) => (
-                <div key={i} className="flex items-start gap-2 text-[10px] border-b border-gray-100 py-1">
-                  <span className={`px-1 rounded shrink-0 ${severityColor[p.severity] || "bg-gray-200"}`}>{p.severity}</span>
-                  <span className="capitalize text-gray-500 shrink-0 w-16">{p.category}</span>
-                  <span className="text-gray-700 truncate flex-1">{p.observation}</span>
-                  <span className="font-mono text-gray-400 shrink-0">{p.occurrences}x</span>
+            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1">Analysed Photos — click a finding to add it to the knowledge base</div>
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              {knowledge.analysed_photos.map((photo: A) => (
+                <div key={photo.image_id} className="border rounded overflow-hidden">
+                  <div className="flex">
+                    <img src={photo.image_url} alt="" className="w-32 h-24 object-cover shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                    <div className="p-2 flex-1 min-w-0">
+                      <div className="text-[10px] text-gray-500 truncate">{photo.address_raw}</div>
+                      <div className="text-[9px] text-gray-400">{photo.suburb} | {photo.photo_type || photo.image_type}</div>
+                    </div>
+                  </div>
+                  <div className="px-2 pb-2">
+                    {(photo.findings || []).map((f: A, fi: number) => (
+                      <div key={fi} className="flex items-start gap-1.5 py-1 border-t border-gray-100 first:border-0">
+                        <span className={`px-1 rounded text-[8px] shrink-0 mt-0.5 ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
+                        <span className="text-[10px] text-gray-700 flex-1">{f.observation}</span>
+                        <button onClick={() => {
+                          const sevMap: Record<string, number> = { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, COSMETIC: 1 };
+                          setKbForm({
+                            name: `${(f.category || "").charAt(0).toUpperCase() + (f.category || "").slice(1)} — ${(f.observation || "").substring(0, 40)}`,
+                            description: f.observation,
+                            visual_indicators: f.observation,
+                            sa_context: "",
+                            severity: sevMap[f.severity] || 3,
+                            cost_min_zar: f.estimated_repair_cost_zar?.min || "",
+                            cost_max_zar: f.estimated_repair_cost_zar?.max || "",
+                            category: f.category || "",
+                            status: "draft",
+                            image_id: photo.image_id,
+                            image_url: photo.image_url,
+                            property_id: photo.property_id,
+                            address_raw: photo.address_raw,
+                            original_finding: f,
+                          });
+                          document.getElementById("kb-section")?.scrollIntoView({ behavior: "smooth" });
+                        }} className="text-[8px] text-blue-600 hover:underline shrink-0 font-bold whitespace-nowrap">+ Add to KB</button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -581,39 +621,49 @@ export default function IntelligenceHubPage() {
           SECTION 3: QUALITY & IMPROVEMENT
           ═══════════════════════════════════════════════════════════════ */}
       <div id="quality-section" className="bg-white border rounded-lg p-4 shadow-sm mb-6">
-        <h2 className="font-bold text-sm mb-1">Quality & Improvement</h2>
-        <p className="text-xs text-gray-400 mb-3">Side-by-side: Nico without RAG data vs Nico with RAG data. Same persona, same system prompt — isolating the data as the only variable.</p>
-        <div className="text-[9px] text-gray-300 mb-3">{NICO_DESCRIPTION}</div>
+        <h2 className="font-bold text-sm mb-1">Quality Comparison</h2>
+        <p className="text-xs text-gray-400 mb-3">Drop a property photo. Same image goes through Claude Vision twice — once with the base prompt, once with your knowledge base entries injected. See the difference.</p>
 
-        <div className="border rounded p-3 bg-gray-50 mb-4">
-          <div className="text-xs font-bold mb-2">Run Comparison</div>
-          <div className="grid grid-cols-3 gap-2 mb-2">
-            <select className="border rounded px-2 py-1 text-xs" value={qSystem} onChange={e => setQSystem(e.target.value)}>
-              <option value="property_intelligence">RAG 01 — Property Intelligence</option>
-              <option value="vision_condition">RAG 02 — Vision & Condition</option>
-            </select>
-            <input className="border rounded px-2 py-1 text-xs" placeholder="Property ID (optional)" value={qPropertyId} onChange={e => setQPropertyId(e.target.value)} />
-            <button onClick={runComparison} disabled={qRunning || !qQuery} className="px-3 py-1 bg-[#0D1B2A] text-white text-xs rounded hover:bg-[#1a2d42] disabled:opacity-50">
-              {qRunning ? "Running..." : "Run Comparison"}
-            </button>
-          </div>
-          <textarea className="border rounded px-2 py-1 text-xs w-full" rows={3} placeholder="Enter a property question (e.g. 'What should I know about buying a 1960s house in Rondebosch?')" value={qQuery} onChange={e => setQQuery(e.target.value)} />
+        {/* Photo drop zone */}
+        <div className="border-2 border-dashed rounded-lg p-4 mb-4 text-center bg-gray-50 hover:bg-gray-100 transition cursor-pointer"
+          onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
+          onDrop={e => { e.preventDefault(); e.stopPropagation(); const f = e.dataTransfer.files[0]; if (f?.type.startsWith("image/")) handlePhotoDrop(f); }}
+          onClick={() => { const input = document.createElement("input"); input.type = "file"; input.accept = "image/*"; input.onchange = (e) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) handlePhotoDrop(f); }; input.click(); }}>
+          {qImagePreview ? (
+            <div className="flex items-center justify-center gap-4">
+              <img src={qImagePreview} alt="" className="w-40 h-28 object-cover rounded" />
+              <div>
+                <button onClick={runComparison} disabled={qRunning}
+                  className="px-5 py-2 bg-[#0D1B2A] text-white text-sm rounded font-bold hover:bg-[#1a2d42] disabled:opacity-50">
+                  {qRunning ? "Analysing both..." : "Run Comparison"}
+                </button>
+                <div className="text-[10px] text-gray-400 mt-1">Or drop a different photo</div>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div className="text-sm text-gray-500 font-medium">Drop a property photo here</div>
+              <div className="text-[10px] text-gray-400 mt-1">or click to browse — JPG, PNG, WebP</div>
+            </div>
+          )}
         </div>
 
+        {/* Results side by side */}
         {qResult && (
-          <div className="border rounded p-3 mb-4 bg-blue-50">
+          <div className="border rounded p-3 mb-4">
+            <div className="text-[10px] text-gray-400 mb-2">{qResult.kb_entries_used || 0} knowledge base entries used in the RAG prompt</div>
             <div className="grid grid-cols-2 gap-4 mb-3">
               <div>
-                <div className="text-[10px] font-bold text-red-600 uppercase tracking-wide mb-1">Without RAG Data</div>
-                <div className="bg-white rounded p-2 text-xs whitespace-pre-wrap max-h-64 overflow-y-auto">{qResult.response_without_rag}</div>
+                <div className="text-[10px] font-bold text-red-600 uppercase tracking-wide mb-1">Base Prompt (no RAG)</div>
+                <div className="bg-gray-50 rounded p-2 text-xs whitespace-pre-wrap max-h-80 overflow-y-auto font-mono">{qResult.response_without_rag}</div>
               </div>
               <div>
-                <div className="text-[10px] font-bold text-green-600 uppercase tracking-wide mb-1">With RAG Data</div>
-                <div className="bg-white rounded p-2 text-xs whitespace-pre-wrap max-h-64 overflow-y-auto">{qResult.response_with_rag}</div>
+                <div className="text-[10px] font-bold text-green-600 uppercase tracking-wide mb-1">With Knowledge Base</div>
+                <div className="bg-green-50 rounded p-2 text-xs whitespace-pre-wrap max-h-80 overflow-y-auto font-mono">{qResult.response_with_rag}</div>
               </div>
             </div>
             <div className="border-t pt-3">
-              <div className="text-xs font-bold mb-2">Score the RAG-enhanced response (1–5)</div>
+              <div className="text-xs font-bold mb-2">Score: did the knowledge base improve the analysis? (1–5)</div>
               <div className="grid grid-cols-4 gap-2 mb-2">
                 {SCORE_LABELS.map(label => {
                   const key = label.toLowerCase();
@@ -632,45 +682,30 @@ export default function IntelligenceHubPage() {
               </div>
               <button onClick={saveQualityRun} disabled={qSaving || !qScores.specificity}
                 className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 disabled:opacity-50">
-                {qSaving ? "Saving..." : "Save Scored Run"}
+                {qSaving ? "Saving..." : "Save Score"}
               </button>
             </div>
           </div>
         )}
 
-        {quality?.trajectory && quality.trajectory.length > 0 && (
-          <div className="mb-4">
-            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-2">Score Trajectory</div>
-            <div className="flex items-end gap-1 h-20">
-              {quality.trajectory.map((d: A, i: number) => {
-                const avg = (Number(d.avg_specificity) + Number(d.avg_accuracy) + Number(d.avg_actionability) + Number(d.avg_consistency)) / 4;
-                return (
-                  <div key={i} className="flex-1 bg-[#0D1B2A] rounded-t" style={{ height: `${(avg / 5) * 100}%`, minHeight: "2px" }}
-                    title={`${d.day}: avg ${avg.toFixed(1)}/5 (${d.runs} runs)`} />
-                );
-              })}
-            </div>
-          </div>
-        )}
-
+        {/* Past runs */}
         {quality?.runs && quality.runs.length > 0 && (
           <div>
-            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-2">Past Runs ({quality.runs.length})</div>
+            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-2">Past Comparisons ({quality.runs.length})</div>
             <table className="w-full text-xs border-collapse">
-              <thead><tr className="text-left text-gray-500 border-b"><th className="pb-1">Date</th><th className="pb-1">System</th><th className="pb-1">Query</th><th className="pb-1 text-center">Spec</th><th className="pb-1 text-center">Acc</th><th className="pb-1 text-center">Act</th><th className="pb-1 text-center">Con</th><th className="pb-1 text-center">Avg</th></tr></thead>
+              <thead><tr className="text-left text-gray-500 border-b"><th className="pb-1">Date</th><th className="pb-1 text-center">Spec</th><th className="pb-1 text-center">Acc</th><th className="pb-1 text-center">Act</th><th className="pb-1 text-center">Con</th><th className="pb-1 text-center">Avg</th><th className="pb-1">Notes</th></tr></thead>
               <tbody>
                 {quality.runs.map((r: A) => {
                   const avg = r.score_specificity ? ((Number(r.score_specificity) + Number(r.score_accuracy) + Number(r.score_actionability) + Number(r.score_consistency)) / 4).toFixed(1) : "—";
                   return (
                     <tr key={r.id} className="border-b">
                       <td className="py-1 text-gray-400">{formatDate(r.created_at)}</td>
-                      <td className="py-1 text-[10px]">{r.rag_system === "vision_condition" ? "Vision" : "Property"}</td>
-                      <td className="py-1 max-w-xs truncate text-gray-600">{r.query_text}</td>
                       <td className="py-1 text-center font-mono">{r.score_specificity ?? "—"}</td>
                       <td className="py-1 text-center font-mono">{r.score_accuracy ?? "—"}</td>
                       <td className="py-1 text-center font-mono">{r.score_actionability ?? "—"}</td>
                       <td className="py-1 text-center font-mono">{r.score_consistency ?? "—"}</td>
                       <td className="py-1 text-center font-mono font-bold">{avg}</td>
+                      <td className="py-1 text-gray-500">{r.notes || "—"}</td>
                     </tr>
                   );
                 })}

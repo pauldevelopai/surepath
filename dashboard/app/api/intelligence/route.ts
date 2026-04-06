@@ -101,24 +101,24 @@ export const GET = withAuth(async (req: NextRequest) => {
     let knowledgeEntries: Record<string, unknown>[] = [];
     try {
       knowledgeEntries = await query(
-        `SELECT * FROM rag_knowledge_entries ORDER BY category, severity DESC`
+        `SELECT * FROM rag_knowledge_entries ORDER BY status DESC, severity DESC`
       );
     } catch { /* table doesn't exist yet */ }
 
-    // Aggregate observed finding categories from actual vision analyses on images
-    const findingPatterns = await query(`
-      SELECT f->>'category' AS category,
-             f->>'severity' AS severity,
-             f->>'observation' AS observation,
-             COUNT(*) AS occurrences
-      FROM property_images pi,
-      jsonb_array_elements(
-        CASE WHEN jsonb_typeof(pi.vision_analysis->'findings') = 'array'
-             THEN pi.vision_analysis->'findings' ELSE '[]'::jsonb END
-      ) AS f
+    // Analysed photos with findings — for the photo browser
+    const analysedPhotos = await query(`
+      SELECT pi.id AS image_id, pi.property_id, pi.image_url, pi.image_type,
+             pi.vision_analysis->'findings' AS findings,
+             pi.vision_analysis->>'photo_type' AS photo_type,
+             pi.analysed_at,
+             p.address_raw, p.suburb, p.city
+      FROM property_images pi
+      JOIN properties p ON p.id = pi.property_id
       WHERE pi.vision_analysis IS NOT NULL
-      GROUP BY category, severity, observation
-      ORDER BY occurrences DESC LIMIT 50
+        AND jsonb_typeof(pi.vision_analysis->'findings') = 'array'
+        AND jsonb_array_length(pi.vision_analysis->'findings') > 0
+      ORDER BY pi.analysed_at DESC NULLS LAST
+      LIMIT 50
     `);
 
     const sourceCoverage = await query(`
@@ -140,7 +140,7 @@ export const GET = withAuth(async (req: NextRequest) => {
       return NextResponse.json({
         knowledge: {
           entries: knowledgeEntries,
-          finding_patterns: findingPatterns,
+          analysed_photos: analysedPhotos,
           coverage: {
             ...sourceCoverage[0],
             properties_with_deeds: Number(deedsCoverage[0]?.properties_with_deeds || 0),
@@ -292,21 +292,24 @@ export const POST = withAuth(async (req: NextRequest) => {
   const { action } = body;
 
   if (action === "save_knowledge") {
-    const { id, name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status } = body;
+    const { id, name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status, image_id, image_url, property_id, original_finding } = body;
     if (!name) return NextResponse.json({ error: "name required" }, { status: 400 });
 
     if (id) {
       await query(
         `UPDATE rag_knowledge_entries SET name=$1, description=$2, visual_indicators=$3, sa_context=$4,
-           severity=$5, cost_min_zar=$6, cost_max_zar=$7, category=$8, status=$9, updated_at=NOW() WHERE id=$10`,
-        [name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status || 'draft', id]
+           severity=$5, cost_min_zar=$6, cost_max_zar=$7, category=$8, status=$9,
+           image_id=$10, image_url=$11, property_id=$12, original_finding=$13, updated_at=NOW() WHERE id=$14`,
+        [name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status || 'draft',
+         image_id || null, image_url || null, property_id || null, original_finding ? JSON.stringify(original_finding) : null, id]
       );
       return NextResponse.json({ ok: true, id });
     } else {
       const rows = await query(
-        `INSERT INTO rag_knowledge_entries (name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-        [name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status || 'draft']
+        `INSERT INTO rag_knowledge_entries (name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status, image_id, image_url, property_id, original_finding)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+        [name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status || 'draft',
+         image_id || null, image_url || null, property_id || null, original_finding ? JSON.stringify(original_finding) : null]
       );
       return NextResponse.json({ ok: true, id: rows[0].id });
     }
@@ -338,55 +341,62 @@ export const POST = withAuth(async (req: NextRequest) => {
   }
 
   if (action === "run_comparison") {
-    const { rag_system, query_text, property_id } = body;
-    if (!query_text) return NextResponse.json({ error: "query_text required" }, { status: 400 });
+    const { image_base64, image_media_type } = body;
+    if (!image_base64) return NextResponse.json({ error: "image_base64 required — upload a photo" }, { status: 400 });
 
-    let ragContext: Record<string, unknown> = {};
+    // Load the base vision prompt (same one vision.js uses)
+    const basePrompt = `You are a certified property inspector with 20 years of South African experience.
+Analyse this property photo. Identify every visible risk, defect, or flag that would concern a buyer, an insurer, or a trades professional.
+Return structured JSON:
+{
+  "photo_type": "exterior|interior|roof|bathroom|kitchen|db_board|ceiling|other",
+  "findings": [{"category": "roof|walls|damp|electrical|plumbing|ceiling|structure|extension", "observation": "exact description", "confidence": "CONFIRMED_VISIBLE|PROBABLE|POSSIBLE", "severity": "CRITICAL|HIGH|MEDIUM|LOW|COSMETIC", "estimated_repair_cost_zar": {"min": 0, "max": 0}}],
+  "roof_material": "corrugated_cement|IBR|concrete_tile|clay_tile|other|unknown",
+  "solar_installed": false,
+  "asbestos_indicators": false,
+  "security_visible": false
+}
+Rules: Never confirm asbestos — flag indicators only. SA terminology. ZAR costs. Return ONLY valid JSON.`;
 
-    if (rag_system === "property_intelligence" && property_id) {
-      const props = await query("SELECT * FROM properties WHERE id = $1", [property_id]);
-      const deeds = await query("SELECT * FROM deeds_data WHERE property_id = $1 ORDER BY fetched_at DESC LIMIT 1", [property_id]);
-      const crime = await query(
-        "SELECT incident_type, COUNT(*) AS cnt FROM crime_incidents WHERE suburb ILIKE $1 AND city ILIKE $2 GROUP BY incident_type",
-        [props[0]?.suburb || '', props[0]?.city || '']
+    // Build RAG-enhanced prompt with active KB entries
+    let ragPrompt = basePrompt;
+    let kbCount = 0;
+    try {
+      const kbRows = await query(
+        "SELECT name, category, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar FROM rag_knowledge_entries WHERE status = 'active' ORDER BY severity DESC"
       );
-      ragContext = { property: props[0], deeds: deeds[0] || null, crime };
-    }
-
-    if (rag_system === "vision_condition") {
-      let kbEntries: Record<string, unknown>[] = [];
-      try {
-        kbEntries = await query("SELECT name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category FROM rag_knowledge_entries WHERE status = 'active'");
-      } catch {}
-      if (property_id) {
-        const findings = await query(
-          "SELECT vision_analysis FROM property_images WHERE property_id = $1 AND vision_analysis IS NOT NULL", [property_id]
-        );
-        ragContext = { knowledge_base: kbEntries, existing_findings: findings.map((f: Record<string, unknown>) => f.vision_analysis) };
-      } else {
-        ragContext = { knowledge_base: kbEntries };
+      if (kbRows.length > 0) {
+        kbCount = kbRows.length;
+        const entries = kbRows.map((e: Record<string, unknown>) =>
+          `- ${e.name} [${e.category}, severity ${e.severity}/5${e.cost_min_zar ? `, R${e.cost_min_zar}–R${e.cost_max_zar}` : ''}]: ${e.description || ''}${e.visual_indicators ? ` LOOK FOR: ${e.visual_indicators}` : ''}${e.sa_context ? ` SA CONTEXT: ${e.sa_context}` : ''}`
+        ).join('\n');
+        ragPrompt += `\n\nSA DEFECT KNOWLEDGE BASE (${kbRows.length} entries — use these to identify region-specific defects and calibrate severity/cost estimates):\n${entries}`;
       }
-    }
+    } catch {}
 
-    const nicoSystem = `You are Nico, a calm, direct former estate agent (male, 38-42). You are honest and precise. You are contrarian where data supports it. You never mention AI or that you are an AI assistant. You give property advice like a knowledgeable friend who happens to know the SA property market inside out.`;
+    const imageContent = {
+      type: "image" as const,
+      source: { type: "base64" as const, media_type: (image_media_type || "image/jpeg") as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: image_base64 },
+    };
 
     const Anthropic = (await import("@anthropic-ai/sdk")).default;
     const claude = new Anthropic();
 
-    const withoutRag = await claude.messages.create({
-      model: "claude-3-haiku-20240307",
-      max_tokens: 1024,
-      system: nicoSystem,
-      messages: [{ role: "user", content: query_text }],
-    });
-
-    const ragPrompt = `${query_text}\n\nUse the following verified data to inform your response:\n${JSON.stringify(ragContext, null, 2)}`;
-    const withRag = await claude.messages.create({
-      model: "claude-3-haiku-20240307",
-      max_tokens: 1024,
-      system: nicoSystem,
-      messages: [{ role: "user", content: ragPrompt }],
-    });
+    // Run both in parallel — same image, same model, different prompts
+    const [withoutRag, withRag] = await Promise.all([
+      claude.messages.create({
+        model: "claude-3-haiku-20240307",
+        max_tokens: 2048,
+        system: basePrompt,
+        messages: [{ role: "user", content: [imageContent, { type: "text", text: "Analyse this property photo." }] }],
+      }),
+      claude.messages.create({
+        model: "claude-3-haiku-20240307",
+        max_tokens: 2048,
+        system: ragPrompt,
+        messages: [{ role: "user", content: [imageContent, { type: "text", text: "Analyse this property photo." }] }],
+      }),
+    ]);
 
     const responseWithout = withoutRag.content[0].type === "text" ? withoutRag.content[0].text : "";
     const responseWith = withRag.content[0].type === "text" ? withRag.content[0].text : "";
@@ -395,7 +405,7 @@ export const POST = withAuth(async (req: NextRequest) => {
       ok: true,
       response_without_rag: responseWithout,
       response_with_rag: responseWith,
-      rag_context: ragContext,
+      kb_entries_used: kbCount,
     });
   }
 

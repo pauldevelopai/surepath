@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import FeedbackButton from "./components/FeedbackButton";
 
 const sections = [
   {
@@ -35,6 +36,12 @@ const sections = [
     items: [
       { href: "/admin/api", label: "Clients & Docs" },
       { href: "/admin/billing", label: "Billing" },
+    ],
+  },
+  {
+    label: "SYSTEM",
+    items: [
+      { href: "/admin/feedback", label: "Feedback" },
     ],
   },
 ];
@@ -82,6 +89,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       </aside>
       <main className="flex-1 p-6 overflow-auto print:overflow-visible">{children}</main>
     </div>
+    <FeedbackButton />
     </>
   );
 }
