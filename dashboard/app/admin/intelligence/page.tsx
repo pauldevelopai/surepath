@@ -137,18 +137,24 @@ export default function IntelligenceHubPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {sourceDetail!.rows.map((row: A, i: number) => (
-                        <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                      {sourceDetail!.rows.map((row: A, i: number) => {
+                        const link = row._link as string | undefined;
+                        const isExternal = link?.startsWith("http");
+                        return (
+                        <tr key={i} className={`border-b border-gray-50 ${link ? "hover:bg-blue-50 cursor-pointer" : "hover:bg-gray-50"}`}
+                          onClick={() => { if (link) window.open(isExternal ? link : link, isExternal ? "_blank" : "_blank", "noopener"); }}>
                           {cols.map((col: string) => {
                             let val = row[col];
                             if (val === null || val === undefined) val = "—";
                             else if (typeof val === "number" && (col.includes("price") || col.includes("cost") || col.includes("value") || col.includes("zar"))) val = `R${Number(val).toLocaleString()}`;
                             else if (typeof val === "object") val = JSON.stringify(val).substring(0, 80);
                             else val = String(val).substring(0, 100);
-                            return <td key={col} className="px-2 py-1 text-gray-700 whitespace-nowrap">{String(val)}</td>;
+                            return <td key={col} className={`px-2 py-1 whitespace-nowrap ${link ? "text-blue-700" : "text-gray-700"}`}>{String(val)}</td>;
                           })}
+                          {link && <td className="px-1 text-blue-400 text-[8px]">↗</td>}
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

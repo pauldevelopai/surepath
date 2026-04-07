@@ -708,7 +708,7 @@ export const GET = withAuth(async (req: NextRequest) => {
         case "kb":
           columns = ["id", "name", "category", "severity", "cost_min_zar", "cost_max_zar", "status"];
           await paged(
-            "SELECT id, name, category, severity, cost_min_zar, cost_max_zar, description, visual_indicators, sa_context, status FROM rag_knowledge_entries WHERE true",
+            "SELECT id, name, category, severity, cost_min_zar, cost_max_zar, description, visual_indicators, sa_context, status, image_url, property_id FROM rag_knowledge_entries WHERE true",
             "SELECT COUNT(*) AS c FROM rag_knowledge_entries WHERE true",
             ["name", "category", "sa_context"]
           );
@@ -815,6 +815,33 @@ export const GET = withAuth(async (req: NextRequest) => {
     } catch (e) {
       return NextResponse.json({ error: String(e) }, { status: 500 });
     }
+
+    // Add _link field for clickable rows — opens source in new tab
+    rows = rows.map(r => {
+      const row = r as Record<string, unknown>;
+      // Properties, listings, prices, geocoded, construction_era, roof_material, crime_scores, solar, gvr
+      if (row.id && ["properties", "listings", "prices", "geocoded", "construction_era", "roof_material", "crime_scores", "solar", "gvr"].includes(type)) {
+        row._link = `/admin/data/inspect/${row.id}`;
+      }
+      // Photos, photos_analysed — link to property
+      if (row.property_id && ["photos", "photos_analysed", "evidence", "reports", "deeds"].includes(type)) {
+        row._link = `/admin/data/inspect/${row.property_id}`;
+      }
+      // KB entries — link to source property if available, or image URL
+      if (type === "kb") {
+        if (row.property_id) row._link = `/admin/data/inspect/${row.property_id}`;
+        else if (row.image_url && typeof row.image_url === "string" && row.image_url.startsWith("http")) row._link = row.image_url as string;
+      }
+      // Area risk data — use source_url if available
+      if (row.source_url && typeof row.source_url === "string" && (row.source_url as string).startsWith("http")) {
+        row._link = row.source_url as string;
+      }
+      // Security companies — use website
+      if (type === "security_companies" && row.website && typeof row.website === "string" && (row.website as string).startsWith("http")) {
+        row._link = row.website as string;
+      }
+      return row;
+    });
 
     const totalPages = Math.ceil(totalCount / perPage);
     return NextResponse.json({ type, rows, columns, total: totalCount, page, totalPages, perPage });
