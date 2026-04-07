@@ -26,11 +26,14 @@ export default function ScraperPage() {
   const [data, setData] = useState<A | null>(null);
   const [stats, setStats] = useState<A | null>(null);
   const [loading, setLoading] = useState(true);
+  const [masterStatus, setMasterStatus] = useState<A | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   const load = useCallback(() => {
     fetch("/api/scraper").then(r => r.json()).then(setData).finally(() => setLoading(false));
     fetch("/api/scraper/collect-stats").then(r => r.json()).then(setStats).catch(() => {});
+    fetch("/api/scraper", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "scraper_status" }) })
+      .then(r => r.json()).then(setMasterStatus).catch(() => {});
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -66,14 +69,18 @@ export default function ScraperPage() {
   }
 
   async function runAll() {
-    const toStart = SCRAPERS.filter(s => !isRunning(s.id));
-    for (const s of toStart) {
-      fetch("/api/scraper", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "start", source: s.id }),
-      });
-      await new Promise(r => setTimeout(r, 500)); // stagger launches by 500ms
-    }
+    await fetch("/api/scraper", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "scrape_all" }),
+    });
+    load();
+  }
+
+  async function stopMaster() {
+    await fetch("/api/scraper", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "stop_all_scraping" }),
+    });
     load();
   }
 
@@ -111,6 +118,35 @@ export default function ScraperPage() {
 
   return (
     <div>
+      {/* ─── Master scraper status banner ─── */}
+      {masterStatus?.running && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center gap-3">
+              <span className="w-3 h-3 rounded-full bg-green-500 animate-pulse" />
+              <div>
+                <span className="font-bold text-sm text-green-800">Scraping Everything</span>
+                <span className="text-xs text-green-600 ml-2">Pass {masterStatus.pass} — {masterStatus.current_scraper || 'starting'}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <span className="text-xs text-green-700 font-mono">{masterStatus.total_collected} collected</span>
+              <span className="text-[9px] text-green-500">Started {masterStatus.started_at ? new Date(masterStatus.started_at).toLocaleTimeString() : '?'}</span>
+              <button onClick={stopMaster} className="px-4 py-1.5 bg-red-600 text-white rounded text-sm font-semibold hover:bg-red-700">Stop</button>
+            </div>
+          </div>
+          {Object.keys(masterStatus.scrapers || {}).length > 0 && (
+            <div className="flex flex-wrap gap-3 mt-2">
+              {Object.entries(masterStatus.scrapers as Record<string, A>).map(([name, s]) => (
+                <span key={name} className={`text-[9px] px-2 py-0.5 rounded ${s.done ? 'bg-green-200 text-green-800' : 'bg-green-100 text-green-700'}`}>
+                  {name}: {s.total_processed} {s.done ? '(done)' : ''}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold">Scrapers</h1>
@@ -119,9 +155,15 @@ export default function ScraperPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button onClick={runAll} disabled={anyRunning} className="bg-[#0D1B2A] text-white px-5 py-2 rounded font-semibold text-sm disabled:opacity-40 hover:bg-[#1a2d42]">
-            Run All
-          </button>
+          {!masterStatus?.running ? (
+            <button onClick={runAll} className="bg-[#E63946] text-white px-5 py-2 rounded font-semibold text-sm hover:bg-red-700">
+              Scrape Everything
+            </button>
+          ) : (
+            <button onClick={stopMaster} className="bg-red-600 text-white px-5 py-2 rounded font-semibold text-sm hover:bg-red-700">
+              Stop Scraping
+            </button>
+          )}
           {anyRunning && (
             <button onClick={stopAll} className="bg-red-600 text-white px-5 py-2 rounded font-semibold text-sm hover:bg-red-700">
               Stop All

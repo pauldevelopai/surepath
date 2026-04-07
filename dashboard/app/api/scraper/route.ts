@@ -56,6 +56,77 @@ export const GET = withAuth(async () => {
 export const POST = withAuth(async (req: NextRequest) => {
   const { action, suburb, delay, max_pages, refresh, source, province, province_code, start_page, name: stopName } = await req.json();
 
+  // ─── Master scraper: run everything ──────────────────────────────
+  if (action === "scrape_all") {
+    // Check if already running
+    const existing = scraperProcesses.get("master");
+    if (existing && !existing.proc.killed) {
+      return NextResponse.json({ ok: false, message: "Master scraper already running" });
+    }
+    // Also check via status file
+    try {
+      const fs = require("fs");
+      const statusRaw = fs.readFileSync("/tmp/surepath-scraper-status.json", "utf8");
+      const st = JSON.parse(statusRaw);
+      if (st.running) {
+        return NextResponse.json({ ok: false, message: "Master scraper already running (from previous session)" });
+      }
+    } catch {}
+
+    const logLines: string[] = ["[master] Starting master scraper — all data types"];
+    scraperLog.push(...logLines);
+
+    const proc = spawn("node", ["scrape-all.js"], {
+      cwd: getProjectDir(),
+      env: { ...process.env, FORCE_COLOR: "0" },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+    });
+
+    scraperProcesses.set("master", { proc, log: logLines, startedAt: new Date() });
+
+    proc.stdout?.on("data", (data: Buffer) => {
+      const lines = data.toString().split("\n").filter(Boolean).map(l => `[master] ${l}`);
+      const entry = scraperProcesses.get("master");
+      if (entry) { entry.log.push(...lines); if (entry.log.length > 500) entry.log = entry.log.slice(-500); }
+      scraperLog.push(...lines);
+      if (scraperLog.length > 500) scraperLog = scraperLog.slice(-500);
+    });
+    proc.stderr?.on("data", (data: Buffer) => {
+      const lines = data.toString().split("\n").filter(Boolean).map(l => `[master] [ERROR] ${l}`);
+      const entry = scraperProcesses.get("master");
+      if (entry) entry.log.push(...lines);
+    });
+    proc.on("close", () => { scraperProcesses.delete("master"); });
+    proc.unref();
+
+    return NextResponse.json({ ok: true, message: "Master scraper started — scraping all data types continuously" });
+  }
+
+  // ─── Stop master scraper ──────────────────────────────────────────
+  if (action === "stop_all_scraping") {
+    const fs = require("fs");
+    fs.writeFileSync("/tmp/surepath-scraper-stop", new Date().toISOString());
+    // Also kill the process if we have it
+    const master = scraperProcesses.get("master");
+    if (master && !master.proc.killed) {
+      master.proc.kill("SIGTERM");
+      scraperProcesses.delete("master");
+    }
+    return NextResponse.json({ ok: true, message: "Stop signal sent — scraper will finish current item and stop" });
+  }
+
+  // ─── Get master scraper status ────────────────────────────────────
+  if (action === "scraper_status") {
+    try {
+      const fs = require("fs");
+      const raw = fs.readFileSync("/tmp/surepath-scraper-status.json", "utf8");
+      return NextResponse.json(JSON.parse(raw));
+    } catch {
+      return NextResponse.json({ running: false, scrapers: {} });
+    }
+  }
+
   if (action === "start") {
     // Determine scraper name and command based on source
     let scraperName: string;
