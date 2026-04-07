@@ -57,35 +57,64 @@ export default function IntelligenceHubPage() {
   function goPage(pg: number) { if (!expandedSource) return; setSourcePage(pg); loadSourceDetail(expandedSource, pg, sourceSearch); }
   function doSearch(srch: string) { if (!expandedSource) return; setSourceSearch(srch); setSourcePage(1); loadSourceDetail(expandedSource, 1, srch); }
 
+  function resizeImage(file: File, maxDim = 1200): Promise<{ base64: string; mediaType: string }> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d")!.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        const [header, data] = dataUrl.split(",");
+        const mediaType = header.match(/:(.*?);/)?.[1] || "image/jpeg";
+        resolve({ base64: data, mediaType });
+      };
+      img.onerror = () => {
+        // Fallback: send original
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const d = e.target?.result as string;
+          const [h, b] = d.split(",");
+          resolve({ base64: b, mediaType: h.match(/:(.*?);/)?.[1] || "image/jpeg" });
+        };
+        reader.readAsDataURL(file);
+      };
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
   function handlePhotoDrop(f: File) {
-    const r = new FileReader();
-    r.onload = async e => {
-      const d = e.target?.result as string;
-      const [h, b] = d.split(",");
-      const media = h.match(/:(.*?);/)?.[1] || "image/jpeg";
-      setQRunning(true); setQResult(null);
+    setQRunning(true); setQResult(null);
+    resizeImage(f).then(async ({ base64, mediaType }) => {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 120000); // 2 min timeout
+        const timeout = setTimeout(() => controller.abort(), 180000); // 3 min timeout
         const resp = await fetch("/api/intelligence", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "run_comparison", image_base64: b, image_media_type: media, rag_enabled: true }),
+          body: JSON.stringify({ action: "run_comparison", image_base64: base64, image_media_type: mediaType, rag_enabled: true }),
           signal: controller.signal,
         });
         clearTimeout(timeout);
         if (!resp.ok) {
-          setQResult({ error: `Server error: ${resp.status} ${resp.statusText}` });
+          const text = await resp.text().catch(() => "");
+          setQResult({ error: `Server error ${resp.status}: ${text.substring(0, 200) || resp.statusText}` });
         } else {
           const res = await resp.json();
           setQResult(res);
         }
       } catch (err) {
-        setQResult({ error: err instanceof Error && err.name === "AbortError" ? "Timed out after 2 minutes — try a smaller image" : `Failed: ${err instanceof Error ? err.message : "unknown error"}` });
+        setQResult({ error: err instanceof Error && err.name === "AbortError" ? "Timed out after 3 minutes — try a smaller image" : `Failed: ${err instanceof Error ? err.message : "unknown error"}` });
       }
       setQRunning(false);
-    };
-    r.readAsDataURL(f);
+    });
   }
   async function submitCheck(i: number, v: string, reason?: string) { const item = dailyCheck?.[i]; if (!item) return; setVerdicts(prev => ({ ...prev, [i]: v })); await fetch("/api/intelligence", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "confirm_check", item_type: item.type, item_id: item.id || item.image_id, verdict: v, reason: reason || undefined, property_id: item.property_id }) }); }
 
