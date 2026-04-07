@@ -84,6 +84,20 @@ export default function ScraperPage() {
     load();
   }
 
+  async function forceKillAll() {
+    if (!confirm("Force kill ALL scraper processes? This sends SIGKILL.")) return;
+    await fetch("/api/scraper", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "kill_all_scrapers" }),
+    });
+    // Also stop master
+    await fetch("/api/scraper", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "stop_all_scraping" }),
+    });
+    load();
+  }
+
 
   function isRunning(id: string) {
     return (data?.scraper_processes || []).some((p: A) => p.name === id && p.running);
@@ -169,6 +183,9 @@ export default function ScraperPage() {
               Stop All
             </button>
           )}
+          <button onClick={forceKillAll} className="bg-gray-800 text-white px-4 py-2 rounded font-semibold text-sm hover:bg-black" title="Force kill all scraper processes (SIGKILL)">
+            Force Kill
+          </button>
         </div>
       </div>
 

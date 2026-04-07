@@ -86,28 +86,33 @@ async function retrieve(queryText, opts = {}) {
 
   // Per-layer budgets — knowledge and evidence are most valuable for photo analysis
   const layerBudgets = [
-    { layers: ['knowledge'],                      limit: 8 },
-    { layers: ['evidence', 'vision'],             limit: 5 },
-    { layers: ['live'],                           limit: 4 },
-    { layers: ['crime', 'security'],              limit: 3 },
-    { layers: ['report', 'feedback'],             limit: 3 },
-    { layers: ['property'],                       limit: 3 },
+    { layers: ['knowledge'],                      limit: 5 },
+    { layers: ['evidence'],                       limit: 3 },
+    { layers: ['vision'],                         limit: 3 },
+    { layers: ['live'],                           limit: 3 },
+    { layers: ['crime'],                          limit: 2 },
+    { layers: ['security'],                       limit: 2 },
+    { layers: ['report'],                         limit: 2 },
+    { layers: ['feedback'],                       limit: 2 },
+    { layers: ['property'],                       limit: 2 },
     { layers: ['security_company'],               limit: 2 },
   ];
 
   const allResults = [];
 
   for (const { layers, limit } of layerBudgets) {
+    // Always pull the top results from every layer — don't let a high
+    // minScore prevent area data, crime, security etc from contributing.
+    // The final sort by score handles relevance ranking across layers.
     const { rows } = await pool.query(
       `SELECT id, text, layer, metadata,
               1 - (embedding <=> $1::vector) AS score
        FROM rag_chunks
        WHERE layer = ANY($2)
          AND ($3::text IS NULL OR metadata->>'suburb' ILIKE $3 OR metadata->>'suburb' IS NULL)
-         AND 1 - (embedding <=> $1::vector) >= $4
        ORDER BY embedding <=> $1::vector
-       LIMIT $5`,
-      [vecStr, layers, suburb, minScore, limit]
+       LIMIT $4`,
+      [vecStr, layers, suburb, limit]
     );
     allResults.push(...rows);
   }

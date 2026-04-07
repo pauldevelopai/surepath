@@ -90,31 +90,64 @@ export default function IntelligenceHubPage() {
     });
   }
 
-  function handlePhotoDrop(f: File) {
+  async function handlePhotoDrop(f: File) {
     setQRunning(true); setQResult(null);
-    resizeImage(f).then(async ({ base64, mediaType }) => {
+    try {
+      // Resize image
+      let base64: string, mediaType: string;
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 180000); // 3 min timeout
-        const resp = await fetch("/api/intelligence", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "run_comparison", image_base64: base64, image_media_type: mediaType, rag_enabled: true }),
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
-        if (!resp.ok) {
-          const text = await resp.text().catch(() => "");
-          setQResult({ error: `Server error ${resp.status}: ${text.substring(0, 200) || resp.statusText}` });
-        } else {
-          const res = await resp.json();
-          setQResult(res);
-        }
-      } catch (err) {
-        setQResult({ error: err instanceof Error && err.name === "AbortError" ? "Timed out after 3 minutes — try a smaller image" : `Failed: ${err instanceof Error ? err.message : "unknown error"}` });
+        const resized = await resizeImage(f);
+        base64 = resized.base64;
+        mediaType = resized.mediaType;
+      } catch (resizeErr) {
+        // Fallback: read raw file
+        const buf = await f.arrayBuffer();
+        base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        mediaType = f.type || "image/jpeg";
       }
-      setQRunning(false);
-    });
+
+      const payloadSize = base64.length;
+      console.log(`[test-nico] Image: ${f.name}, payload: ${Math.round(payloadSize / 1024)}KB`);
+
+      // Step 1: Submit job via XMLHttpRequest (more reliable than fetch for large bodies)
+      const jobId = await new Promise<string>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/intelligence");
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.timeout = 30000;
+        xhr.onload = () => {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            if (data.job_id) resolve(data.job_id);
+            else reject(new Error(data.error || `No job_id (HTTP ${xhr.status})`));
+          } catch { reject(new Error(`Bad response: ${xhr.responseText.substring(0, 100)}`)); }
+        };
+        xhr.onerror = () => reject(new Error(`Upload failed (${payloadSize} bytes) — try a smaller image`));
+        xhr.ontimeout = () => reject(new Error("Upload timed out"));
+        xhr.send(JSON.stringify({ action: "run_comparison", image_base64: base64, image_media_type: mediaType, rag_enabled: true }));
+      });
+
+      console.log(`[test-nico] Job submitted: ${jobId}`);
+
+      // Step 2: Poll for result every 3 seconds
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+          const pollResp = await fetch("/api/intelligence", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "poll_comparison", job_id: jobId }),
+          });
+          const data = await pollResp.json();
+          if (data.status === "done") { setQResult(data); setQRunning(false); return; }
+          if (data.status === "error") { setQResult({ error: data.error }); setQRunning(false); return; }
+        } catch { /* network blip — keep polling */ }
+      }
+      setQResult({ error: "Timed out after 3 minutes" });
+    } catch (err) {
+      setQResult({ error: err instanceof Error ? err.message : "Unknown error" });
+    }
+    setQRunning(false);
   }
   async function submitCheck(i: number, v: string, reason?: string) { const item = dailyCheck?.[i]; if (!item) return; setVerdicts(prev => ({ ...prev, [i]: v })); await fetch("/api/intelligence", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "confirm_check", item_type: item.type, item_id: item.id || item.image_id, verdict: v, reason: reason || undefined, property_id: item.property_id }) }); }
 

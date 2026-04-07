@@ -1494,6 +1494,7 @@ async function analyseTemporalChange(currentBase64, historicalBase64) {
 const _detectMediaType = detectMediaType;
 
 module.exports = {
+  getNicoPrompt,
   analysePropertyImages,
   analyseWithHFPrestage,
   analyseStreetView,

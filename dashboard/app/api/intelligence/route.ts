@@ -8,6 +8,9 @@ import * as path from "path";
 export const maxDuration = 120; // 2 minutes for Anthropic API calls
 export const dynamic = "force-dynamic";
 
+// ─── Async Test Nico jobs ────────────────────────────────────────────────
+const testNicoJobs: Map<string, { status: string; result?: Record<string, unknown>; error?: string; startedAt: Date }> = new Map();
+
 // ─── RAG Intelligence Test Helpers ───────────────────────────────────────
 
 // SA-specific terms that indicate the RAG is contributing domain knowledge
@@ -1024,9 +1027,29 @@ export const POST = withAuth(async (req: NextRequest) => {
     return NextResponse.json({ ok: true, id: rows[0].id });
   }
 
+  // ─── Poll for async Test Nico result ──────────────────────────────
+  if (action === "poll_comparison") {
+    const { job_id } = body;
+    if (!job_id) return NextResponse.json({ error: "job_id required" }, { status: 400 });
+    const job = testNicoJobs.get(job_id);
+    if (!job) return NextResponse.json({ status: "not_found" });
+    if (job.status === "running") return NextResponse.json({ status: "running" });
+    if (job.status === "error") { testNicoJobs.delete(job_id); return NextResponse.json({ status: "error", error: job.error }); }
+    const result = job.result;
+    testNicoJobs.delete(job_id);
+    return NextResponse.json({ status: "done", ...result });
+  }
+
   if (action === "run_comparison") {
     const { image_base64, image_media_type, rag_enabled = true, property_id } = body;
     if (!image_base64) return NextResponse.json({ error: "image_base64 required — upload a photo" }, { status: 400 });
+
+    // Async: start the job, return job_id immediately
+    const jobId = `nico_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    testNicoJobs.set(jobId, { status: "running", startedAt: new Date() });
+
+    // Run analysis in background (not awaited)
+    (async () => { try {
 
     // Baseline: Nico's core prompt with NO context, NO KB, NO area data
     const nicoBasePrompt = await _readNicoBasePrompt();
@@ -1173,7 +1196,7 @@ export const POST = withAuth(async (req: NextRequest) => {
       }
     } catch {}
 
-    return NextResponse.json({
+    testNicoJobs.set(jobId, { status: "done", startedAt: new Date(), result: {
       ok: true,
       response_without_rag: responseWithout,
       response_with_rag: responseWith,
@@ -1184,7 +1207,16 @@ export const POST = withAuth(async (req: NextRequest) => {
       property_context: ragContext,
       signals,
       rag_retrieval: ragRetrieval,
-    });
+    }});
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("Test Nico job failed:", msg);
+      testNicoJobs.set(jobId, { status: "error", startedAt: new Date(), error: msg.substring(0, 300) });
+    }
+    })();
+
+    // Return immediately with job ID
+    return NextResponse.json({ ok: true, job_id: jobId, status: "running" });
   }
 
   // ─── Batch benchmark: run comparison across multiple property photos ──
