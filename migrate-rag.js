@@ -55,6 +55,13 @@ async function migrateRAG() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_rag_kb_category ON rag_knowledge_entries(category)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_rag_quality_type ON rag_quality_runs(run_type, created_at)`);
 
+    // ─── Additive columns (safe to run multiple times) ───────────────
+    await client.query(`ALTER TABLE rag_knowledge_entries ADD COLUMN IF NOT EXISTS source_url TEXT`);
+    await client.query(`ALTER TABLE rag_knowledge_entries ADD COLUMN IF NOT EXISTS image_id INTEGER`);
+    await client.query(`ALTER TABLE rag_knowledge_entries ADD COLUMN IF NOT EXISTS image_url TEXT`);
+    await client.query(`ALTER TABLE rag_knowledge_entries ADD COLUMN IF NOT EXISTS property_id INTEGER`);
+    await client.query(`ALTER TABLE rag_knowledge_entries ADD COLUMN IF NOT EXISTS original_finding JSONB`);
+
     await client.query('COMMIT');
     console.log('RAG tables created successfully.');
   } catch (err) {

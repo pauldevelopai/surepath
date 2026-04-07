@@ -352,18 +352,18 @@ export const POST = withAuth(async (req: NextRequest) => {
           await pool.end();
         })();
       `];
-    } else if (source === "knowledge") {
-      scraperName = "knowledge";
+    } else if (source === "articles") {
+      scraperName = "articles";
       args = ["-e", `
         require('dotenv').config();
         const pool = require('./db');
         const { collectKnowledge } = require('./collect-knowledge');
         (async () => {
-          console.log('Knowledge: Starting SA construction & property knowledge collection...');
+          console.log('Articles: Starting SA construction & renovation article collection...');
           try {
             const result = await collectKnowledge();
-            console.log('=== Knowledge complete: ' + result.created + ' entries created, ' + result.skipped + ' duplicates, ' + result.errors + ' errors ===');
-          } catch (e) { console.error('Knowledge collection failed:', e.message); }
+            console.log('=== Articles complete: ' + result.created + ' entries created, ' + result.skipped + ' duplicates, ' + result.errors + ' errors ===');
+          } catch (e) { console.error('Article collection failed:', e.message); }
           await pool.end();
           process.exit(0);
         })();

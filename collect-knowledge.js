@@ -22,39 +22,26 @@ const client = new Anthropic();
 // ─── SA-specific knowledge sources ──────────────────────────────────────
 // Each source has a URL, topic category, and extraction focus
 const KNOWLEDGE_SOURCES = [
-  // SA building defects and inspection
-  { url: 'https://www.sahomeowner.co.za/building-and-renovating/common-building-defects-and-how-to-spot-them', topic: 'defects', focus: 'Common SA building defects, visual indicators, repair methods' },
-  { url: 'https://www.sahomeowner.co.za/building-and-renovating/damp-in-your-home', topic: 'damp', focus: 'Damp types in SA homes, causes, treatment costs' },
-  { url: 'https://www.sahomeowner.co.za/building-and-renovating/roof-types-south-africa', topic: 'roof', focus: 'SA roof types, materials, common problems, lifespan' },
-  { url: 'https://www.sahomeowner.co.za/home-improvement/plumbing', topic: 'plumbing', focus: 'SA plumbing standards, pipe materials, geyser regulations' },
-  { url: 'https://www.sahomeowner.co.za/home-improvement/electrical', topic: 'electrical', focus: 'SA electrical compliance, ECoC, DB board standards' },
-
-  // SA construction costs
-  { url: 'https://www.statssa.gov.za/publications/P0141/P0141January2024.pdf', topic: 'costs', focus: 'SA building material costs, construction cost indices' },
+  // SA building defects — verified working URLs
+  { url: 'https://www.luxlivproperty.com/news/sales/10-common-home-defects-in-south-africa-what-buyers-should-look-out-for-11-09-25', topic: 'defects', focus: '10 common SA home defects: cracks, damp, roof leaks, plumbing, electrical' },
+  { url: 'https://www.housecheck.co.za/understanding-damp/', topic: 'damp', focus: 'Rising damp, penetrating damp, condensation — types, causes, DPC failure' },
+  { url: 'https://www.housecheck.co.za/what-housecheck-will-inspect/', topic: 'defects', focus: 'Full home inspection checklist — roof, walls, plumbing, electrical, damp' },
+  { url: 'https://www.housecheck.co.za/the-property-practitioners-act-home-inspection/', topic: 'compliance', focus: 'Property Practitioners Act requirements for home inspections in SA' },
 
   // Asbestos in SA
-  { url: 'https://www.sahomeowner.co.za/building-and-renovating/asbestos-in-south-african-homes', topic: 'asbestos', focus: 'Asbestos identification, regulations, removal costs in SA' },
+  { url: 'https://completeroofing.co.za/blog/asbestos-roof-regulations-in-south-africa/', topic: 'asbestos', focus: 'Asbestos roof regulations, identification, removal requirements' },
+  { url: 'https://www.housecheck.co.za/asbestos-home-inspections/', topic: 'asbestos', focus: 'Asbestos inspection process, health risks, what to look for' },
+  { url: 'https://www.miltons.law.za/asbestos-roofs/', topic: 'asbestos', focus: 'Legal obligations for asbestos roof owners in SA' },
+  { url: 'https://www.privateproperty.co.za/advice/property/articles/asbestos-installations-in-south-africa/8948', topic: 'asbestos', focus: 'Asbestos installations — identification and management' },
 
-  // SA garden and landscaping
-  { url: 'https://www.sahomeowner.co.za/gardening/indigenous-plants-for-south-african-gardens', topic: 'garden', focus: 'Indigenous plants, water-wise gardening, garden walls' },
+  // Roofing
+  { url: 'https://sahomeowner.co.za/raising-the-roof/', topic: 'roof', focus: 'SA roof types, materials, maintenance, common problems' },
 
-  // Structural issues
-  { url: 'https://www.sahomeowner.co.za/building-and-renovating/foundation-problems', topic: 'structure', focus: 'Foundation issues in SA, dolomite risk, subsidence signs' },
+  // Electrical compliance
+  { url: 'https://www.ecoflow.com/za/blog/electricity-price-per-kwh', topic: 'electrical', focus: 'SA electricity pricing, Eskom tariffs, solar alternatives' },
 
-  // Compliance and regulations
-  { url: 'https://www.nhbrc.org.za/home-building-manual/', topic: 'compliance', focus: 'NHBRC standards, building regulations, warranty requirements' },
-
-  // Waterproofing
-  { url: 'https://www.sahomeowner.co.za/building-and-renovating/waterproofing-your-home', topic: 'damp', focus: 'Waterproofing methods, DPC, flat roof waterproofing costs' },
-
-  // Security features
-  { url: 'https://www.sahomeowner.co.za/home-improvement/security', topic: 'security', focus: 'SA home security features, electric fencing, burglar bars, CCTV' },
-
-  // Paint and external walls
-  { url: 'https://www.sahomeowner.co.za/building-and-renovating/exterior-paint-guide', topic: 'walls', focus: 'Exterior paint types, wall coating, crack treatment, SA weather impact' },
-
-  // Solar in SA
-  { url: 'https://www.sahomeowner.co.za/home-improvement/solar-power', topic: 'solar', focus: 'Solar installation SA, inverter types, compliance, roof suitability' },
+  // Construction costs and standards
+  { url: 'https://www.eskom.co.za/distribution/tariffs-and-charges/', topic: 'costs', focus: 'Eskom tariff structure, residential electricity costs' },
 ];
 
 function fetchPage(url, timeout = 15000) {
@@ -176,7 +163,7 @@ async function collectKnowledge() {
   let totalErrors = 0;
 
   for (const source of KNOWLEDGE_SOURCES) {
-    console.log(`[knowledge] Fetching: ${source.url}`);
+    console.log(`[articles] Fetching: ${source.url}`);
 
     const result = await fetchPage(source.url);
     if (!result.ok) {
@@ -214,8 +201,8 @@ async function collectKnowledge() {
 
         await pool.query(
           `INSERT INTO rag_knowledge_entries
-           (name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft')`,
+           (name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status, source_url)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9)`,
           [
             entry.name,
             entry.description || null,
@@ -225,6 +212,7 @@ async function collectKnowledge() {
             entry.cost_min_zar || null,
             entry.cost_max_zar || null,
             entry.category,
+            source.url, // link back to the exact article
           ]
         );
 

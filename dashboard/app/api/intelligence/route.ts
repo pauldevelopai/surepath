@@ -712,7 +712,7 @@ export const GET = withAuth(async (req: NextRequest) => {
         case "kb":
           columns = ["id", "name", "category", "severity", "cost_min_zar", "cost_max_zar", "status"];
           await paged(
-            "SELECT id, name, category, severity, cost_min_zar, cost_max_zar, description, visual_indicators, sa_context, status, image_url, property_id FROM rag_knowledge_entries WHERE true",
+            "SELECT id, name, category, severity, cost_min_zar, cost_max_zar, description, visual_indicators, sa_context, status, image_url, property_id, source_url FROM rag_knowledge_entries WHERE true",
             "SELECT COUNT(*) AS c FROM rag_knowledge_entries WHERE true",
             ["name", "category", "sa_context"]
           );
@@ -831,10 +831,13 @@ export const GET = withAuth(async (req: NextRequest) => {
       if (row.property_id && ["photos", "photos_analysed", "evidence", "reports", "deeds"].includes(type)) {
         row._link = `/admin/data/inspect/${row.property_id}`;
       }
-      // KB entries — link to source property if available, or image URL
+      // KB entries — link to the source photo (the actual evidence), or source_url for article-sourced entries
       if (type === "kb") {
-        if (row.property_id) row._link = `/admin/data/inspect/${row.property_id}`;
-        else if (row.image_url && typeof row.image_url === "string" && row.image_url.startsWith("http")) row._link = row.image_url as string;
+        if (row.image_url && typeof row.image_url === "string" && (row.image_url as string).startsWith("http")) {
+          row._link = row.image_url as string; // Direct link to the photo Nico analysed
+        } else if (row.source_url && typeof row.source_url === "string" && (row.source_url as string).startsWith("http")) {
+          row._link = row.source_url as string; // Article source URL
+        }
       }
       // Area risk data — use source_url if available
       if (row.source_url && typeof row.source_url === "string" && (row.source_url as string).startsWith("http")) {
