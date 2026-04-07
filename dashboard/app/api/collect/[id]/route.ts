@@ -501,6 +501,18 @@ export const POST = withAuth(async (req: NextRequest, { params }: { params: Prom
       }
     }
 
+    // ── ELECTRICITY (tariffs + load shedding status) ──
+    if (action === "electricity") {
+      try {
+        const mod = await loadModule("collect-electricity");
+        const result = await mod.collectForProperty(parseInt(id));
+        if (!result || result.error) return NextResponse.json({ ok: false, message: result?.error || "No electricity data" });
+        return NextResponse.json({ ok: true, message: `Electricity: R${result.monthly_total_rands}/month at R${result.rate_per_kwh_rands}/kWh (${result.supplier}). Load shedding: ${result.load_shedding_status}` });
+      } catch (e: unknown) {
+        return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Electricity collection failed" });
+      }
+    }
+
     // ── LOAD SHEDDING ──
     if (action === "loadshedding") {
       try {

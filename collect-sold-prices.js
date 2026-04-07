@@ -91,7 +91,35 @@ async function collectForProperty(propertyId) {
     .sort((a, b) => b.price - a.price)
     .slice(0, 20);
 
+  // Fallback: try ooba.co.za property prices page for suburb stats
   if (uniqueSales.length === 0) {
+    console.log(`[sold-prices] P24 no data, trying ooba.co.za...`);
+    try {
+      const oobaUrl = `https://www.ooba.co.za/resources/property-prices/${citySlug}/`;
+      const oobaHtml = await fetchHTML(oobaUrl);
+      if (oobaHtml && oobaHtml.length > 1000) {
+        // ooba publishes city-level stats: average price, median, growth %
+        const avgMatch = oobaHtml.match(/average.*?(?:price|value).*?R\s?([\d,.\s]+)/i);
+        const medMatch = oobaHtml.match(/median.*?(?:price|value).*?R\s?([\d,.\s]+)/i);
+        if (avgMatch || medMatch) {
+          const avgPrice = avgMatch ? parseInt(avgMatch[1].replace(/[,.\s]/g, '')) : null;
+          const medPrice = medMatch ? parseInt(medMatch[1].replace(/[,.\s]/g, '')) : null;
+          if (avgPrice || medPrice) {
+            const oobaResult = { suburb, city, sales_count: 0, avg_price: avgPrice, median_price: medPrice || avgPrice, min_price: null, max_price: null, sales: [], source: 'ooba.co.za' };
+            try {
+              await pool.query(
+                `INSERT INTO area_risk_data (suburb, city, risk_type, risk_level, risk_score, details, source_name, source_url, data_date)
+                 VALUES ($1, $2, 'sold_prices', 'info', 0, $3, 'ooba.co.za', $4, CURRENT_DATE) ON CONFLICT DO NOTHING`,
+                [suburb, city, JSON.stringify(oobaResult), oobaUrl]
+              );
+            } catch {}
+            console.log(`[sold-prices] ooba: ${city} avg R${(avgPrice || 0).toLocaleString()}, median R${(medPrice || 0).toLocaleString()}`);
+            return oobaResult;
+          }
+        }
+      }
+    } catch {}
+
     console.log(`[sold-prices] No sales data found for ${suburb}`);
     return { error: 'no data', suburb };
   }

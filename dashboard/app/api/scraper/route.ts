@@ -263,6 +263,24 @@ export const POST = withAuth(async (req: NextRequest) => {
           await pool.end();
         })();
       `];
+    } else if (source === "electricity") {
+      scraperName = "electricity";
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const { collectForProperty } = require('./collect-electricity');
+        (async () => {
+          const { rows } = await pool.query(
+            "SELECT DISTINCT ON (p.city) p.id, p.city FROM properties p WHERE p.city IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.city ILIKE p.city AND ard.risk_type = 'electricity') ORDER BY p.city, p.created_at DESC LIMIT 30"
+          );
+          console.log('Electricity: ' + rows.length + ' cities to process');
+          for (const prop of rows) {
+            try { await collectForProperty(prop.id); } catch (e) { console.log('ERROR: ' + prop.city + ' — ' + e.message); }
+          }
+          console.log('=== Electricity complete ===');
+          await pool.end();
+        })();
+      `];
     } else if (source === "knowledge") {
       scraperName = "knowledge";
       args = ["-e", `

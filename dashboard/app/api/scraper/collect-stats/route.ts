@@ -3,7 +3,7 @@ import { query } from "@/lib/db";
 import { withAuth } from "@/lib/auth";
 
 export const GET = withAuth(async () => {
-  const [crimePending, crimeTotal, solarPending, solarTotal, ppTotal, ppLatest, suburbs, suburbsWithListings, securityPending, securityTotal, sapsTotal, assist247Suburbs, procompareCompanies, waterPending, waterTotal, gvrTotal, schoolsTotal, schoolsPending, climateTotal, climatePending, loadsheddingTotal, soldpricesTotal, fibreTotal, kbTotal, kbActive] = await Promise.all([
+  const [crimePending, crimeTotal, solarPending, solarTotal, ppTotal, ppLatest, suburbs, suburbsWithListings, securityPending, securityTotal, sapsTotal, assist247Suburbs, procompareCompanies, waterPending, waterTotal, gvrTotal, schoolsTotal, schoolsPending, climateTotal, climatePending, loadsheddingTotal, soldpricesTotal, fibreTotal, kbTotal, kbActive, electricityTotal] = await Promise.all([
     query(`SELECT COUNT(DISTINCT (p.suburb || '|' || p.city)) as cnt FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'crime_detailed')`),
     query(`SELECT COUNT(*) as cnt FROM area_risk_data WHERE risk_type = 'crime_detailed'`),
@@ -31,6 +31,7 @@ export const GET = withAuth(async () => {
     query(`SELECT COUNT(DISTINCT (suburb || '|' || city)) as cnt FROM area_risk_data WHERE risk_type = 'fibre_coverage'`).catch(() => [{ cnt: 0 }]),
     query(`SELECT COUNT(*) as cnt FROM rag_knowledge_entries`).catch(() => [{ cnt: 0 }]),
     query(`SELECT COUNT(*) as cnt FROM rag_knowledge_entries WHERE status = 'active'`).catch(() => [{ cnt: 0 }]),
+    query(`SELECT COUNT(DISTINCT city) as cnt FROM area_risk_data WHERE risk_type = 'electricity'`).catch(() => [{ cnt: 0 }]),
   ]);
 
   return NextResponse.json({
@@ -60,5 +61,6 @@ export const GET = withAuth(async () => {
     fibre_total: parseInt(fibreTotal[0].cnt),
     kb_total: parseInt(kbTotal[0].cnt),
     kb_active: parseInt(kbActive[0].cnt),
+    electricity_total: parseInt(electricityTotal[0].cnt),
   });
 });

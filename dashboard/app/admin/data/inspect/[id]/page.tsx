@@ -1264,12 +1264,31 @@ export default function PropertyDetailPage() {
         ) : <p className="text-xs text-gray-400">No sold price data yet. Click Get Sold Prices to find recent sales in this suburb.</p>}
         </section>
 
-        {/* ── LOAD SHEDDING ── */}
+        {/* ── ELECTRICITY & LOAD SHEDDING ── */}
         <section className="bg-white border rounded-lg p-4">
           <div className="flex justify-between items-center mb-2">
-            <h2 className="font-bold text-sm">Load Shedding</h2>
-            <CollectBtn action="loadshedding" label="Get Load Shedding" ready={data.area_risks?.some((r: A) => r.risk_type === "loadshedding")} />
+            <h2 className="font-bold text-sm">Electricity</h2>
+            <CollectBtn action="electricity" label="Get Electricity Data" ready={data.area_risks?.some((r: A) => r.risk_type === "electricity" || r.risk_type === "loadshedding")} />
           </div>
+        {/* Electricity cost estimate */}
+        {data.area_risks?.some((r: A) => r.risk_type === "electricity") && (() => {
+          const elec = data.area_risks.find((r: A) => r.risk_type === "electricity");
+          const d = typeof elec?.details === "string" ? JSON.parse(elec.details) : elec?.details;
+          if (!d) return null;
+          return (
+            <div className="mb-3">
+              <div className="flex gap-4 mb-2">
+                <div className="bg-yellow-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">R{d.rate_per_kwh_rands}/kWh</div><div className="text-[9px] text-gray-500">Tariff Rate</div></div>
+                <div className="bg-yellow-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">R{d.monthly_total_rands?.toLocaleString()}</div><div className="text-[9px] text-gray-500">Est. Monthly</div></div>
+                <div className="bg-yellow-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">R{d.annual_total_rands?.toLocaleString()}</div><div className="text-[9px] text-gray-500">Est. Annual</div></div>
+                <div className={`rounded p-2 text-center flex-1 ${d.load_shedding_stage > 0 ? "bg-red-50" : "bg-green-50"}`}><div className="text-lg font-bold">{d.load_shedding_status || "Unknown"}</div><div className="text-[9px] text-gray-500">Load Shedding</div></div>
+              </div>
+              <p className="text-xs text-gray-500">Supplier: {d.supplier}. Based on {d.estimated_bedrooms}-bedroom home using ~{d.estimated_monthly_kwh} kWh/month. Source: {d.tariff_source}.</p>
+            </div>
+          );
+        })()}
+
+        {/* Load shedding schedule (if separate data exists) */}
         {data.area_risks?.some((r: A) => r.risk_type === "loadshedding") ? (
           <div>
             {data.area_risks.filter((r: A) => r.risk_type === "loadshedding").map((r: A, i: number) => {
@@ -1298,7 +1317,7 @@ export default function PropertyDetailPage() {
               );
             })}
           </div>
-        ) : <p className="text-xs text-gray-400">No load shedding data yet. Click Get Load Shedding to check schedules for this area.</p>}
+        ) : !data.area_risks?.some((r: A) => r.risk_type === "electricity") && <p className="text-xs text-gray-400">No electricity data yet. Click Get Electricity Data for tariff rates, cost estimates, and load shedding status.</p>}
         </section>
 
         {/* ── FIBRE COVERAGE ── */}

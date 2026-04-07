@@ -18,6 +18,7 @@ const SCRAPERS = [
   { id: "loadshedding", label: "Load Shedding", desc: "EskomSePush — schedules and stage by area", color: "bg-gray-700", hover: "hover:bg-gray-800" },
   { id: "soldprices", label: "Sold Prices", desc: "Property24 — recent suburb sale prices for AVM", color: "bg-green-700", hover: "hover:bg-green-800" },
   { id: "fibre", label: "Fibre Coverage", desc: "ISP coverage check — Openserve, Vumatel, Frogfoot", color: "bg-indigo-700", hover: "hover:bg-indigo-800" },
+  { id: "electricity", label: "Electricity", desc: "Eskom/municipal tariffs + load shedding status — monthly cost estimates", color: "bg-amber-700", hover: "hover:bg-amber-800" },
   { id: "knowledge", label: "Knowledge", desc: "SA construction, defects, DIY, housing — web sources → Nico's KB", color: "bg-[#E63946]", hover: "hover:bg-red-700" },
 ];
 
@@ -104,6 +105,7 @@ export default function ScraperPage() {
     loadshedding: { pending: 0,                    done: s.loadshedding_total || 0,              unit: "areas" },
     soldprices: { pending: 0,                      done: s.soldprices_total || 0,                unit: "suburbs" },
     fibre:      { pending: 0,                      done: s.fibre_total || 0,                     unit: "areas" },
+    electricity: { pending: 0,                     done: s.electricity_total || 0,                unit: "areas" },
     knowledge:  { pending: 0,                      done: s.kb_total || 0,                        unit: "entries" },
   };
 
