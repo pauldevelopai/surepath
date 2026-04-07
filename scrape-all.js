@@ -48,6 +48,13 @@ function shouldStop() {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+function withTimeout(fn, ms, label) {
+  return Promise.race([
+    fn(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms)),
+  ]);
+}
+
 function log(msg) {
   const ts = new Date().toISOString().substring(11, 19);
   console.log(`[${ts}] ${msg}`);
@@ -320,7 +327,7 @@ async function main() {
       log(`[${scraper.name}] Starting...`);
 
       try {
-        const result = await scraper.fn();
+        const result = await withTimeout(() => scraper.fn(), 120000, scraper.name);
         const scraperStatus = status.scrapers[scraper.name] || { total_processed: 0, total_errors: 0, runs: 0 };
         scraperStatus.total_processed += result.processed || 0;
         scraperStatus.total_errors += result.errors || 0;
@@ -335,6 +342,7 @@ async function main() {
         log(`[${scraper.name}] Done: ${result.processed || 0} processed, ${result.errors || 0} errors${result.done ? ' (ALL COMPLETE)' : ''}`);
       } catch (e) {
         log(`[${scraper.name}] FATAL: ${e.message}`);
+        // Don't let a timeout stop the whole loop — move to next scraper
       }
 
       await sleep(DELAY_BETWEEN_SCRAPERS);

@@ -12,6 +12,7 @@ function postJSON(url, body, apiKey) {
   const https = require('https');
   const parsed = new (require('url').URL)(url);
   return new Promise((resolve) => {
+    const hardTimeout = setTimeout(() => resolve(null), 15000); // absolute 15s limit
     const req = https.request({
       hostname: parsed.hostname,
       path: parsed.pathname,
@@ -26,11 +27,12 @@ function postJSON(url, body, apiKey) {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
+        clearTimeout(hardTimeout);
         try { resolve(JSON.parse(data)); } catch { resolve(null); }
       });
     });
-    req.on('error', () => resolve(null));
-    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.on('error', () => { clearTimeout(hardTimeout); resolve(null); });
+    req.on('timeout', () => { clearTimeout(hardTimeout); req.destroy(); resolve(null); });
     req.write(body);
     req.end();
   });

@@ -169,6 +169,16 @@ export const POST = withAuth(async (req: NextRequest) => {
     }
     // Also kill via PID file (survives dashboard restarts)
     killByPid("master");
+    // Clear status file
+    try {
+      const statusPath = "/tmp/surepath-scraper-status.json";
+      if (fs.existsSync(statusPath)) {
+        const status = JSON.parse(fs.readFileSync(statusPath, "utf8"));
+        status.running = false;
+        status.stopped_reason = "Stopped by user";
+        fs.writeFileSync(statusPath, JSON.stringify(status));
+      }
+    } catch {}
     return NextResponse.json({ ok: true, message: "Stop signal sent and process killed" });
   }
 
@@ -185,7 +195,20 @@ export const POST = withAuth(async (req: NextRequest) => {
       if (!entry.proc.killed) { try { entry.proc.kill("SIGKILL"); killed++; } catch {} }
     }
     scraperProcesses.clear();
-    return NextResponse.json({ ok: true, message: `Force killed ${killed} scraper process(es)` });
+    // Clear the master scraper status file so the UI stops showing it as running
+    try {
+      const fs = require("fs");
+      const statusPath = "/tmp/surepath-scraper-status.json";
+      if (fs.existsSync(statusPath)) {
+        const status = JSON.parse(fs.readFileSync(statusPath, "utf8"));
+        status.running = false;
+        status.stopped_reason = "Force killed";
+        fs.writeFileSync(statusPath, JSON.stringify(status));
+      }
+      // Also write the stop signal file
+      fs.writeFileSync("/tmp/surepath-scraper-stop", new Date().toISOString());
+    } catch {}
+    return NextResponse.json({ ok: true, message: `Force killed ${killed} scraper process(es) — status cleared` });
   }
 
   // ─── Get master scraper status ────────────────────────────────────
