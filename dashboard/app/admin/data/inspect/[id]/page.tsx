@@ -492,7 +492,7 @@ export default function PropertyDetailPage() {
               {streetviewImg.vision_analysis?.findings?.map((f: A, i: number) => (
                 <div key={i} className="flex gap-1 items-start text-xs mt-1">
                   <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
-                  <span className="flex-1">{humanize(f.observation)}</span>
+                  <span className="flex-1">{humanize(f.what_it_means || f.observation)}</span>
                   <RateBtn section="streetview" hash={`sv-${i}`} context={{ observation: f.observation, severity: f.severity }} />
                 </div>
               ))}
@@ -569,7 +569,7 @@ export default function PropertyDetailPage() {
                       {satFindings.map((f: A, i: number) => (
                         <div key={i} className="flex gap-1 items-start text-xs mt-1">
                           <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
-                          <span className="flex-1">{humanize(f.observation)}</span>
+                          <span className="flex-1">{humanize(f.what_it_means || f.observation)}</span>
                           <RateBtn section="satellite" hash={`finding-${i}`} context={{ observation: f.observation, severity: f.severity }} />
                         </div>
                       ))}
