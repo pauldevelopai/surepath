@@ -17,6 +17,49 @@ const scraperProcesses: Map<string, { proc: ReturnType<typeof spawn>; log: strin
 // Legacy single-process variables for backwards compat with GET
 let scraperLog: string[] = [];
 
+// ─── PID file helpers — survive dashboard restarts ───────────────────
+const fs_pid = require("fs");
+const PID_DIR = "/tmp/surepath-pids";
+try { fs_pid.mkdirSync(PID_DIR, { recursive: true }); } catch {}
+
+function writePid(name: string, pid: number) {
+  try { fs_pid.writeFileSync(`${PID_DIR}/${name}.pid`, JSON.stringify({ pid, started: new Date().toISOString() })); } catch {}
+}
+function readPid(name: string): { pid: number; started: string } | null {
+  try { return JSON.parse(fs_pid.readFileSync(`${PID_DIR}/${name}.pid`, "utf8")); } catch { return null; }
+}
+function clearPid(name: string) {
+  try { fs_pid.unlinkSync(`${PID_DIR}/${name}.pid`); } catch {}
+}
+function isProcessAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function killByPid(name: string): boolean {
+  const info = readPid(name);
+  if (!info) return false;
+  try {
+    process.kill(info.pid, "SIGTERM");
+    // Give it 3 seconds then force kill
+    setTimeout(() => { try { process.kill(info.pid, "SIGKILL"); } catch {} }, 3000);
+    clearPid(name);
+    return true;
+  } catch { clearPid(name); return false; }
+}
+function getAllRunningPids(): { name: string; pid: number; started: string }[] {
+  try {
+    return fs_pid.readdirSync(PID_DIR)
+      .filter((f: string) => f.endsWith(".pid"))
+      .map((f: string) => {
+        const name = f.replace(".pid", "");
+        const info = readPid(name);
+        if (info && isProcessAlive(info.pid)) return { name, ...info };
+        clearPid(name); // Clean up stale PID files
+        return null;
+      })
+      .filter(Boolean);
+  } catch { return []; }
+}
+
 export const GET = withAuth(async () => {
   // Job summary by status
   const jobs = await query(`
@@ -44,11 +87,17 @@ export const GET = withAuth(async () => {
     jobs,
     summary,
     totals: totals[0],
-    scraper_running: scraperProcesses.size > 0,
-    scraper_processes: Array.from(scraperProcesses.entries()).map(([name, s]) => ({
-      name, running: !s.proc.killed, started: s.startedAt, log_lines: s.log.length,
-      log: s.log.slice(-50),
-    })),
+    scraper_running: scraperProcesses.size > 0 || getAllRunningPids().length > 0,
+    scraper_processes: [
+      ...Array.from(scraperProcesses.entries()).map(([name, s]) => ({
+        name, running: !s.proc.killed, started: s.startedAt, pid: s.proc.pid, log_lines: s.log.length,
+        log: s.log.slice(-50),
+      })),
+      // Include orphaned processes from PID files (not in memory)
+      ...getAllRunningPids()
+        .filter(p => !scraperProcesses.has(p.name))
+        .map(p => ({ name: p.name, running: true, started: p.started, pid: p.pid, log_lines: 0, log: ["[orphaned — dashboard restarted, process still running]"] })),
+    ],
     scraper_log: scraperLog.slice(-50),
   });
 });
@@ -58,20 +107,15 @@ export const POST = withAuth(async (req: NextRequest) => {
 
   // ─── Master scraper: run everything ──────────────────────────────
   if (action === "scrape_all") {
-    // Check if already running
+    // Check if already running — PID file survives restarts
+    const masterPid = readPid("master");
+    if (masterPid && isProcessAlive(masterPid.pid)) {
+      return NextResponse.json({ ok: false, message: `Master scraper already running (PID ${masterPid.pid}, started ${masterPid.started})` });
+    }
     const existing = scraperProcesses.get("master");
     if (existing && !existing.proc.killed) {
       return NextResponse.json({ ok: false, message: "Master scraper already running" });
     }
-    // Also check via status file
-    try {
-      const fs = require("fs");
-      const statusRaw = fs.readFileSync("/tmp/surepath-scraper-status.json", "utf8");
-      const st = JSON.parse(statusRaw);
-      if (st.running) {
-        return NextResponse.json({ ok: false, message: "Master scraper already running (from previous session)" });
-      }
-    } catch {}
 
     const logLines: string[] = ["[master] Starting master scraper — all data types"];
     scraperLog.push(...logLines);
@@ -84,6 +128,16 @@ export const POST = withAuth(async (req: NextRequest) => {
     });
 
     scraperProcesses.set("master", { proc, log: logLines, startedAt: new Date() });
+    writePid("master", proc.pid);
+
+    // Hard timeout: kill after 4 hours no matter what
+    const masterTimeout = setTimeout(() => {
+      try { proc.kill("SIGTERM"); } catch {}
+      setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} }, 5000);
+      clearPid("master");
+      scraperProcesses.delete("master");
+      scraperLog.push("[master] KILLED — exceeded 4 hour timeout");
+    }, 4 * 60 * 60 * 1000);
 
     proc.stdout?.on("data", (data: Buffer) => {
       const lines = data.toString().split("\n").filter(Boolean).map(l => `[master] ${l}`);
@@ -97,7 +151,7 @@ export const POST = withAuth(async (req: NextRequest) => {
       const entry = scraperProcesses.get("master");
       if (entry) entry.log.push(...lines);
     });
-    proc.on("close", () => { scraperProcesses.delete("master"); });
+    proc.on("close", () => { clearTimeout(masterTimeout); clearPid("master"); scraperProcesses.delete("master"); });
     proc.unref();
 
     return NextResponse.json({ ok: true, message: "Master scraper started — scraping all data types continuously" });
@@ -107,13 +161,31 @@ export const POST = withAuth(async (req: NextRequest) => {
   if (action === "stop_all_scraping") {
     const fs = require("fs");
     fs.writeFileSync("/tmp/surepath-scraper-stop", new Date().toISOString());
-    // Also kill the process if we have it
+    // Kill via in-memory reference
     const master = scraperProcesses.get("master");
     if (master && !master.proc.killed) {
       master.proc.kill("SIGTERM");
       scraperProcesses.delete("master");
     }
-    return NextResponse.json({ ok: true, message: "Stop signal sent — scraper will finish current item and stop" });
+    // Also kill via PID file (survives dashboard restarts)
+    killByPid("master");
+    return NextResponse.json({ ok: true, message: "Stop signal sent and process killed" });
+  }
+
+  // ─── Force kill ALL scraper processes (nuclear option) ─────────────
+  if (action === "kill_all_scrapers") {
+    const pids = getAllRunningPids();
+    let killed = 0;
+    for (const p of pids) {
+      try { process.kill(p.pid, "SIGKILL"); killed++; } catch {}
+      clearPid(p.name);
+    }
+    // Also kill any in-memory tracked processes
+    for (const [n, entry] of scraperProcesses) {
+      if (!entry.proc.killed) { try { entry.proc.kill("SIGKILL"); killed++; } catch {} }
+    }
+    scraperProcesses.clear();
+    return NextResponse.json({ ok: true, message: `Force killed ${killed} scraper process(es)` });
   }
 
   // ─── Get master scraper status ────────────────────────────────────
@@ -382,19 +454,14 @@ export const POST = withAuth(async (req: NextRequest) => {
       if (max_pages) args.push("--max-pages", String(max_pages));
     }
 
-    // Check if same scraper is already running (in-memory check)
+    // Check if same scraper is already running — PID file survives restarts
+    const existPid = readPid(scraperName);
+    if (existPid && isProcessAlive(existPid.pid)) {
+      return NextResponse.json({ ok: false, message: `"${scraperName}" already running (PID ${existPid.pid}, started ${existPid.started})` });
+    }
     const existing = scraperProcesses.get(scraperName);
     if (existing && !existing.proc.killed) {
       return NextResponse.json({ ok: false, message: `"${scraperName}" already running` });
-    }
-    // Also check system processes (survives Next.js hot reload)
-    if (scraperName === "pp") {
-      try {
-        const ps = execSync("ps aux | grep 'scrape-pp.js' | grep -v grep", { encoding: "utf8" });
-        if (ps.trim()) {
-          return NextResponse.json({ ok: false, message: `PP scraper already running (system process)` });
-        }
-      } catch { /* no process found — OK to start */ }
     }
 
     const logLines: string[] = [`[${scraperName}] Starting: node ${args.join(" ")}`];
@@ -408,6 +475,16 @@ export const POST = withAuth(async (req: NextRequest) => {
     });
 
     scraperProcesses.set(scraperName, { proc, log: logLines, startedAt: new Date() });
+    writePid(scraperName, proc.pid);
+
+    // Hard timeout: kill individual scrapers after 1 hour
+    const scraperTimeout = setTimeout(() => {
+      try { proc.kill("SIGTERM"); } catch {}
+      setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} }, 5000);
+      clearPid(scraperName);
+      scraperProcesses.delete(scraperName);
+      scraperLog.push(`[${scraperName}] KILLED — exceeded 1 hour timeout`);
+    }, 60 * 60 * 1000);
 
     proc.stdout?.on("data", (data: Buffer) => {
       const lines = data.toString().split("\n").filter(Boolean).map(l => `[${scraperName}] ${l}`);
@@ -425,6 +502,8 @@ export const POST = withAuth(async (req: NextRequest) => {
     });
 
     proc.on("close", (code: number) => {
+      clearTimeout(scraperTimeout);
+      clearPid(scraperName);
       const msg = `[${scraperName}] Exited with code ${code}`;
       scraperLog.push(msg);
       scraperProcesses.delete(scraperName);
@@ -440,23 +519,28 @@ export const POST = withAuth(async (req: NextRequest) => {
   if (action === "stop") {
     const name = stopName || null;
     if (name) {
-      // Stop specific scraper
+      // Stop specific scraper — try in-memory first, then PID file
       const entry = scraperProcesses.get(name);
       if (entry && !entry.proc.killed) {
         entry.proc.kill("SIGTERM");
-        scraperLog.push(`[${name}] Stopped by user`);
         scraperProcesses.delete(name);
-        return NextResponse.json({ ok: true, message: `Scraper "${name}" stopped` });
       }
-      return NextResponse.json({ ok: false, message: `Scraper "${name}" not running` });
+      killByPid(name);
+      scraperLog.push(`[${name}] Stopped by user`);
+      return NextResponse.json({ ok: true, message: `Scraper "${name}" stopped` });
     }
-    // Stop all
+    // Stop all — in-memory + PID files
     let stopped = 0;
     for (const [n, entry] of scraperProcesses) {
       if (!entry.proc.killed) { entry.proc.kill("SIGTERM"); stopped++; }
       scraperLog.push(`[${n}] Stopped by user`);
     }
     scraperProcesses.clear();
+    // Also kill any orphaned processes via PID files
+    for (const p of getAllRunningPids()) {
+      killByPid(p.name);
+      stopped++;
+    }
     return NextResponse.json({ ok: true, message: `Stopped ${stopped} scraper(s)` });
   }
 
