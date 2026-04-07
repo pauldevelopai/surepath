@@ -263,6 +263,22 @@ export const POST = withAuth(async (req: NextRequest) => {
           await pool.end();
         })();
       `];
+    } else if (source === "knowledge") {
+      scraperName = "knowledge";
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const { collectKnowledge } = require('./collect-knowledge');
+        (async () => {
+          console.log('Knowledge: Starting SA construction & property knowledge collection...');
+          try {
+            const result = await collectKnowledge();
+            console.log('=== Knowledge complete: ' + result.created + ' entries created, ' + result.skipped + ' duplicates, ' + result.errors + ' errors ===');
+          } catch (e) { console.error('Knowledge collection failed:', e.message); }
+          await pool.end();
+          process.exit(0);
+        })();
+      `];
     } else {
       scraperName = `p24${suburb ? '_' + suburb.substring(0, 15) : ''}`;
       args = [scriptPath("scrape-p24.js")];

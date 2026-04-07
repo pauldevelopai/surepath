@@ -1,6 +1,194 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { withAuth } from "@/lib/auth";
+import * as fs from "fs";
+import * as path from "path";
+
+// ─── RAG Intelligence Test Helpers ───────────────────────────────────────
+
+// SA-specific terms that indicate the RAG is contributing domain knowledge
+const SA_TERMS = [
+  "ECoC", "SANS 10142", "SANS 10400", "DPC", "damp-proof course", "DPC injection",
+  "body corporate", "sectional title", "municipal value", "title deed",
+  "efflorescence", "galvanised", "asbestos", "corrugated cement",
+  "dolomite", "Eskom", "geyser", "prepaid meter", "earth leakage",
+  "rewirable fuse", "IBR", "face brick", "plaster skim",
+];
+
+// Read the real Nico v3 system prompt from vision.js (without KB entries)
+async function _readNicoBasePrompt(): Promise<string> {
+  try {
+    const visionPath = path.resolve(process.cwd(), "..", "vision.js");
+    const src = fs.readFileSync(visionPath, "utf-8");
+    // Extract the NICO_SYSTEM_PROMPT constant
+    const match = src.match(/const NICO_SYSTEM_PROMPT = `([\s\S]*?)`;/);
+    if (match) return match[1];
+  } catch {}
+  // Fallback — the core Nico v3 prompt inline (kept in sync manually)
+  return `You are Nico. Former estate agent, 20 years in the South African property market. You have walked through thousands of properties across the country. When you look at a photo, you are not describing what you see — you are assessing what it means for the buyer.
+
+HOW YOU THINK
+
+For every issue you identify in a photo, you must distinguish three things that are never conflated:
+  1. WHAT YOU CAN SEE — the specific visual evidence in this photo
+  2. WHAT YOU CAN INFER — what the visual evidence means when combined with property data and your knowledge
+  3. WHAT REQUIRES PHYSICAL INSPECTION — what you cannot determine from a photo alone
+
+WHAT YOU RETURN
+
+For each photo, return a JSON object. Every finding MUST contain ALL of these fields or it will be rejected:
+
+{
+  "photo_type": "exterior|interior|roof|bathroom|kitchen|db_board|ceiling|other",
+  "findings": [{
+    "what_i_see": "Exact visual evidence. Where in the photo. What is physically visible.",
+    "visual_location": "Where in the photo",
+    "category": "roof|walls|damp|electrical|plumbing|ceiling|structure|extension|security|environment",
+    "defect_or_risk": "What defect or risk this maps to",
+    "kb_entry_matched": null,
+    "kb_match_reason": null,
+    "sa_context": "What SA-specific context is relevant",
+    "corroboration": { "supporting": null, "contradicting": null, "data_used": [] },
+    "confidence_tier": 1,
+    "tier_reason": "Visual only — no KB or property data available for this test",
+    "severity": "CRITICAL|HIGH|MEDIUM|LOW|COSMETIC",
+    "estimated_repair_cost_zar": {"min": 0, "max": 0},
+    "cost_source": "nico_estimate",
+    "what_it_means": "Plain language for buyer",
+    "needs_inspection": "What physical inspection would reveal",
+    "relevant_to": ["consumer"]
+  }],
+  "roof_material": "corrugated_cement|IBR|concrete_tile|clay_tile|other|unknown",
+  "solar_installed": false,
+  "asbestos_indicators": false,
+  "security_visible": false
+}
+
+RULES
+- Use SA property terminology and ZAR costs at SA labour rates
+- Never confirm asbestos — flag indicators only
+- If you find nothing wrong, say so clearly
+- Return ONLY valid JSON`;
+}
+
+interface RagSignals {
+  // KB reference signals
+  kb_entries_referenced: string[];
+  kb_references_baseline: string[];
+  kb_lift: number; // how many MORE kb references in RAG vs baseline
+
+  // SA domain knowledge signals
+  sa_terms_rag: string[];
+  sa_terms_baseline: string[];
+  sa_term_lift: number;
+
+  // Cost accuracy signals
+  uses_zar_rag: boolean;
+  uses_zar_baseline: boolean;
+  has_cost_ranges_rag: boolean;
+  has_cost_ranges_baseline: boolean;
+
+  // Structural quality
+  findings_count_rag: number;
+  findings_count_baseline: number;
+  has_confidence_tiers_rag: boolean;
+  has_confidence_tiers_baseline: boolean;
+  has_why_chain_rag: boolean;
+  has_why_chain_baseline: boolean;
+
+  // Overall RAG contribution score (0-100)
+  rag_contribution_score: number;
+}
+
+function _detectRagSignals(baseline: string, ragResponse: string, kbNames: string[]): RagSignals {
+  const lower = (s: string) => s.toLowerCase();
+  const baseL = lower(baseline);
+  const ragL = lower(ragResponse);
+
+  // KB entry references
+  const kb_entries_referenced = kbNames.filter(n => ragL.includes(lower(n)));
+  const kb_references_baseline = kbNames.filter(n => baseL.includes(lower(n)));
+
+  // SA terms
+  const sa_terms_rag = SA_TERMS.filter(t => ragL.includes(lower(t)));
+  const sa_terms_baseline = SA_TERMS.filter(t => baseL.includes(lower(t)));
+
+  // Cost signals
+  const zarPattern = /R\s?\d[\d\s,]*(?:–|-)R?\s?\d[\d\s,]*/g;
+  const uses_zar_rag = /\bR\s?\d/.test(ragResponse) || /\bzar\b/i.test(ragResponse);
+  const uses_zar_baseline = /\bR\s?\d/.test(baseline) || /\bzar\b/i.test(baseline);
+  const has_cost_ranges_rag = zarPattern.test(ragResponse) || /"min"\s*:\s*\d+.*"max"\s*:\s*\d+/.test(ragResponse);
+  const has_cost_ranges_baseline = /R\s?\d[\d\s,]*(?:–|-)R?\s?\d[\d\s,]*/g.test(baseline) || /"min"\s*:\s*\d+.*"max"\s*:\s*\d+/.test(baseline);
+
+  // Count findings
+  const countFindings = (s: string) => {
+    try {
+      const json = JSON.parse(s.replace(/```json?\s*/g, "").replace(/```/g, "").trim());
+      return Array.isArray(json.findings) ? json.findings.length : 0;
+    } catch { return (s.match(/"what_i_see"|"observation"/g) || []).length; }
+  };
+
+  const findings_count_rag = countFindings(ragResponse);
+  const findings_count_baseline = countFindings(baseline);
+
+  // Confidence tiers (Nico v3 feature)
+  const has_confidence_tiers_rag = /confidence_tier.*[1-4]/.test(ragResponse);
+  const has_confidence_tiers_baseline = /confidence_tier.*[1-4]/.test(baseline);
+
+  // WHY chain (what_i_see + what_it_means + needs_inspection)
+  const hasWhyChain = (s: string) => /what_i_see/.test(s) && /what_it_means/.test(s) && /needs_inspection/.test(s);
+  const has_why_chain_rag = hasWhyChain(ragResponse);
+  const has_why_chain_baseline = hasWhyChain(baseline);
+
+  // Compute RAG contribution score (0-100)
+  let score = 0;
+  const kb_lift = kb_entries_referenced.length - kb_references_baseline.length;
+  const sa_term_lift = sa_terms_rag.length - sa_terms_baseline.length;
+
+  // KB references from RAG (biggest signal — 0-30 points)
+  score += Math.min(kb_entries_referenced.length * 10, 30);
+  // SA term lift (0-20 points)
+  score += Math.min(Math.max(sa_term_lift, 0) * 4, 20);
+  // Uses ZAR in RAG (5 points)
+  if (uses_zar_rag) score += 5;
+  // Has cost ranges in RAG (10 points)
+  if (has_cost_ranges_rag) score += 10;
+  // Confidence tiers in RAG (10 points)
+  if (has_confidence_tiers_rag) score += 10;
+  // WHY chain in RAG (10 points)
+  if (has_why_chain_rag) score += 10;
+  // More findings in RAG vs baseline (0-15 points)
+  if (findings_count_rag > findings_count_baseline) score += Math.min((findings_count_rag - findings_count_baseline) * 5, 15);
+
+  return {
+    kb_entries_referenced, kb_references_baseline, kb_lift,
+    sa_terms_rag, sa_terms_baseline, sa_term_lift,
+    uses_zar_rag, uses_zar_baseline, has_cost_ranges_rag, has_cost_ranges_baseline,
+    findings_count_rag, findings_count_baseline,
+    has_confidence_tiers_rag, has_confidence_tiers_baseline,
+    has_why_chain_rag, has_why_chain_baseline,
+    rag_contribution_score: Math.min(score, 100),
+  };
+}
+
+function _aggregateSignals(signals: RagSignals[]) {
+  if (signals.length === 0) return null;
+  const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
+  const pct = (arr: boolean[]) => Math.round(arr.filter(Boolean).length / arr.length * 100);
+
+  return {
+    avg_rag_contribution_score: Math.round(avg(signals.map(s => s.rag_contribution_score))),
+    avg_kb_lift: Number(avg(signals.map(s => s.kb_lift)).toFixed(1)),
+    avg_sa_term_lift: Number(avg(signals.map(s => s.sa_term_lift)).toFixed(1)),
+    avg_findings_rag: Number(avg(signals.map(s => s.findings_count_rag)).toFixed(1)),
+    avg_findings_baseline: Number(avg(signals.map(s => s.findings_count_baseline)).toFixed(1)),
+    pct_uses_zar: pct(signals.map(s => s.uses_zar_rag)),
+    pct_has_cost_ranges: pct(signals.map(s => s.has_cost_ranges_rag)),
+    pct_has_confidence_tiers: pct(signals.map(s => s.has_confidence_tiers_rag)),
+    pct_has_why_chain: pct(signals.map(s => s.has_why_chain_rag)),
+    photos_tested: signals.length,
+  };
+}
 
 // ─── GET: Load all data for the Intelligence Hub page ─────────────────
 export const GET = withAuth(async (req: NextRequest) => {
@@ -191,6 +379,17 @@ export const GET = withAuth(async (req: NextRequest) => {
     if (section === "quality") {
       return NextResponse.json({ quality: { runs: qualityRuns, trajectory: scoreTrajectory } });
     }
+  }
+
+  // ─── Properties for test selector ──────────────────────────────────
+  if (section === "properties_for_test") {
+    const props = await query(`
+      SELECT id, address_raw, suburb, city, construction_era
+      FROM properties
+      WHERE suburb IS NOT NULL
+      ORDER BY created_at DESC LIMIT 100
+    `);
+    return NextResponse.json({ properties: props });
   }
 
   // ─── Section 4: Combined Report View ────────────────────────────────
@@ -506,38 +705,78 @@ export const POST = withAuth(async (req: NextRequest) => {
   }
 
   if (action === "run_comparison") {
-    const { image_base64, image_media_type } = body;
+    const { image_base64, image_media_type, rag_enabled = true, property_id } = body;
     if (!image_base64) return NextResponse.json({ error: "image_base64 required — upload a photo" }, { status: 400 });
 
-    // Load the base vision prompt (same one vision.js uses)
-    const basePrompt = `You are a certified property inspector with 20 years of South African experience.
-Analyse this property photo. Identify every visible risk, defect, or flag that would concern a buyer, an insurer, or a trades professional.
-Return structured JSON:
-{
-  "photo_type": "exterior|interior|roof|bathroom|kitchen|db_board|ceiling|other",
-  "findings": [{"category": "roof|walls|damp|electrical|plumbing|ceiling|structure|extension", "observation": "exact description", "confidence": "CONFIRMED_VISIBLE|PROBABLE|POSSIBLE", "severity": "CRITICAL|HIGH|MEDIUM|LOW|COSMETIC", "estimated_repair_cost_zar": {"min": 0, "max": 0}}],
-  "roof_material": "corrugated_cement|IBR|concrete_tile|clay_tile|other|unknown",
-  "solar_installed": false,
-  "asbestos_indicators": false,
-  "security_visible": false
-}
-Rules: Never confirm asbestos — flag indicators only. SA terminology. ZAR costs. Return ONLY valid JSON.`;
+    // Baseline: Nico's core prompt with NO context, NO KB, NO area data
+    const nicoBasePrompt = await _readNicoBasePrompt();
 
-    // Build RAG-enhanced prompt with active KB entries
-    let ragPrompt = basePrompt;
+    // RAG: Use the REAL getNicoPrompt() from vision.js — pulls ALL data sources
+    let ragPrompt = nicoBasePrompt;
+    let ragContext: Record<string, unknown> = {};
+    const kbNames: string[] = [];
     let kbCount = 0;
-    try {
-      const kbRows = await query(
-        "SELECT name, category, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar FROM rag_knowledge_entries WHERE status = 'active' ORDER BY severity DESC"
-      );
-      if (kbRows.length > 0) {
-        kbCount = kbRows.length;
-        const entries = kbRows.map((e: Record<string, unknown>) =>
-          `- ${e.name} [${e.category}, severity ${e.severity}/5${e.cost_min_zar ? `, R${e.cost_min_zar}–R${e.cost_max_zar}` : ''}]: ${e.description || ''}${e.visual_indicators ? ` LOOK FOR: ${e.visual_indicators}` : ''}${e.sa_context ? ` SA CONTEXT: ${e.sa_context}` : ''}`
-        ).join('\n');
-        ragPrompt += `\n\nSA DEFECT KNOWLEDGE BASE (${kbRows.length} entries — use these to identify region-specific defects and calibrate severity/cost estimates):\n${entries}`;
+
+    if (rag_enabled) {
+      try {
+        const visionPath = path.resolve(process.cwd(), "..", "vision.js");
+        const vision = await import(/* webpackIgnore: true */ visionPath);
+        const getNicoPrompt = vision.getNicoPrompt || vision.default?.getNicoPrompt;
+
+        if (getNicoPrompt) {
+          // If a property_id was provided, load its full context
+          let propertyContext: Record<string, unknown> | null = null;
+          if (property_id) {
+            const props = await query("SELECT * FROM properties WHERE id = $1", [property_id]);
+            if (props[0]) {
+              const p = props[0] as Record<string, unknown>;
+              propertyContext = {
+                construction_era: p.construction_era,
+                suburb: p.suburb,
+                city: p.city,
+                roof_material: p.roof_material,
+                water_quality_score: p.water_quality_score,
+                sewerage_quality_score: p.sewerage_quality_score,
+                dolomite_risk: p.dolomite_risk,
+                mining_subsidence_risk: p.mining_subsidence_risk,
+                flood_zone: p.flood_zone,
+                flood_zone_type: p.flood_zone_type,
+                heritage_site: p.heritage_site,
+                heritage_grade: p.heritage_grade,
+                municipal_value: p.municipal_value,
+                asking_price: p.asking_price,
+                stand_size_sqm: p.stand_size_sqm,
+                floor_area_sqm: p.floor_area_sqm,
+                bedrooms: p.bedrooms,
+                bathrooms: p.bathrooms,
+                zoning: p.zoning,
+              };
+              // Add deeds data
+              const deeds = await query("SELECT registered_owner, title_deed_ref, municipal_value FROM deeds_data WHERE property_id = $1 ORDER BY fetched_at DESC LIMIT 1", [property_id]);
+              if (deeds[0]) {
+                propertyContext.registered_owner = (deeds[0] as Record<string, unknown>).registered_owner;
+                propertyContext.title_deed_ref = (deeds[0] as Record<string, unknown>).title_deed_ref;
+              }
+            }
+          }
+
+          // Call the real getNicoPrompt() — it pulls KB entries, suburb patterns,
+          // ALL area_risk_data, holly evidence, user corrections, everything
+          ragPrompt = await getNicoPrompt(propertyContext);
+          ragContext = propertyContext || {};
+        }
+      } catch (err) {
+        // Fallback: if vision.js import fails, build context manually
+        console.error("Failed to import vision.js getNicoPrompt:", err);
       }
-    } catch {}
+
+      // Get KB names for signal detection regardless of how we built the prompt
+      try {
+        const kbRows = await query("SELECT name FROM rag_knowledge_entries WHERE status = 'active'");
+        kbCount = kbRows.length;
+        for (const r of kbRows) kbNames.push((r as Record<string, unknown>).name as string);
+      } catch {}
+    }
 
     const imageContent = {
       type: "image" as const,
@@ -547,17 +786,17 @@ Rules: Never confirm asbestos — flag indicators only. SA terminology. ZAR cost
     const Anthropic = (await import("@anthropic-ai/sdk")).default;
     const claude = new Anthropic();
 
-    // Run both in parallel — same image, same model, different prompts
+    // Run both in parallel — same image, SAME model (production), different prompts
     const [withoutRag, withRag] = await Promise.all([
       claude.messages.create({
-        model: "claude-3-haiku-20240307",
-        max_tokens: 2048,
-        system: basePrompt,
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
+        system: nicoBasePrompt,
         messages: [{ role: "user", content: [imageContent, { type: "text", text: "Analyse this property photo." }] }],
       }),
       claude.messages.create({
-        model: "claude-3-haiku-20240307",
-        max_tokens: 2048,
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
         system: ragPrompt,
         messages: [{ role: "user", content: [imageContent, { type: "text", text: "Analyse this property photo." }] }],
       }),
@@ -566,11 +805,157 @@ Rules: Never confirm asbestos — flag indicators only. SA terminology. ZAR cost
     const responseWithout = withoutRag.content[0].type === "text" ? withoutRag.content[0].text : "";
     const responseWith = withRag.content[0].type === "text" ? withRag.content[0].text : "";
 
+    const signals = _detectRagSignals(responseWithout, responseWith, kbNames);
+
+    // Count how many data sources were actually injected into the RAG prompt
+    const ragSections = (ragPrompt.match(/\n\n[A-Z][A-Z\s&—]+\(/g) || []).length;
+
     return NextResponse.json({
       ok: true,
       response_without_rag: responseWithout,
       response_with_rag: responseWith,
       kb_entries_used: kbCount,
+      rag_sections: ragSections,
+      rag_prompt_length: ragPrompt.length,
+      baseline_prompt_length: nicoBasePrompt.length,
+      property_context: ragContext,
+      signals,
+    });
+  }
+
+  // ─── Batch benchmark: run comparison across multiple property photos ──
+  if (action === "run_benchmark") {
+    const count = Math.min(body.count || 10, 20);
+    const rag_enabled_bench = body.rag_enabled !== false;
+
+    // Pick random analysed photos with findings — include full property data
+    const photos = await query(`
+      SELECT pi.id, pi.image_url, pi.vision_analysis->>'photo_type' AS photo_type,
+             p.id AS property_id, p.address_raw, p.suburb, p.city, p.construction_era,
+             p.roof_material, p.water_quality_score, p.sewerage_quality_score,
+             p.dolomite_risk, p.mining_subsidence_risk, p.flood_zone,
+             p.municipal_value, p.asking_price, p.stand_size_sqm, p.floor_area_sqm,
+             p.bedrooms, p.bathrooms
+      FROM property_images pi
+      JOIN properties p ON p.id = pi.property_id
+      WHERE pi.vision_analysis IS NOT NULL
+        AND pi.image_url IS NOT NULL AND pi.image_url LIKE 'http%'
+        AND jsonb_typeof(pi.vision_analysis->'findings') = 'array'
+        AND jsonb_array_length(pi.vision_analysis->'findings') > 0
+      ORDER BY RANDOM() LIMIT ${count}
+    `);
+
+    if (photos.length === 0) {
+      return NextResponse.json({ ok: false, error: "No analysed photos with findings available" });
+    }
+
+    const nicoBasePrompt = await _readNicoBasePrompt();
+
+    // Load the real getNicoPrompt from vision.js
+    let getNicoPrompt: ((ctx: Record<string, unknown> | null) => Promise<string>) | null = null;
+    if (rag_enabled_bench) {
+      try {
+        const visionPath = path.resolve(process.cwd(), "..", "vision.js");
+        const vision = await import(/* webpackIgnore: true */ visionPath);
+        getNicoPrompt = vision.getNicoPrompt || vision.default?.getNicoPrompt;
+      } catch {}
+    }
+
+    // Get KB names for signal detection
+    const kbNames: string[] = [];
+    try {
+      const kbRows = await query("SELECT name FROM rag_knowledge_entries WHERE status = 'active'");
+      for (const r of kbRows) kbNames.push((r as Record<string, unknown>).name as string);
+    } catch {}
+
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const claude = new Anthropic();
+
+    // Fetch images and run comparisons (sequential to avoid rate limits)
+    const results: Record<string, unknown>[] = [];
+    for (const photo of photos) {
+      try {
+        // Fetch the image
+        const imgResponse = await fetch(photo.image_url as string);
+        if (!imgResponse.ok) continue;
+        const imgBuffer = await imgResponse.arrayBuffer();
+        const base64 = Buffer.from(imgBuffer).toString("base64");
+        const contentType = imgResponse.headers.get("content-type") || "image/jpeg";
+
+        // Build the full RAG prompt for THIS property's context
+        let ragPrompt = nicoBasePrompt;
+        if (getNicoPrompt && rag_enabled_bench) {
+          try {
+            ragPrompt = await getNicoPrompt({
+              construction_era: photo.construction_era,
+              suburb: photo.suburb,
+              city: photo.city,
+              roof_material: photo.roof_material,
+              water_quality_score: photo.water_quality_score,
+              sewerage_quality_score: photo.sewerage_quality_score,
+              dolomite_risk: photo.dolomite_risk,
+              mining_subsidence_risk: photo.mining_subsidence_risk,
+              flood_zone: photo.flood_zone,
+              municipal_value: photo.municipal_value,
+              asking_price: photo.asking_price,
+              stand_size_sqm: photo.stand_size_sqm,
+              floor_area_sqm: photo.floor_area_sqm,
+              bedrooms: photo.bedrooms,
+              bathrooms: photo.bathrooms,
+            });
+          } catch {}
+        }
+
+        const imageContent = {
+          type: "image" as const,
+          source: { type: "base64" as const, media_type: contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: base64 },
+        };
+
+        const [withoutRag, withRag] = await Promise.all([
+          claude.messages.create({
+            model: "claude-sonnet-4-6",
+            max_tokens: 4096,
+            system: nicoBasePrompt,
+            messages: [{ role: "user", content: [imageContent, { type: "text", text: "Analyse this property photo." }] }],
+          }),
+          claude.messages.create({
+            model: "claude-sonnet-4-6",
+            max_tokens: 4096,
+            system: ragPrompt,
+            messages: [{ role: "user", content: [imageContent, { type: "text", text: "Analyse this property photo." }] }],
+          }),
+        ]);
+
+        const responseWithout = withoutRag.content[0].type === "text" ? withoutRag.content[0].text : "";
+        const responseWith = withRag.content[0].type === "text" ? withRag.content[0].text : "";
+        const signals = _detectRagSignals(responseWithout, responseWith, kbNames);
+
+        results.push({
+          image_id: photo.id,
+          image_url: photo.image_url,
+          photo_type: photo.photo_type,
+          property_id: photo.property_id,
+          address: photo.address_raw,
+          suburb: photo.suburb,
+          rag_prompt_length: ragPrompt.length,
+          response_without_rag: responseWithout,
+          response_with_rag: responseWith,
+          signals,
+        });
+      } catch {
+        // Skip failed images
+      }
+    }
+
+    // Aggregate signal scores across all results
+    const aggregate = _aggregateSignals(results.map(r => r.signals as ReturnType<typeof _detectRagSignals>));
+
+    return NextResponse.json({
+      ok: true,
+      photos_tested: results.length,
+      kb_entries_active: kbNames.length,
+      aggregate,
+      results,
     });
   }
 

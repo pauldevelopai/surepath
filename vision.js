@@ -118,9 +118,20 @@ async function getNicoPrompt(propertyContext, categoryFilter) {
     if (propertyContext.roof_material) ctx.push(`Known roof material: ${propertyContext.roof_material}`);
     if (propertyContext.building_age_risk) ctx.push(`Building age risk: asbestos=${propertyContext.building_age_risk.asbestos}, electrical=${propertyContext.building_age_risk.electrical}, plumbing=${propertyContext.building_age_risk.plumbing}`);
     if (propertyContext.water_quality_score) ctx.push(`Water quality: ${propertyContext.water_quality_score}/10`);
-    if (propertyContext.dolomite_risk) ctx.push(`Dolomite risk: ${propertyContext.dolomite_risk}`);
-    if (propertyContext.flood_zone) ctx.push(`Flood zone: ${propertyContext.flood_zone}`);
+    if (propertyContext.sewerage_quality_score) ctx.push(`Sewerage quality: ${propertyContext.sewerage_quality_score}/10`);
+    if (propertyContext.dolomite_risk) ctx.push(`Dolomite / sinkhole risk: ${propertyContext.dolomite_risk}`);
+    if (propertyContext.mining_subsidence_risk) ctx.push(`Mining subsidence risk: ${propertyContext.mining_subsidence_risk}`);
+    if (propertyContext.flood_zone) ctx.push(`Flood zone: ${propertyContext.flood_zone}${propertyContext.flood_zone_type ? ' (' + propertyContext.flood_zone_type + ')' : ''}`);
+    if (propertyContext.heritage_site) ctx.push(`Heritage area: Yes${propertyContext.heritage_grade ? ' (Grade ' + propertyContext.heritage_grade + ')' : ''} — renovations may need heritage approval`);
     if (propertyContext.municipal_value) ctx.push(`Municipal value: R${propertyContext.municipal_value}`);
+    if (propertyContext.asking_price) ctx.push(`Asking price: R${propertyContext.asking_price}`);
+    if (propertyContext.stand_size_sqm) ctx.push(`Stand: ${propertyContext.stand_size_sqm}m²`);
+    if (propertyContext.floor_area_sqm) ctx.push(`Floor area: ${propertyContext.floor_area_sqm}m²`);
+    if (propertyContext.bedrooms) ctx.push(`${propertyContext.bedrooms} bed, ${propertyContext.bathrooms || '?'} bath`);
+    if (propertyContext.zoning) ctx.push(`Zoning: ${propertyContext.zoning}`);
+    // Deeds context
+    if (propertyContext.registered_owner) ctx.push(`Owner: ${propertyContext.registered_owner}`);
+    if (propertyContext.title_deed_ref) ctx.push(`Title deed: ${propertyContext.title_deed_ref}`);
     if (ctx.length > 0) {
       prompt += `\n\nPROPERTY CONTEXT (use this to corroborate findings and set confidence tiers):\n${ctx.join('\n')}`;
     }
@@ -179,24 +190,51 @@ async function getNicoPrompt(propertyContext, categoryFilter) {
     } catch {}
 
     try {
-      // Area data from scrapers — climate, schools, crime
+      // Area data from ALL scrapers — pull everything we have for this suburb
       const { rows: areaData } = await pool.query(
         `SELECT risk_type, risk_level, risk_score, details FROM area_risk_data
-         WHERE suburb ILIKE $1 AND risk_type IN ('climate', 'school_proximity', 'crime_detailed', 'security_community', 'sold_prices')
-         LIMIT 5`,
-        [propertyContext.suburb]
+         WHERE (suburb ILIKE $1 OR suburb = 'ALL') AND (city ILIKE $2 OR $2 IS NULL)
+         ORDER BY risk_type`,
+        [propertyContext.suburb, propertyContext.city || null]
       );
       if (areaData.length > 0) {
         const areaCtx = areaData.map(a => {
           const d = typeof a.details === 'string' ? JSON.parse(a.details) : a.details;
-          if (a.risk_type === 'climate') return `Climate: ${d?.annual_rainfall_mm}mm/yr, ${d?.avg_humidity}% humidity, damp risk ${d?.damp_risk}, ${d?.climate_zone}`;
-          if (a.risk_type === 'crime_detailed') return `Crime: ${a.risk_level} (score ${a.risk_score}/10)`;
-          if (a.risk_type === 'security_community') return `Security: ${a.risk_level} coverage`;
-          if (a.risk_type === 'sold_prices') return `Recent sales: avg R${d?.avg_price?.toLocaleString()}, median R${d?.median_price?.toLocaleString()}`;
-          if (a.risk_type === 'school_proximity') return `Schools: score ${a.risk_score}/10, ${d?.within_1km || 0} within 1km`;
-          return `${a.risk_type}: ${a.risk_level}`;
+          if (a.risk_type === 'climate') return `Climate: ${d?.annual_rainfall_mm || '?'}mm/yr, ${d?.avg_humidity || '?'}% humidity, damp risk ${d?.damp_risk || '?'}, ${d?.climate_zone || '?'}${d?.frost_days_per_year ? ', ' + d.frost_days_per_year + ' frost days/yr' : ''}`;
+          if (a.risk_type === 'crime_detailed') return `Crime: ${a.risk_level || '?'} (score ${a.risk_score || '?'}/10)${d?.top_categories ? ' — top: ' + (Array.isArray(d.top_categories) ? d.top_categories.slice(0, 3).join(', ') : d.top_categories) : ''}`;
+          if (a.risk_type === 'security_community') return `Security: ${a.risk_level || '?'} coverage${d?.companies ? ', ' + d.companies + ' companies' : ''}${d?.cpf_activity ? ', CPF: ' + d.cpf_activity : ''}`;
+          if (a.risk_type === 'sold_prices') return `Recent sales: avg R${d?.avg_price?.toLocaleString() || '?'}, median R${d?.median_price?.toLocaleString() || '?'}${d?.total_sales ? ' (' + d.total_sales + ' sales)' : ''}${d?.avg_price_per_sqm ? ', R' + d.avg_price_per_sqm.toLocaleString() + '/m²' : ''}`;
+          if (a.risk_type === 'school_proximity') return `Schools: score ${a.risk_score || '?'}/10, ${d?.within_1km || 0} within 1km, ${d?.total_found || d?.schools?.length || 0} within 3km`;
+          if (a.risk_type === 'fibre_coverage') return `Fibre: ${a.risk_level || '?'} coverage${d?.providers ? ' (' + (Array.isArray(d.providers) ? d.providers.map(p => p.name || p.isp).join(', ') : d.providers) + ')' : ''}${d?.max_speed || d?.max_speed_mbps ? ', up to ' + (d.max_speed || d.max_speed_mbps) + 'Mbps' : ''}`;
+          if (a.risk_type === 'loadshedding') return `Load shedding: ${a.risk_level || '?'} impact${d?.group ? ', Group ' + d.group : ''}${d?.area ? ' (' + d.area + ')' : ''}`;
+          if (a.risk_type === 'social_concerns') return `Area sentiment: ${a.risk_level || '?'}${d?.concerns ? ' — concerns: ' + (Array.isArray(d.concerns) ? d.concerns.slice(0, 3).join(', ') : d.concerns) : ''}${d?.positives ? ' — positives: ' + (Array.isArray(d.positives) ? d.positives.slice(0, 3).join(', ') : d.positives) : ''}`;
+          if (a.risk_type === 'dolomite') return `Dolomite risk: ${a.risk_level || d?.risk_level || '?'} — sinkhole formation possible, check for wall cracks and uneven floors`;
+          if (a.risk_type === 'water_quality') return `Water quality: ${a.risk_score || '?'}/10${d?.blue_drop ? ' (Blue Drop: ' + d.blue_drop + ')' : ''}`;
+          if (a.risk_type === 'sewerage_quality') return `Sewerage quality: ${a.risk_score || '?'}/10${d?.green_drop ? ' (Green Drop: ' + d.green_drop + ')' : ''}`;
+          return `${a.risk_type}: ${a.risk_level || a.risk_score || '?'}`;
         }).join('\n');
-        prompt += `\n\nAREA INTELLIGENCE (${propertyContext.suburb}):\n${areaCtx}`;
+        prompt += `\n\nAREA INTELLIGENCE (${propertyContext.suburb}, ${propertyContext.city || ''}):\n${areaCtx}`;
+      }
+    } catch {}
+
+    // Holly evidence — what confidence tiers Nico achieves per defect category in this suburb
+    try {
+      const { rows: hollyPatterns } = await pool.query(
+        `SELECT he.category, he.confidence_tier, COUNT(*) AS c,
+                AVG(he.cost_min_zar) AS avg_cost_min, AVG(he.cost_max_zar) AS avg_cost_max
+         FROM holly_evidence he
+         JOIN properties p ON p.id = he.property_id
+         WHERE p.suburb ILIKE $1 AND he.confidence_tier IS NOT NULL
+         GROUP BY he.category, he.confidence_tier
+         HAVING COUNT(*) >= 2
+         ORDER BY c DESC LIMIT 15`,
+        [propertyContext.suburb]
+      );
+      if (hollyPatterns.length > 0) {
+        const patterns = hollyPatterns.map(p =>
+          `${p.category}: Tier ${p.confidence_tier} (${p.c}x)${p.avg_cost_min ? ` avg cost R${Math.round(p.avg_cost_min)}–R${Math.round(p.avg_cost_max)}` : ''}`
+        ).join(', ');
+        prompt += `\n\nYOUR TRACK RECORD IN ${propertyContext.suburb.toUpperCase()} (confidence tiers you've achieved here before — use this to calibrate):\n${patterns}`;
       }
     } catch {}
 

@@ -1116,6 +1116,117 @@ export default function PropertyDetailPage() {
           </section>
         )}
 
+        {/* ── SOLD PRICES ── */}
+        {data.area_risks?.some((r: A) => r.risk_type === "sold_prices") && (
+          <section className="bg-white border rounded-lg p-4">
+            <h2 className="font-bold text-sm mb-2">Recent Sold Prices — {p.suburb}</h2>
+            {data.area_risks.filter((r: A) => r.risk_type === "sold_prices").map((r: A, i: number) => {
+              const d = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
+              if (!d) return null;
+              return (
+                <div key={i}>
+                  <div className="flex gap-4 mb-2">
+                    {d.avg_price && <div className="bg-gray-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">{formatZAR(d.avg_price)}</div><div className="text-[9px] text-gray-500">Average Sale Price</div></div>}
+                    {d.median_price && <div className="bg-gray-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">{formatZAR(d.median_price)}</div><div className="text-[9px] text-gray-500">Median Sale Price</div></div>}
+                    {d.total_sales && <div className="bg-gray-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">{d.total_sales}</div><div className="text-[9px] text-gray-500">Sales Recorded</div></div>}
+                    {d.avg_price_per_sqm && <div className="bg-gray-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">{formatZAR(d.avg_price_per_sqm)}</div><div className="text-[9px] text-gray-500">Per m²</div></div>}
+                  </div>
+                  {p.asking_price && d.median_price && (
+                    <p className="text-xs text-gray-600">{
+                      p.asking_price > d.median_price * 1.15
+                        ? `Asking price is ${Math.round(((p.asking_price / d.median_price) - 1) * 100)}% above the suburb median — negotiate hard.`
+                        : p.asking_price < d.median_price * 0.9
+                        ? `Asking price is ${Math.round((1 - (p.asking_price / d.median_price)) * 100)}% below the suburb median — potential bargain or an issue to investigate.`
+                        : `Asking price is in line with the suburb median — fair market pricing.`
+                    }</p>
+                  )}
+                  {d.recent_sales && Array.isArray(d.recent_sales) && d.recent_sales.length > 0 && (
+                    <div className="mt-2">
+                      {d.recent_sales.slice(0, 5).map((s: A, si: number) => (
+                        <div key={si} className="flex justify-between text-xs border-b border-gray-100 py-1">
+                          <span className="truncate flex-1">{s.address || s.description || "Property"}</span>
+                          <span className="text-gray-500 shrink-0 ml-2">{s.bedrooms ? `${s.bedrooms}bed ` : ""}{s.size_sqm ? `${s.size_sqm}m² ` : ""}</span>
+                          <span className="font-medium shrink-0 ml-2">{s.price ? formatZAR(s.price) : "—"}</span>
+                          {s.sold_date && <span className="text-gray-400 shrink-0 ml-2">{formatDate(s.sold_date)}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </section>
+        )}
+
+        {/* ── LOAD SHEDDING ── */}
+        {data.area_risks?.some((r: A) => r.risk_type === "loadshedding") && (
+          <section className="bg-white border rounded-lg p-4">
+            <h2 className="font-bold text-sm mb-2">Load Shedding</h2>
+            {data.area_risks.filter((r: A) => r.risk_type === "loadshedding").map((r: A, i: number) => {
+              const d = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
+              if (!d) return null;
+              return (
+                <div key={i}>
+                  <div className="flex gap-4 mb-2">
+                    {d.group && <div className="bg-gray-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">Group {d.group}</div><div className="text-[9px] text-gray-500">Schedule Group</div></div>}
+                    {d.area && <div className="bg-gray-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold truncate">{d.area}</div><div className="text-[9px] text-gray-500">EskomSePush Area</div></div>}
+                    {r.risk_level && <div className={`rounded p-2 text-center flex-1 ${r.risk_level === "HIGH" || r.risk_level === "CRITICAL" ? "bg-red-50" : "bg-gray-50"}`}><div className="text-lg font-bold">{r.risk_level}</div><div className="text-[9px] text-gray-500">Impact Level</div></div>}
+                  </div>
+                  {d.schedule && Array.isArray(d.schedule) && d.schedule.length > 0 && (
+                    <div className="space-y-0.5">
+                      {d.schedule.slice(0, 4).map((slot: A, si: number) => (
+                        <div key={si} className="flex justify-between text-xs bg-gray-50 rounded px-2 py-1">
+                          <span>{slot.day || slot.date}</span>
+                          <span className="text-gray-500">{slot.start}–{slot.end}</span>
+                          <span className="font-medium">Stage {slot.stage}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-500 mt-2">Load shedding affects property value — buyers increasingly factor in solar-readiness and backup power availability.</p>
+                </div>
+              );
+            })}
+          </section>
+        )}
+
+        {/* ── FIBRE COVERAGE ── */}
+        {data.area_risks?.some((r: A) => r.risk_type === "fibre_coverage") && (
+          <section className="bg-white border rounded-lg p-4">
+            <h2 className="font-bold text-sm mb-2">Fibre Internet Coverage</h2>
+            {data.area_risks.filter((r: A) => r.risk_type === "fibre_coverage").map((r: A, i: number) => {
+              const d = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
+              if (!d) return null;
+              const providers = d.providers || d.isps || [];
+              return (
+                <div key={i}>
+                  <div className="flex gap-4 mb-2">
+                    <div className={`rounded p-2 text-center flex-1 ${r.risk_level === "HIGH" ? "bg-green-50" : r.risk_level === "MEDIUM" ? "bg-yellow-50" : "bg-gray-50"}`}>
+                      <div className="text-lg font-bold">{r.risk_level === "HIGH" ? "Excellent" : r.risk_level === "MEDIUM" ? "Available" : r.risk_level === "LOW" ? "Limited" : r.risk_level || "Unknown"}</div>
+                      <div className="text-[9px] text-gray-500">Coverage</div>
+                    </div>
+                    {providers.length > 0 && <div className="bg-gray-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">{providers.length}</div><div className="text-[9px] text-gray-500">Providers</div></div>}
+                    {(d.max_speed || d.max_speed_mbps) && <div className="bg-gray-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">{d.max_speed || d.max_speed_mbps}Mbps</div><div className="text-[9px] text-gray-500">Max Speed</div></div>}
+                  </div>
+                  {providers.length > 0 && (
+                    <div className="space-y-0.5">
+                      {providers.map((prov: A, pi: number) => (
+                        <div key={pi} className="flex justify-between text-xs bg-gray-50 rounded px-2 py-1">
+                          <span className="font-medium">{prov.name || prov.isp}</span>
+                          {prov.technology && <span className="text-gray-400">{prov.technology}</span>}
+                          {(prov.max_speed || prov.speed) && <span className="text-gray-500">{prov.max_speed || prov.speed}Mbps</span>}
+                          {prov.available !== undefined && <span className={prov.available ? "text-green-600" : "text-red-500"}>{prov.available ? "Available" : "Not available"}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-500 mt-2">Fibre availability significantly impacts property desirability, especially for remote workers. Properties with fibre sell for 3-5% more.</p>
+                </div>
+              );
+            })}
+          </section>
+        )}
+
         {/* ── MAINTENANCE COST & SERVICE PROVIDERS ── */}
         {(() => {
           // Calculate maintenance costs from vision findings
