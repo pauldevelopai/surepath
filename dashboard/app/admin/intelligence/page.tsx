@@ -90,6 +90,40 @@ export default function IntelligenceHubPage() {
     });
   }
 
+  async function handleUrlTest(url: string) {
+    setQRunning(true); setQResult(null);
+    try {
+      // Submit URL — server downloads the image
+      const submitResp = await fetch("/api/intelligence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run_comparison_url", image_url: url, rag_enabled: true }),
+      });
+      if (!submitResp.ok) { setQResult({ error: `Submit failed: ${submitResp.status}` }); setQRunning(false); return; }
+      const { job_id } = await submitResp.json();
+      if (!job_id) { setQResult({ error: "No job_id returned" }); setQRunning(false); return; }
+
+      // Poll for result
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+          const pollResp = await fetch("/api/intelligence", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "poll_comparison", job_id }),
+          });
+          const data = await pollResp.json();
+          if (data.status === "done") { setQResult(data); setQRunning(false); return; }
+          if (data.status === "error") { setQResult({ error: data.error }); setQRunning(false); return; }
+        } catch {}
+      }
+      setQResult({ error: "Timed out after 3 minutes" });
+    } catch (err) {
+      setQResult({ error: err instanceof Error ? err.message : "Unknown error" });
+    }
+    setQRunning(false);
+  }
+
   async function handlePhotoDrop(f: File) {
     setQRunning(true); setQResult(null);
     try {
@@ -323,15 +357,19 @@ export default function IntelligenceHubPage() {
       {/* ─── Test Nico ──────────────────────────────────────────────── */}
       <div className="bg-white border rounded-lg p-4 shadow-sm mb-6">
         <h2 className="font-bold text-sm mb-1">Test Nico</h2>
-        <p className="text-xs text-gray-400 mb-2">Drop a property photo. Left = Base Nico (no data). Right = Nico with everything in the Knowledge Base.</p>
+        <p className="text-xs text-gray-400 mb-2">Paste an image URL to compare Base Nico vs Nico + RAG. The server downloads the image — no upload needed.</p>
 
-        <div className={`border-2 border-dashed rounded p-6 text-center ${qRunning ? "bg-yellow-50 border-yellow-300" : "bg-gray-50 hover:bg-gray-100 border-gray-300"} cursor-pointer`}
-          onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add("border-blue-400", "bg-blue-50"); }}
-          onDragLeave={e => { e.currentTarget.classList.remove("border-blue-400", "bg-blue-50"); }}
-          onDrop={e => { e.preventDefault(); e.currentTarget.classList.remove("border-blue-400", "bg-blue-50"); const f = e.dataTransfer.files[0]; if (f?.type.startsWith("image/")) handlePhotoDrop(f); }}
-          onClick={() => { if (qRunning) return; const i = document.createElement("input"); i.type = "file"; i.accept = "image/*"; i.onchange = ev => { const f = (ev.target as HTMLInputElement).files?.[0]; if (f) handlePhotoDrop(f); }; i.click(); }}>
-          {qRunning ? <span className="text-sm text-yellow-700 font-medium">Analysing with both prompts...</span> : <span className="text-xs text-gray-500">Drop a property photo here or click to select</span>}
+        <div className="flex gap-2 mb-2">
+          <input type="text" placeholder="Paste image URL (e.g. https://images.prop24.com/...)" className="flex-1 border rounded px-3 py-2 text-sm"
+            onKeyDown={e => { if (e.key === "Enter") { const url = (e.target as HTMLInputElement).value.trim(); if (url && !qRunning) handleUrlTest(url); } }}
+            id="test-nico-url" disabled={qRunning} />
+          <button onClick={() => { const el = document.getElementById("test-nico-url") as HTMLInputElement; if (el?.value.trim() && !qRunning) handleUrlTest(el.value.trim()); }}
+            disabled={qRunning} className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">
+            {qRunning ? "Analysing..." : "Test"}
+          </button>
         </div>
+
+        {qRunning && <div className="bg-yellow-50 border border-yellow-200 rounded p-3 text-sm text-yellow-700 text-center">Running Nico without RAG vs Nico with RAG — takes about 60 seconds...</div>}
 
         {qResult && (
           <div className="mt-3">

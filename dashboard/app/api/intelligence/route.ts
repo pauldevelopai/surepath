@@ -1040,6 +1040,103 @@ export const POST = withAuth(async (req: NextRequest) => {
     return NextResponse.json({ status: "done", ...result });
   }
 
+  // ─── Run comparison from a URL (server downloads the image) ─────────
+  if (action === "run_comparison_url") {
+    const { image_url, property_id, rag_enabled = true } = body;
+    if (!image_url) return NextResponse.json({ error: "image_url required" }, { status: 400 });
+
+    const jobId = `nico_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    testNicoJobs.set(jobId, { status: "running", startedAt: new Date() });
+
+    (async () => { try {
+      // Download image server-side — no browser upload needed
+      const visionPath = path.resolve(process.cwd(), "..", "vision.js");
+      const vision = await import(/* webpackIgnore: true */ visionPath);
+      const downloadImage = vision.downloadImage || vision.default?.downloadImage;
+      const detectMediaType = vision.detectMediaType || vision.default?.detectMediaType;
+      if (!downloadImage) throw new Error("downloadImage not available");
+
+      const buffer = await downloadImage(image_url);
+      if (!buffer || buffer.length === 0) throw new Error("Failed to download image — empty response");
+      if (buffer.length < 1000) throw new Error(`Downloaded file too small (${buffer.length} bytes) — may not be a valid image. Check the URL returns an actual image file.`);
+
+      // Validate it's actually an image (check magic bytes)
+      const isJpeg = buffer[0] === 0xFF && buffer[1] === 0xD8;
+      const isPng = buffer[0] === 0x89 && buffer[1] === 0x50;
+      const isGif = buffer[0] === 0x47 && buffer[1] === 0x49;
+      const isWebp = buffer[0] === 0x52 && buffer[1] === 0x49;
+      if (!isJpeg && !isPng && !isGif && !isWebp) {
+        const preview = buffer.toString("utf8", 0, 100);
+        throw new Error(`URL did not return an image (got ${buffer.length} bytes starting with: "${preview.substring(0, 50)}..."). Make sure the URL points directly to a .jpg/.png image file.`);
+      }
+
+      const mediaType = isJpeg ? "image/jpeg" : isPng ? "image/png" : isGif ? "image/gif" : "image/webp";
+      const image_base64 = buffer.toString("base64");
+
+      // Run the same comparison as run_comparison
+      const nicoBasePrompt = await _readNicoBasePrompt();
+      let ragPrompt = nicoBasePrompt;
+      let ragContext: Record<string, unknown> = {};
+      const kbNames: string[] = [];
+      let kbCount = 0;
+
+      if (rag_enabled) {
+        try {
+          const getNicoPrompt = vision.getNicoPrompt || vision.default?.getNicoPrompt;
+          if (getNicoPrompt) {
+            let propertyContext: Record<string, unknown> | null = null;
+            if (property_id) {
+              const props = await query("SELECT * FROM properties WHERE id = $1", [property_id]);
+              if (props[0]) {
+                const p = props[0] as Record<string, unknown>;
+                propertyContext = { construction_era: p.construction_era, suburb: p.suburb, city: p.city, roof_material: p.roof_material, asking_price: p.asking_price, bedrooms: p.bedrooms, bathrooms: p.bathrooms };
+              }
+            }
+            ragPrompt = await getNicoPrompt(propertyContext);
+            ragContext = propertyContext || {};
+          }
+        } catch (err) { console.error("getNicoPrompt failed:", err); }
+        try { const kbRows = await query("SELECT name FROM rag_knowledge_entries WHERE status = 'active'"); kbCount = kbRows.length; for (const r of kbRows) kbNames.push((r as Record<string, unknown>).name as string); } catch {}
+      }
+
+      const imageContent = { type: "image" as const, source: { type: "base64" as const, media_type: (mediaType || "image/jpeg") as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: image_base64 } };
+      const Anthropic = (await import("@anthropic-ai/sdk")).default;
+      const claude = new Anthropic();
+
+      const [withoutRag, withRag] = await Promise.all([
+        claude.messages.create({ model: "claude-sonnet-4-6", max_tokens: 4096, system: nicoBasePrompt, messages: [{ role: "user", content: [imageContent, { type: "text", text: "Analyse this property photo." }] }] }),
+        claude.messages.create({ model: "claude-sonnet-4-6", max_tokens: 4096, system: ragPrompt, messages: [{ role: "user", content: [imageContent, { type: "text", text: "Analyse this property photo." }] }] }),
+      ]);
+
+      const responseWithout = withoutRag.content[0].type === "text" ? withoutRag.content[0].text : "";
+      const responseWith = withRag.content[0].type === "text" ? withRag.content[0].text : "";
+      const signals = _detectRagSignals(responseWithout, responseWith, kbNames);
+
+      let ragRetrieval: Record<string, unknown> | null = null;
+      try {
+        const logRows = await query(`SELECT id, query_text, chunks_returned, layers_hit, ROUND(avg_score::numeric, 4) AS avg_score, ROUND(top_score::numeric, 4) AS top_score, duration_ms, chunk_ids FROM rag_retrieval_log ORDER BY created_at DESC LIMIT 1`);
+        if (logRows.length > 0) {
+          const log = logRows[0] as Record<string, unknown>;
+          const chunkIds = (log.chunk_ids as number[]) || [];
+          let chunks: Record<string, unknown>[] = [];
+          if (chunkIds.length > 0) chunks = await query(`SELECT id, layer, metadata->>'name' AS name, LEFT(text, 150) AS text_preview, metadata->>'category' AS category, metadata->>'suburb' AS suburb FROM rag_chunks WHERE id = ANY($1)`, [chunkIds]);
+          ragRetrieval = { query_text: log.query_text, chunks_returned: log.chunks_returned, layers_hit: log.layers_hit, avg_score: log.avg_score, top_score: log.top_score, duration_ms: log.duration_ms, chunks };
+        }
+      } catch {}
+
+      testNicoJobs.set(jobId, { status: "done", startedAt: new Date(), result: {
+        ok: true, response_without_rag: responseWithout, response_with_rag: responseWith,
+        kb_entries_used: kbCount, rag_prompt_length: ragPrompt.length, baseline_prompt_length: nicoBasePrompt.length,
+        property_context: ragContext, signals, rag_retrieval: ragRetrieval, image_url,
+      }});
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      testNicoJobs.set(jobId, { status: "error", startedAt: new Date(), error: msg.substring(0, 300) });
+    }})();
+
+    return NextResponse.json({ ok: true, job_id: jobId, status: "running" });
+  }
+
   if (action === "run_comparison") {
     const { image_base64, image_media_type, rag_enabled = true, property_id } = body;
     if (!image_base64) return NextResponse.json({ error: "image_base64 required — upload a photo" }, { status: 400 });
