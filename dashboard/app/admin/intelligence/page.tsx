@@ -19,6 +19,8 @@ export default function IntelligenceHubPage() {
   const [expandedSource, setExpandedSource] = useState<string | null>(null);
   const [sourceDetail, setSourceDetail] = useState<A | null>(null);
   const [sourceLoading, setSourceLoading] = useState(false);
+  const [sourcePage, setSourcePage] = useState(1);
+  const [sourceSearch, setSourceSearch] = useState("");
   const [wrongIdx, setWrongIdx] = useState<number | null>(null);
   const [wrongReason, setWrongReason] = useState("");
 
@@ -34,15 +36,20 @@ export default function IntelligenceHubPage() {
   useEffect(() => { load("summary"); load("quality"); load("daily_check"); load("data_sources"); }, [load]);
 
   // Actions
-  async function toggleSourceDetail(type: string) {
-    if (expandedSource === type) { setExpandedSource(null); setSourceDetail(null); return; }
-    setExpandedSource(type); setSourceLoading(true); setSourceDetail(null);
+  async function loadSourceDetail(type: string, pg = 1, srch = "") {
+    setSourceLoading(true); setSourceDetail(null);
     try {
-      const d = await (await fetch(`/api/intelligence?section=data_detail&type=${type}`)).json();
+      const d = await (await fetch(`/api/intelligence?section=data_detail&type=${type}&page=${pg}&search=${encodeURIComponent(srch)}`)).json();
       setSourceDetail(d);
     } catch { setSourceDetail({ error: "Failed to load" }); }
     setSourceLoading(false);
   }
+  function toggleSourceDetail(type: string) {
+    if (expandedSource === type) { setExpandedSource(null); setSourceDetail(null); return; }
+    setExpandedSource(type); setSourcePage(1); setSourceSearch(""); loadSourceDetail(type, 1, "");
+  }
+  function goPage(pg: number) { if (!expandedSource) return; setSourcePage(pg); loadSourceDetail(expandedSource, pg, sourceSearch); }
+  function doSearch(srch: string) { if (!expandedSource) return; setSourceSearch(srch); setSourcePage(1); loadSourceDetail(expandedSource, 1, srch); }
 
   function handlePhotoDrop(f: File) {
     const r = new FileReader();
@@ -88,9 +95,12 @@ export default function IntelligenceHubPage() {
           {/* Expanded data detail panel */}
           {expandedSource && (
             <div className="mt-3 border rounded-lg overflow-hidden">
-              <div className="flex justify-between items-center bg-gray-50 px-3 py-2 border-b">
-                <span className="text-xs font-bold">{dataSources.find((ds: A) => ds.type === expandedSource)?.name} — {dataSources.find((ds: A) => ds.type === expandedSource)?.detail}</span>
-                <button onClick={() => { setExpandedSource(null); setSourceDetail(null); }} className="text-[10px] text-gray-400 hover:text-gray-600">Close</button>
+              <div className="flex justify-between items-center bg-gray-50 px-3 py-2 border-b gap-2">
+                <span className="text-xs font-bold shrink-0">{dataSources.find((ds: A) => ds.type === expandedSource)?.name}</span>
+                <input type="text" placeholder="Search..." value={sourceSearch} onChange={e => doSearch(e.target.value)}
+                  className="border rounded px-2 py-0.5 text-[10px] flex-1 max-w-xs" />
+                <span className="text-[9px] text-gray-400 shrink-0">{sourceDetail?.total?.toLocaleString() || "?"} records</span>
+                <button onClick={() => { setExpandedSource(null); setSourceDetail(null); }} className="text-[10px] text-gray-400 hover:text-gray-600 shrink-0">Close</button>
               </div>
               {sourceLoading ? (
                 <div className="p-4 text-center text-xs text-gray-400">Loading...</div>
@@ -128,7 +138,17 @@ export default function IntelligenceHubPage() {
               })() : (
                 <div className="p-4 text-center text-xs text-gray-400">No records found</div>
               )}
-              {sourceDetail && sourceDetail.total > 0 && <div className="px-3 py-1 text-[9px] text-gray-400 border-t bg-gray-50">Showing {sourceDetail.rows?.length} of {sourceDetail.total} records</div>}
+              {sourceDetail && sourceDetail.total > 0 && (
+                <div className="flex items-center justify-between px-3 py-1.5 border-t bg-gray-50">
+                  <span className="text-[9px] text-gray-400">Page {sourceDetail.page} of {sourceDetail.totalPages} ({sourceDetail.total?.toLocaleString()} records)</span>
+                  <div className="flex gap-1">
+                    <button onClick={() => goPage(1)} disabled={sourceDetail.page <= 1} className="px-2 py-0.5 text-[9px] rounded bg-gray-200 disabled:opacity-30 hover:bg-gray-300">First</button>
+                    <button onClick={() => goPage(sourceDetail.page - 1)} disabled={sourceDetail.page <= 1} className="px-2 py-0.5 text-[9px] rounded bg-gray-200 disabled:opacity-30 hover:bg-gray-300">Prev</button>
+                    <button onClick={() => goPage(sourceDetail.page + 1)} disabled={sourceDetail.page >= sourceDetail.totalPages} className="px-2 py-0.5 text-[9px] rounded bg-gray-200 disabled:opacity-30 hover:bg-gray-300">Next</button>
+                    <button onClick={() => goPage(sourceDetail.totalPages)} disabled={sourceDetail.page >= sourceDetail.totalPages} className="px-2 py-0.5 text-[9px] rounded bg-gray-200 disabled:opacity-30 hover:bg-gray-300">Last</button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

@@ -613,105 +613,201 @@ export const GET = withAuth(async (req: NextRequest) => {
   // ─── Data Detail: show actual records for a data source type ────────
   if (section === "data_detail") {
     const type = req.nextUrl.searchParams.get("type");
+    const page = Math.max(1, parseInt(req.nextUrl.searchParams.get("page") || "1"));
+    const search = req.nextUrl.searchParams.get("search") || "";
+    const perPage = 50;
+    const offset = (page - 1) * perPage;
     if (!type) return NextResponse.json({ error: "type required" }, { status: 400 });
 
     let rows: Record<string, unknown>[] = [];
     let columns: string[] = [];
+    let totalCount = 0;
+
+    // Search filter for text columns — builds a WHERE clause
+    const searchWhere = (cols: string[], paramStart = 1) => {
+      if (!search) return { clause: "", params: [] };
+      const conditions = cols.map((c, i) => `${c}::text ILIKE $${paramStart + i}`);
+      return { clause: `AND (${conditions.join(" OR ")})`, params: cols.map(() => `%${search}%`) };
+    };
+
+    // Helper: paginated query with total count
+    async function paged(selectSql: string, countSql: string, searchCols: string[], extraParams: unknown[] = []) {
+      const s = searchWhere(searchCols, extraParams.length + 1);
+      const countResult = await query(`${countSql} ${s.clause}`, [...extraParams, ...s.params]).catch(() => [{ c: 0 }]);
+      totalCount = Number(countResult[0]?.c || countResult[0]?.count || 0);
+      rows = await query(`${selectSql} ${s.clause} ORDER BY 1 DESC LIMIT ${perPage} OFFSET ${offset}`, [...extraParams, ...s.params]);
+      return rows;
+    }
 
     try {
       switch (type) {
         case "properties":
-          rows = await query("SELECT id, address_raw, suburb, city, province, property_type, bedrooms, bathrooms, asking_price, construction_era, created_at FROM properties ORDER BY created_at DESC LIMIT 100");
           columns = ["id", "address_raw", "suburb", "city", "property_type", "bedrooms", "asking_price", "construction_era"];
+          await paged(
+            "SELECT id, address_raw, suburb, city, province, property_type, bedrooms, bathrooms, asking_price, construction_era FROM properties WHERE true",
+            "SELECT COUNT(*) AS c FROM properties WHERE true",
+            ["address_raw", "suburb", "city"]
+          );
           break;
         case "listings":
-          rows = await query("SELECT id, address_raw, suburb, city, substring(description, 1, 120) AS description FROM properties WHERE description IS NOT NULL ORDER BY created_at DESC LIMIT 100");
           columns = ["id", "address_raw", "suburb", "description"];
+          await paged(
+            "SELECT id, address_raw, suburb, city, substring(description, 1, 120) AS description FROM properties WHERE description IS NOT NULL",
+            "SELECT COUNT(*) AS c FROM properties WHERE description IS NOT NULL",
+            ["address_raw", "suburb", "description"]
+          );
           break;
         case "prices":
-          rows = await query("SELECT id, address_raw, suburb, city, asking_price, levies, rates_and_taxes FROM properties WHERE asking_price IS NOT NULL ORDER BY asking_price DESC LIMIT 100");
           columns = ["id", "address_raw", "suburb", "asking_price", "levies", "rates_and_taxes"];
+          await paged(
+            "SELECT id, address_raw, suburb, city, asking_price, levies, rates_and_taxes FROM properties WHERE asking_price IS NOT NULL",
+            "SELECT COUNT(*) AS c FROM properties WHERE asking_price IS NOT NULL",
+            ["address_raw", "suburb", "city"]
+          );
           break;
         case "geocoded":
-          rows = await query("SELECT id, address_raw, suburb, city, lat, lng FROM properties WHERE lat IS NOT NULL ORDER BY created_at DESC LIMIT 100");
           columns = ["id", "address_raw", "suburb", "lat", "lng"];
+          await paged(
+            "SELECT id, address_raw, suburb, city, lat, lng FROM properties WHERE lat IS NOT NULL",
+            "SELECT COUNT(*) AS c FROM properties WHERE lat IS NOT NULL",
+            ["address_raw", "suburb"]
+          );
           break;
         case "photos":
-          rows = await query("SELECT pi.id, pi.property_id, pi.image_type, pi.image_url, p.address_raw, p.suburb FROM property_images pi JOIN properties p ON p.id = pi.property_id ORDER BY pi.id DESC LIMIT 50");
           columns = ["id", "property_id", "image_type", "address_raw", "suburb"];
+          await paged(
+            "SELECT pi.id, pi.property_id, pi.image_type, pi.image_url, p.address_raw, p.suburb FROM property_images pi JOIN properties p ON p.id = pi.property_id WHERE true",
+            "SELECT COUNT(*) AS c FROM property_images WHERE true",
+            ["p.address_raw", "p.suburb", "pi.image_type"]
+          );
           break;
         case "photos_analysed":
-          rows = await query("SELECT pi.id, pi.property_id, pi.image_type, pi.vision_analysis->>'photo_type' AS photo_type, jsonb_array_length(CASE WHEN jsonb_typeof(pi.vision_analysis->'findings') = 'array' THEN pi.vision_analysis->'findings' ELSE '[]'::jsonb END) AS findings_count, p.address_raw, p.suburb FROM property_images pi JOIN properties p ON p.id = pi.property_id WHERE pi.vision_analysis IS NOT NULL ORDER BY pi.analysed_at DESC LIMIT 50");
           columns = ["id", "property_id", "photo_type", "findings_count", "address_raw", "suburb"];
+          await paged(
+            "SELECT pi.id, pi.property_id, pi.image_type, pi.vision_analysis->>'photo_type' AS photo_type, jsonb_array_length(CASE WHEN jsonb_typeof(pi.vision_analysis->'findings') = 'array' THEN pi.vision_analysis->'findings' ELSE '[]'::jsonb END) AS findings_count, p.address_raw, p.suburb FROM property_images pi JOIN properties p ON p.id = pi.property_id WHERE pi.vision_analysis IS NOT NULL",
+            "SELECT COUNT(*) AS c FROM property_images WHERE vision_analysis IS NOT NULL",
+            ["p.address_raw", "p.suburb"]
+          );
           break;
         case "evidence":
-          rows = await query("SELECT he.id, he.category, he.severity, he.confidence_tier, he.what_i_see, he.what_it_means, he.cost_min_zar, he.cost_max_zar, p.address_raw, p.suburb FROM holly_evidence he JOIN properties p ON p.id = he.property_id ORDER BY he.id DESC LIMIT 50").catch(() => []);
           columns = ["id", "category", "severity", "confidence_tier", "what_i_see", "address_raw"];
+          await paged(
+            "SELECT he.id, he.category, he.severity, he.confidence_tier, he.what_i_see, he.what_it_means, he.cost_min_zar, he.cost_max_zar, p.address_raw, p.suburb FROM holly_evidence he JOIN properties p ON p.id = he.property_id WHERE true",
+            "SELECT COUNT(*) AS c FROM holly_evidence WHERE true",
+            ["he.category", "p.address_raw"]
+          );
           break;
         case "reports":
-          rows = await query("SELECT pr.id, pr.property_id, pr.decision, pr.decision_reasoning, pr.asking_price, pr.avm_low, pr.avm_high, pr.status, pr.created_at, p.address_raw, p.suburb FROM property_reports pr JOIN properties p ON p.id = pr.property_id WHERE pr.status = 'complete' ORDER BY pr.created_at DESC LIMIT 50");
           columns = ["id", "property_id", "decision", "decision_reasoning", "asking_price", "address_raw", "suburb"];
+          await paged(
+            "SELECT pr.id, pr.property_id, pr.decision, pr.decision_reasoning, pr.asking_price, pr.avm_low, pr.avm_high, pr.status, pr.created_at, p.address_raw, p.suburb FROM property_reports pr JOIN properties p ON p.id = pr.property_id WHERE true",
+            "SELECT COUNT(*) AS c FROM property_reports WHERE true",
+            ["p.address_raw", "p.suburb", "pr.decision"]
+          );
           break;
         case "kb":
-          rows = await query("SELECT id, name, category, severity, cost_min_zar, cost_max_zar, description, visual_indicators, sa_context, status FROM rag_knowledge_entries ORDER BY status DESC, severity DESC").catch(() => []);
           columns = ["id", "name", "category", "severity", "cost_min_zar", "cost_max_zar", "status"];
+          await paged(
+            "SELECT id, name, category, severity, cost_min_zar, cost_max_zar, description, visual_indicators, sa_context, status FROM rag_knowledge_entries WHERE true",
+            "SELECT COUNT(*) AS c FROM rag_knowledge_entries WHERE true",
+            ["name", "category", "sa_context"]
+          );
           break;
         case "deeds":
-          rows = await query("SELECT dd.id, dd.property_id, dd.registered_owner, dd.title_deed_ref, dd.municipal_value, dd.source, dd.fetched_at, p.address_raw, p.suburb FROM deeds_data dd JOIN properties p ON p.id = dd.property_id ORDER BY dd.fetched_at DESC LIMIT 50");
           columns = ["id", "registered_owner", "title_deed_ref", "municipal_value", "address_raw", "source"];
+          await paged(
+            "SELECT dd.id, dd.property_id, dd.registered_owner, dd.title_deed_ref, dd.municipal_value, dd.source, dd.fetched_at, p.address_raw, p.suburb FROM deeds_data dd JOIN properties p ON p.id = dd.property_id WHERE true",
+            "SELECT COUNT(*) AS c FROM deeds_data WHERE true",
+            ["dd.registered_owner", "p.address_raw"]
+          );
           break;
         case "construction_era":
-          rows = await query("SELECT id, address_raw, suburb, city, construction_era FROM properties WHERE construction_era IS NOT NULL ORDER BY construction_era, suburb LIMIT 100");
           columns = ["id", "address_raw", "suburb", "construction_era"];
+          await paged(
+            "SELECT id, address_raw, suburb, city, construction_era FROM properties WHERE construction_era IS NOT NULL",
+            "SELECT COUNT(*) AS c FROM properties WHERE construction_era IS NOT NULL",
+            ["address_raw", "suburb", "construction_era"]
+          );
           break;
         case "roof_material":
-          rows = await query("SELECT id, address_raw, suburb, roof_material FROM properties WHERE roof_material IS NOT NULL ORDER BY roof_material, suburb LIMIT 100");
           columns = ["id", "address_raw", "suburb", "roof_material"];
+          await paged(
+            "SELECT id, address_raw, suburb, roof_material FROM properties WHERE roof_material IS NOT NULL",
+            "SELECT COUNT(*) AS c FROM properties WHERE roof_material IS NOT NULL",
+            ["address_raw", "suburb", "roof_material"]
+          );
           break;
         case "crime_incidents":
-          rows = await query("SELECT suburb, city, incident_type, COUNT(*) AS count FROM crime_incidents GROUP BY suburb, city, incident_type ORDER BY count DESC LIMIT 100");
           columns = ["suburb", "city", "incident_type", "count"];
+          { const s = searchWhere(["suburb", "city", "incident_type"]);
+            totalCount = Number((await query(`SELECT COUNT(DISTINCT (suburb || incident_type)) AS c FROM crime_incidents WHERE true ${s.clause}`, s.params))[0]?.c || 0);
+            rows = await query(`SELECT suburb, city, incident_type, COUNT(*) AS count FROM crime_incidents WHERE true ${s.clause} GROUP BY suburb, city, incident_type ORDER BY count DESC LIMIT ${perPage} OFFSET ${offset}`, s.params);
+          }
           break;
         case "crime_scores":
-          rows = await query("SELECT id, address_raw, suburb, city, suburb_crime_score FROM properties WHERE suburb_crime_score IS NOT NULL ORDER BY suburb_crime_score DESC LIMIT 100");
           columns = ["id", "address_raw", "suburb", "suburb_crime_score"];
+          await paged(
+            "SELECT id, address_raw, suburb, city, suburb_crime_score FROM properties WHERE suburb_crime_score IS NOT NULL",
+            "SELECT COUNT(*) AS c FROM properties WHERE suburb_crime_score IS NOT NULL",
+            ["address_raw", "suburb"]
+          );
           break;
         case "security_companies":
-          rows = await query("SELECT id, name, phone, website, google_rating, google_review_count, province, armed_response FROM security_companies ORDER BY google_rating DESC NULLS LAST LIMIT 50").catch(() => []);
           columns = ["id", "name", "phone", "google_rating", "province", "armed_response"];
+          await paged(
+            "SELECT id, name, phone, website, google_rating, google_review_count, province, armed_response FROM security_companies WHERE true",
+            "SELECT COUNT(*) AS c FROM security_companies WHERE true",
+            ["name", "province"]
+          );
           break;
         case "saps":
-          rows = await query("SELECT saps_id, station_name, address, phone, email, province, cluster, lat, lng FROM saps_precincts ORDER BY station_name LIMIT 100").catch(() => []);
           columns = ["saps_id", "station_name", "address", "phone", "province"];
+          await paged(
+            "SELECT saps_id, station_name, address, phone, email, province, cluster, lat, lng FROM saps_precincts WHERE true",
+            "SELECT COUNT(*) AS c FROM saps_precincts WHERE true",
+            ["station_name", "address", "province"]
+          );
           break;
         case "solar":
-          rows = await query("SELECT id, address_raw, suburb, city, solar_ghi_kwh_year, solar_pv_output_kwh_year FROM properties WHERE solar_ghi_kwh_year IS NOT NULL ORDER BY solar_ghi_kwh_year DESC LIMIT 100");
           columns = ["id", "address_raw", "suburb", "solar_ghi_kwh_year", "solar_pv_output_kwh_year"];
+          await paged(
+            "SELECT id, address_raw, suburb, city, solar_ghi_kwh_year, solar_pv_output_kwh_year FROM properties WHERE solar_ghi_kwh_year IS NOT NULL",
+            "SELECT COUNT(*) AS c FROM properties WHERE solar_ghi_kwh_year IS NOT NULL",
+            ["address_raw", "suburb"]
+          );
           break;
         case "feedback":
-          rows = await query("SELECT id, property_id, section, feedback, rating, status, created_at FROM data_feedback ORDER BY created_at DESC LIMIT 100").catch(() => []);
           columns = ["id", "section", "feedback", "rating", "status", "created_at"];
+          await paged(
+            "SELECT id, property_id, section, feedback, rating, status, created_at FROM data_feedback WHERE true",
+            "SELECT COUNT(*) AS c FROM data_feedback WHERE true",
+            ["section", "feedback"]
+          );
           break;
-        // Area risk data types — all follow the same pattern
         case "crime_detailed": case "security_community": case "water_quality": case "water_detailed":
         case "dolomite": case "social_concerns": case "school_proximity": case "climate":
         case "electricity": case "loadshedding": case "sold_prices": case "fibre_coverage": case "sewerage_quality": {
           const riskType = type === "water_detailed" ? "water_quality" : type;
-          rows = await query(
-            "SELECT suburb, city, risk_type, risk_level, risk_score, details, source_name, source_url, data_date FROM area_risk_data WHERE risk_type = $1 ORDER BY suburb, city LIMIT 100",
-            [riskType]
-          );
           columns = ["suburb", "city", "risk_level", "risk_score", "source_name", "data_date"];
-          // Flatten key details fields for display
+          const s = searchWhere(["suburb", "city", "source_name"], 2);
+          totalCount = Number((await query(`SELECT COUNT(*) AS c FROM area_risk_data WHERE risk_type = $1 ${s.clause}`, [riskType, ...s.params]))[0]?.c || 0);
+          rows = await query(
+            `SELECT suburb, city, risk_type, risk_level, risk_score, details, source_name, source_url, data_date FROM area_risk_data WHERE risk_type = $1 ${s.clause} ORDER BY suburb, city LIMIT ${perPage} OFFSET ${offset}`,
+            [riskType, ...s.params]
+          );
           rows = rows.map(r => {
             const d = typeof r.details === 'string' ? JSON.parse(r.details as string) : r.details as Record<string, unknown>;
-            return { ...r, details: undefined, ...(d && typeof d === 'object' ? Object.fromEntries(Object.entries(d).filter(([, v]) => typeof v !== 'object').slice(0, 5)) : {}) };
+            return { ...r, details: undefined, ...(d && typeof d === 'object' ? Object.fromEntries(Object.entries(d).filter(([, v]) => typeof v !== 'object').slice(0, 6)) : {}) };
           });
           break;
         }
         case "gvr":
-          rows = await query("SELECT id, address_raw, suburb, city, gvr_source, stand_size_sqm, zoning, municipal_value FROM properties WHERE gvr_source IS NOT NULL ORDER BY suburb LIMIT 100");
           columns = ["id", "address_raw", "suburb", "gvr_source", "stand_size_sqm", "zoning", "municipal_value"];
+          await paged(
+            "SELECT id, address_raw, suburb, city, gvr_source, stand_size_sqm, zoning, municipal_value FROM properties WHERE gvr_source IS NOT NULL",
+            "SELECT COUNT(*) AS c FROM properties WHERE gvr_source IS NOT NULL",
+            ["address_raw", "suburb"]
+          );
           break;
         default:
           return NextResponse.json({ error: "Unknown data type" }, { status: 400 });
@@ -720,7 +816,8 @@ export const GET = withAuth(async (req: NextRequest) => {
       return NextResponse.json({ error: String(e) }, { status: 500 });
     }
 
-    return NextResponse.json({ type, rows, columns, total: rows.length });
+    const totalPages = Math.ceil(totalCount / perPage);
+    return NextResponse.json({ type, rows, columns, total: totalCount, page, totalPages, perPage });
   }
 
   // ─── Prompts: show all the prompts Nico uses ───────────────────────
