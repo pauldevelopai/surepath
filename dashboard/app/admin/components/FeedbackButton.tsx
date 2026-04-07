@@ -62,13 +62,11 @@ export default function FeedbackButton() {
           value={section}
           onChange={e => setSection(e.target.value)}
         >
-          <option value="general">General</option>
-          <option value="bug">Bug</option>
+          <option value="bug">Bug Report</option>
           <option value="data_quality">Data Quality</option>
           <option value="feature_request">Feature Request</option>
-          <option value="rag_knowledge">RAG Knowledge Base</option>
-          <option value="vision">Vision Analysis</option>
           <option value="report">Report Quality</option>
+          <option value="general">General</option>
         </select>
         <textarea
           className="border rounded px-2 py-1 text-xs w-full mb-2"

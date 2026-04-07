@@ -1372,7 +1372,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
 
     const { rows: reportRows } = await pool.query(
       `INSERT INTO property_reports (property_id, asking_price, decision, decision_reasoning, status, buyer_risk_index)
-       VALUES ($1, $2, 'INSPECT_FIRST', 'Data-driven report — exported from property page', 'complete', $3)
+       VALUES ($1, $2, 'NEGOTIATE', 'Data-driven report — review findings and negotiate accordingly', 'complete', $3)
        RETURNING id`,
       [propertyId, askingPrice || 0, buyerRiskIndex]
     );
@@ -1401,8 +1401,8 @@ async function generateReport(input, askingPrice, phoneNumber) {
     return {
       report_id: reportId,
       property_id: propertyId,
-      decision: 'INSPECT_FIRST',
-      decision_reasoning: 'Data-driven report — review findings and make your own assessment',
+      decision: 'NEGOTIATE',
+      decision_reasoning: 'Data-driven report — review findings and negotiate accordingly',
       was_resale: false,
     };
 

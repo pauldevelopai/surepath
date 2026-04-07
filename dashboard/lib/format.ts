@@ -30,7 +30,6 @@ export const severityColor: Record<string, string> = {
 export const decisionColor: Record<string, string> = {
   BUY: "text-green-600",
   NEGOTIATE: "text-yellow-600",
-  INSPECT_FIRST: "text-orange-500",
   WALK_AWAY: "text-red-600",
 };
 
@@ -39,7 +38,7 @@ const CODE_MAP: Record<string, string> = {
   ACTIVE_LEAK: "active leak", MOLD_BLOOM: "mold growth", HISTORIC_STAIN: "old dry stain",
   WATER_STAIN: "water stain", ACTIVE_MOISTURE: "active moisture", EFFLORESCENCE: "efflorescence (salt deposits)",
   MOLD_GROWTH_RISK: "mold risk", SAG: "sagging", NOT_DETECTABLE: "not detectable",
-  CONFIRMED_VISIBLE: "confirmed visible", INSPECT_FIRST: "Inspect First",
+  CONFIRMED_VISIBLE: "confirmed visible",
   WALK_AWAY: "Walk Away", NEGOTIATE: "Negotiate", BUY: "Buy",
 };
 

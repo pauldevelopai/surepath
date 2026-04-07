@@ -102,7 +102,7 @@ async function testFullPipeline() {
   assert(result !== null, 'returns a result');
   assert(typeof result.report_id === 'number', `report_id: ${result.report_id}`);
   assert(typeof result.pdf_url === 'string', `pdf_url: ${result.pdf_url}`);
-  assert(['BUY', 'NEGOTIATE', 'INSPECT_FIRST', 'WALK_AWAY'].includes(result.decision), `decision: ${result.decision}`);
+  assert(['BUY', 'NEGOTIATE', 'WALK_AWAY'].includes(result.decision), `decision: ${result.decision}`);
   assert(typeof result.decision_reasoning === 'string', `reasoning: ${result.decision_reasoning}`);
   assert(result.was_resale === false, 'was_resale: false (fresh report)');
 

@@ -168,7 +168,7 @@ async function main() {
             agg.insurance_risk_score, JSON.stringify(agg.insurance_flags),
             agg.solar_suitability_score,
             JSON.stringify(agg.trades_flags), agg.maintenance_cost_estimate,
-            'INSPECT_FIRST', 'Vision-only analysis — full report requires asking price.',
+            'NEGOTIATE', 'Vision-only analysis — full report requires asking price.',
           ]
         );
       }

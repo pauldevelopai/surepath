@@ -13,11 +13,9 @@ const STATUS_STYLE: Record<string, string> = {
 
 const SECTION_LABEL: Record<string, string> = {
   general: "General",
-  bug: "Bug",
+  bug: "Bug Report",
   data_quality: "Data Quality",
   feature_request: "Feature Request",
-  rag_knowledge: "RAG Knowledge",
-  vision: "Vision Analysis",
   report: "Report Quality",
 };
 

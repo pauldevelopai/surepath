@@ -324,7 +324,7 @@ export const POST = withAuth(async (req: NextRequest, { params }: { params: Prom
           insurance_risk_score, insurance_flags, solar_suitability_score,
           trades_flags, maintenance_cost_estimate,
           decision, decision_reasoning, status)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'INSPECT_FIRST','Vision-only analysis','complete')`,
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'NEGOTIATE','Vision-only analysis','complete')`,
           [id, JSON.stringify(agg.vision_findings), agg.asbestos_risk,
            JSON.stringify(agg.structural_flags), JSON.stringify(agg.compliance_flags),
            JSON.stringify(agg.repair_estimates), agg.insurance_risk_score, JSON.stringify(agg.insurance_flags),
@@ -447,6 +447,69 @@ export const POST = withAuth(async (req: NextRequest, { params }: { params: Prom
         });
       } catch (e: unknown) {
         return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Security collection failed" });
+      }
+    }
+
+    // ── SCHOOLS ──
+    if (action === "schools") {
+      if (!prop.lat) return NextResponse.json({ ok: false, message: "Geocode first" });
+      try {
+        const mod = await loadModule("collect-schools");
+        const result = await mod.collectForProperty(parseInt(id));
+        if (!result) return NextResponse.json({ ok: false, message: "No data returned" });
+        return NextResponse.json({ ok: true, message: `Found ${result.total_found || '?'} schools within 3km. Score: ${result.score || '?'}/10.` });
+      } catch (e: unknown) {
+        return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Schools collection failed" });
+      }
+    }
+
+    // ── CLIMATE ──
+    if (action === "climate") {
+      if (!prop.lat) return NextResponse.json({ ok: false, message: "Geocode first" });
+      try {
+        const mod = await loadModule("collect-climate");
+        const result = await mod.collectForProperty(parseInt(id));
+        if (!result || result.error) return NextResponse.json({ ok: false, message: result?.error || "No climate data" });
+        return NextResponse.json({ ok: true, message: `Climate: ${result.annual_rainfall_mm}mm/yr, ${result.avg_humidity}% humidity, damp risk ${result.damp_risk}.` });
+      } catch (e: unknown) {
+        return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Climate collection failed" });
+      }
+    }
+
+    // ── SOLD PRICES ──
+    if (action === "soldprices") {
+      try {
+        const mod = await loadModule("collect-sold-prices");
+        const result = await mod.collectForProperty(parseInt(id));
+        if (!result || result.error) return NextResponse.json({ ok: false, message: result?.error || "No sold price data" });
+        return NextResponse.json({ ok: true, message: `Found ${result.total_sales || '?'} recent sales. Median: R${result.median_price?.toLocaleString() || '?'}.` });
+      } catch (e: unknown) {
+        return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Sold prices failed" });
+      }
+    }
+
+    // ── FIBRE ──
+    if (action === "fibre") {
+      if (!prop.lat) return NextResponse.json({ ok: false, message: "Geocode first" });
+      try {
+        const mod = await loadModule("collect-fibre");
+        const result = await mod.collectForProperty(parseInt(id));
+        if (!result || result.error) return NextResponse.json({ ok: false, message: result?.error || "No fibre data" });
+        return NextResponse.json({ ok: true, message: `Fibre: ${result.coverage || '?'} coverage. ${result.providers || 0} providers.` });
+      } catch (e: unknown) {
+        return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Fibre collection failed" });
+      }
+    }
+
+    // ── LOAD SHEDDING ──
+    if (action === "loadshedding") {
+      try {
+        const mod = await loadModule("collect-loadshedding");
+        const result = await mod.collectForProperty(parseInt(id));
+        if (!result || result.error) return NextResponse.json({ ok: false, message: result?.error || "No loadshedding data" });
+        return NextResponse.json({ ok: true, message: `Load shedding: Group ${result.group || '?'}. ${result.area || ''}` });
+      } catch (e: unknown) {
+        return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Loadshedding collection failed" });
       }
     }
 

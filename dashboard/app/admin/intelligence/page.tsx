@@ -159,11 +159,19 @@ export default function IntelligenceHubPage() {
         <div className="flex justify-between items-start mb-1">
           <div>
             <h2 className="font-bold text-sm">Test Nico</h2>
-            <p className="text-xs text-gray-400 mb-2">Same photo, same model (Sonnet): Nico without KB vs Nico with KB + feedback. Automated signal detection shows whether RAG actually contributes.</p>
+            <p className="text-xs text-gray-400 mb-2">Drop a property photo to see Nico analyse it. Select a property for full context. The left column shows Nico with no data, the right shows Nico with everything we know about this property and area.</p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button onClick={() => setRagEnabled(!ragEnabled)} className={`px-2 py-1 text-[9px] rounded font-bold border ${ragEnabled ? "bg-green-100 text-green-800 border-green-300" : "bg-gray-100 text-gray-500 border-gray-300"}`}>RAG {ragEnabled ? "ON" : "OFF"}</button>
-            <button onClick={runBenchmark} disabled={benchRunning} className="px-2 py-1 bg-[#E63946] text-white text-[9px] rounded font-bold disabled:opacity-50">{benchRunning ? "Running..." : "Benchmark 10"}</button>
+          <div className="flex flex-col items-end gap-1 shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="flex flex-col items-end">
+                <button onClick={() => setRagEnabled(!ragEnabled)} className={`px-2 py-1 text-[9px] rounded font-bold border ${ragEnabled ? "bg-green-100 text-green-800 border-green-300" : "bg-gray-200 text-gray-500 border-gray-300"}`}>{ragEnabled ? "Full Knowledge" : "Base Nico"}</button>
+                <span className="text-[7px] text-gray-400 mt-0.5 text-right max-w-[180px]">{ragEnabled ? "ON = KB entries + area data + suburb patterns + corrections" : "OFF = Nico's core prompt only, no injected data"}</span>
+              </div>
+              <div className="flex flex-col items-center">
+                <button onClick={runBenchmark} disabled={benchRunning} className="px-2 py-1 bg-[#E63946] text-white text-[9px] rounded font-bold disabled:opacity-50">{benchRunning ? "Running..." : "Benchmark 10"}</button>
+                <span className="text-[7px] text-gray-400 mt-0.5">Run on 10 random photos</span>
+              </div>
+            </div>
           </div>
         </div>
 

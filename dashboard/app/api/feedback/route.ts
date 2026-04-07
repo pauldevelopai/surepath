@@ -42,6 +42,7 @@ export const GET = withAuth(async (req: NextRequest) => {
       SELECT df.*, p.address_raw, p.suburb
       FROM data_feedback df
       LEFT JOIN properties p ON p.id = df.property_id
+      WHERE NOT (df.rating IN ('good', 'bad') AND df.finding_hash IS NOT NULL)
       ORDER BY df.created_at DESC
       LIMIT 200
     `);

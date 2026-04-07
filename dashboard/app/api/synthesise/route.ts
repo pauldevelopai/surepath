@@ -27,8 +27,8 @@ export const POST = withAuth(async (req: NextRequest) => {
     return NextResponse.json({
       ok: true,
       report_id: result.reportId,
-      decision: "INSPECT_FIRST",
-      decision_reasoning: "Data-driven report — review findings and make your own assessment",
+      decision: "NEGOTIATE",
+      decision_reasoning: "Data-driven report — review findings and negotiate accordingly",
       pdf_url: result.pdfUrl,
     });
   } catch (err: unknown) {

@@ -165,7 +165,7 @@ export default function PropertiesPage() {
   const gs = globalStats;
   const gsTotal = gs.total || totalRows;
 
-  const DECISION_COLORS: Record<string, string> = { BUY: "bg-green-500", NEGOTIATE: "bg-yellow-500", INSPECT_FIRST: "bg-orange-500", WALK_AWAY: "bg-red-500" };
+  const DECISION_COLORS: Record<string, string> = { BUY: "bg-green-500", NEGOTIATE: "bg-yellow-500", WALK_AWAY: "bg-red-500" };
 
   return (
     <div>

@@ -139,7 +139,7 @@ export default function PropertyDetailPage() {
 
   if (!data) return <p className="text-gray-500 p-6">Loading...</p>;
 
-  const { property: p, sources, unverified_fields: unverified, report: r, images, deeds: d, crime, pdf_exports: pdfExports } = data;
+  const { property: p, sources, unverified_fields: unverified, report: r, images, deeds: d, crime, pdf_exports: pdfExports, affordability: aff } = data;
 
   // Helpers
   const src = (field: string) => sources?.[field] || null;
@@ -1049,6 +1049,97 @@ export default function PropertyDetailPage() {
             )}
         </section>
 
+        {/* ── AFFORDABILITY & TRANSFER COSTS ── */}
+        <section className="bg-white border rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <h2 className="font-bold text-sm">What It Really Costs</h2>
+            <FeedbackBtn propertyId={p.id} section="affordability" />
+          </div>
+          {!p.asking_price ? (
+            <p className="text-sm text-gray-400">Asking price needed to calculate costs</p>
+          ) : !aff ? (
+            <p className="text-sm text-gray-400">Affordability data not available</p>
+          ) : (
+            <div className="space-y-4">
+              {/* Market Value Comparison */}
+              {aff.market_comparison?.comparisons?.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold text-gray-600 mb-2">Market Value Comparison</h3>
+                  <div className="space-y-2">
+                    {aff.market_comparison.comparisons.map((c: A, i: number) => {
+                      const color = c.verdict === 'fair' || c.verdict === 'below' ? 'bg-green-50 border-green-200 text-green-800'
+                        : c.verdict === 'above' ? 'bg-yellow-50 border-yellow-200 text-yellow-800'
+                        : 'bg-red-50 border-red-200 text-red-800';
+                      return (
+                        <div key={i} className={`rounded border p-2 ${color}`}>
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs font-medium">{c.benchmark}</span>
+                            <span className="text-xs font-bold">{formatZAR(c.value)}</span>
+                          </div>
+                          <div className="text-xs mt-1">
+                            <span className="font-semibold">{c.diff_pct > 0 ? '+' : ''}{c.diff_pct}%</span>
+                            {' '}<span className="opacity-80">{c.note}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {aff.market_comparison.overall_verdict && (
+                      <div className={`text-xs font-semibold px-2 py-1 rounded ${
+                        aff.market_comparison.overall_verdict === 'fair' ? 'bg-green-100 text-green-800'
+                        : aff.market_comparison.overall_verdict === 'potential_bargain' ? 'bg-green-100 text-green-800'
+                        : aff.market_comparison.overall_verdict === 'slightly_above' ? 'bg-yellow-100 text-yellow-800'
+                        : 'bg-red-100 text-red-800'
+                      }`}>
+                        Overall: {aff.market_comparison.overall_verdict.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Once-off Costs Table */}
+              <div>
+                <h3 className="text-xs font-semibold text-gray-600 mb-2">Once-off Purchase Costs</h3>
+                <div className="bg-gray-50 rounded p-3">
+                  <table className="w-full text-xs">
+                    <tbody>
+                      <tr className="border-b border-gray-200"><td className="py-1.5 text-gray-600">Transfer Duty</td><td className="py-1.5 text-right font-medium">{formatZAR(aff.transfer_duty)}</td></tr>
+                      <tr className="border-b border-gray-200"><td className="py-1.5 text-gray-600">Conveyancing Fees</td><td className="py-1.5 text-right font-medium">{formatZAR(aff.conveyancing_fees)}</td></tr>
+                      <tr className="border-b border-gray-200"><td className="py-1.5 text-gray-600">Bond Attorney Fees</td><td className="py-1.5 text-right font-medium">{formatZAR(aff.bond_attorney_fees)}</td></tr>
+                      <tr className="border-b border-gray-200"><td className="py-1.5 text-gray-600">Deeds Office</td><td className="py-1.5 text-right font-medium">{formatZAR(aff.deeds_office_fees)}</td></tr>
+                      <tr className="border-b border-gray-200"><td className="py-1.5 text-gray-600">Bank Initiation Fee</td><td className="py-1.5 text-right font-medium">{formatZAR(aff.bank_initiation_fee)}</td></tr>
+                      {aff.deposit > 0 && <tr className="border-b border-gray-200"><td className="py-1.5 text-gray-600">Deposit</td><td className="py-1.5 text-right font-medium">{formatZAR(aff.deposit)}</td></tr>}
+                      <tr className="font-bold border-t-2 border-gray-300"><td className="py-2">TOTAL Cash Needed Upfront</td><td className="py-2 text-right">{formatZAR(aff.total_once_off)}</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Monthly Costs */}
+              <div>
+                <h3 className="text-xs font-semibold text-gray-600 mb-2">Monthly Costs</h3>
+                <div className="bg-blue-50 rounded p-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-700">Bond Payment <span className="text-[10px] text-gray-400">(at {aff.interest_rate}% over {aff.term_years} years)</span></span>
+                    <span className="text-lg font-bold text-blue-800">{formatZAR(aff.monthly_bond_payment)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* True Cost */}
+              <div>
+                <h3 className="text-xs font-semibold text-gray-600 mb-2">True Cost Over {aff.term_years} Years</h3>
+                <div className="bg-orange-50 rounded p-3 space-y-1">
+                  <div className="flex justify-between text-xs"><span className="text-gray-600">Purchase Price</span><span className="font-medium">{formatZAR(aff.purchase_price)}</span></div>
+                  <div className="flex justify-between text-xs"><span className="text-gray-600">Total Interest Paid</span><span className="font-medium text-orange-700">{formatZAR(aff.total_interest_over_term)}</span></div>
+                  <div className="flex justify-between text-xs"><span className="text-gray-600">Once-off Costs</span><span className="font-medium">{formatZAR(aff.total_once_off)}</span></div>
+                  <div className="flex justify-between text-sm font-bold border-t border-orange-200 pt-2 mt-1"><span>True Cost</span><span className="text-orange-800">{formatZAR(aff.true_cost)}</span></div>
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
         {/* ── COMPLIANCE CERTIFICATES ── */}
         {p.electrical_coc_required != null && (
           <section className="bg-white border rounded-lg p-4">
@@ -1074,9 +1165,13 @@ export default function PropertyDetailPage() {
         )}
 
         {/* ── SCHOOLS & CLIMATE (from new scrapers) ── */}
-        {data.area_risks?.some((r: A) => r.risk_type === "school_proximity") && (
-          <section className="bg-white border rounded-lg p-4">
+        <section className="bg-white border rounded-lg p-4">
+          <div className="flex justify-between items-center mb-2">
             <h2 className="font-bold text-sm">Schools Nearby</h2>
+            <CollectBtn action="schools" label="Get Schools" ready={data.area_risks?.some((r: A) => r.risk_type === "school_proximity")} />
+          </div>
+        {data.area_risks?.some((r: A) => r.risk_type === "school_proximity") ? (
+          <div>
             {data.area_risks.filter((r: A) => r.risk_type === "school_proximity").map((r: A, i: number) => {
               const d = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
               return (
@@ -1095,12 +1190,17 @@ export default function PropertyDetailPage() {
                 </div>
               );
             })}
-          </section>
-        )}
+          </div>
+        ) : <p className="text-xs text-gray-400">No school data yet. Click Get Schools to find schools within 3km.</p>}
+        </section>
 
-        {data.area_risks?.some((r: A) => r.risk_type === "climate") && (
-          <section className="bg-white border rounded-lg p-4">
+        <section className="bg-white border rounded-lg p-4">
+          <div className="flex justify-between items-center mb-2">
             <h2 className="font-bold text-sm">Climate Profile</h2>
+            <CollectBtn action="climate" label="Get Climate" ready={data.area_risks?.some((r: A) => r.risk_type === "climate")} />
+          </div>
+        {data.area_risks?.some((r: A) => r.risk_type === "climate") ? (
+          <div>
             {data.area_risks.filter((r: A) => r.risk_type === "climate").map((r: A, i: number) => {
               const d = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
               if (!d) return null;
@@ -1113,13 +1213,18 @@ export default function PropertyDetailPage() {
                 </div>
               );
             })}
-          </section>
-        )}
+          </div>
+        ) : <p className="text-xs text-gray-400">No climate data yet. Click Get Climate to pull 5-year weather history.</p>}
+        </section>
 
         {/* ── SOLD PRICES ── */}
-        {data.area_risks?.some((r: A) => r.risk_type === "sold_prices") && (
-          <section className="bg-white border rounded-lg p-4">
-            <h2 className="font-bold text-sm mb-2">Recent Sold Prices — {p.suburb}</h2>
+        <section className="bg-white border rounded-lg p-4">
+          <div className="flex justify-between items-center mb-2">
+            <h2 className="font-bold text-sm">Recent Sold Prices — {p.suburb}</h2>
+            <CollectBtn action="soldprices" label="Get Sold Prices" ready={data.area_risks?.some((r: A) => r.risk_type === "sold_prices")} />
+          </div>
+        {data.area_risks?.some((r: A) => r.risk_type === "sold_prices") ? (
+          <div>
             {data.area_risks.filter((r: A) => r.risk_type === "sold_prices").map((r: A, i: number) => {
               const d = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
               if (!d) return null;
@@ -1155,13 +1260,18 @@ export default function PropertyDetailPage() {
                 </div>
               );
             })}
-          </section>
-        )}
+          </div>
+        ) : <p className="text-xs text-gray-400">No sold price data yet. Click Get Sold Prices to find recent sales in this suburb.</p>}
+        </section>
 
         {/* ── LOAD SHEDDING ── */}
-        {data.area_risks?.some((r: A) => r.risk_type === "loadshedding") && (
-          <section className="bg-white border rounded-lg p-4">
-            <h2 className="font-bold text-sm mb-2">Load Shedding</h2>
+        <section className="bg-white border rounded-lg p-4">
+          <div className="flex justify-between items-center mb-2">
+            <h2 className="font-bold text-sm">Load Shedding</h2>
+            <CollectBtn action="loadshedding" label="Get Load Shedding" ready={data.area_risks?.some((r: A) => r.risk_type === "loadshedding")} />
+          </div>
+        {data.area_risks?.some((r: A) => r.risk_type === "loadshedding") ? (
+          <div>
             {data.area_risks.filter((r: A) => r.risk_type === "loadshedding").map((r: A, i: number) => {
               const d = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
               if (!d) return null;
@@ -1187,13 +1297,18 @@ export default function PropertyDetailPage() {
                 </div>
               );
             })}
-          </section>
-        )}
+          </div>
+        ) : <p className="text-xs text-gray-400">No load shedding data yet. Click Get Load Shedding to check schedules for this area.</p>}
+        </section>
 
         {/* ── FIBRE COVERAGE ── */}
-        {data.area_risks?.some((r: A) => r.risk_type === "fibre_coverage") && (
-          <section className="bg-white border rounded-lg p-4">
-            <h2 className="font-bold text-sm mb-2">Fibre Internet Coverage</h2>
+        <section className="bg-white border rounded-lg p-4">
+          <div className="flex justify-between items-center mb-2">
+            <h2 className="font-bold text-sm">Fibre Internet Coverage</h2>
+            <CollectBtn action="fibre" label="Get Fibre Data" ready={data.area_risks?.some((r: A) => r.risk_type === "fibre_coverage")} />
+          </div>
+        {data.area_risks?.some((r: A) => r.risk_type === "fibre_coverage") ? (
+          <div>
             {data.area_risks.filter((r: A) => r.risk_type === "fibre_coverage").map((r: A, i: number) => {
               const d = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
               if (!d) return null;
@@ -1224,8 +1339,9 @@ export default function PropertyDetailPage() {
                 </div>
               );
             })}
-          </section>
-        )}
+          </div>
+        ) : <p className="text-xs text-gray-400">No fibre data yet. Click Get Fibre Data to check ISP coverage.</p>}
+        </section>
 
         {/* ── MAINTENANCE COST & SERVICE PROVIDERS ── */}
         {(() => {

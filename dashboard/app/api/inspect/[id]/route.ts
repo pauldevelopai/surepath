@@ -192,6 +192,38 @@ export const GET = withAuth(async (_req: NextRequest, { params }: { params: Prom
     [id]
   );
 
+  // Affordability & Transfer Costs
+  let affordability = null;
+  try {
+    const affPath = path.resolve(process.cwd(), "..", "affordability.js");
+    const aff = await import(/* webpackIgnore: true */ affPath);
+    const calcFull = aff.calculateFullCosts || aff.default?.calculateFullCosts;
+    const compareVal = aff.compareMarketValue || aff.default?.compareMarketValue;
+
+    if (calcFull && prop.asking_price) {
+      const costs = calcFull(prop.asking_price);
+
+      let marketComparison = null;
+      if (compareVal) {
+        const municipalValue = deeds[0]?.municipal_value || null;
+
+        // Get sold prices median from area_risk_data
+        let soldPricesMedian = null;
+        const soldPricesRisk = areaRisks.find((r: { risk_type: string; details: any }) => r.risk_type === 'sold_prices');
+        if (soldPricesRisk?.details?.median_price) {
+          soldPricesMedian = soldPricesRisk.details.median_price;
+        }
+
+        // Get AVM from latest property report
+        const avmEstimate = reports[0]?.avm_estimate || reports[0]?.estimated_value || null;
+
+        marketComparison = compareVal(prop.asking_price, municipalValue, soldPricesMedian, avmEstimate);
+      }
+
+      affordability = { ...costs, market_comparison: marketComparison };
+    }
+  } catch {}
+
   // Nico tease from WhatsApp conversation
   let nicoTease = null;
   try {
@@ -217,5 +249,6 @@ export const GET = withAuth(async (_req: NextRequest, { params }: { params: Prom
     service_providers: serviceProviders,
     pdf_exports: pdfExports,
     nico_tease: nicoTease,
+    affordability,
   });
 });

@@ -8,7 +8,7 @@ const SYNTHESIS_SYSTEM_PROMPT = `You are Surepath's property intelligence engine
 Rules:
 - No vague language. No 'it depends'. Make a call.
 - All findings framed as RISK INDICATORS, not confirmed defects
-- Decision must be one of: BUY | NEGOTIATE | INSPECT_FIRST | WALK_AWAY
+- Decision must be one of: BUY | NEGOTIATE | WALK_AWAY
 - Decision reasoning: 3 sentences max. Plain language. No jargon.
 - NEVER fabricate data. Do NOT invent comparable sales, addresses, prices, or scores.
 - Do NOT generate insurance_risk_score, solar_suitability_score, or crime_risk_score — these come from verified external data sources, not AI.
@@ -320,7 +320,7 @@ The JSON must have these exact fields:
   "compliance_flags": [],
   "repair_estimates": {"total_min_zar": 0, "total_max_zar": 0, "items": []},
   "negotiation_intel": {"days_on_market": 0, "suggested_offer": 0, "negotiation_points": []},
-  "decision": "BUY|NEGOTIATE|INSPECT_FIRST|WALK_AWAY",
+  "decision": "BUY|NEGOTIATE|WALK_AWAY",
   "decision_reasoning": "",
   "insurance_risk_score": 0,
   "insurance_flags": [],
@@ -357,8 +357,8 @@ ${JSON.stringify(context, null, 2)}`,
     } catch {
       console.error('[synthesis] JSON parse failed, using fallback report');
       report = {
-        decision: 'INSPECT_FIRST',
-        decision_reasoning: 'Report synthesis produced malformed output. Manual inspection recommended.',
+        decision: 'NEGOTIATE',
+        decision_reasoning: 'Report synthesis produced incomplete output. Negotiate hard and get specialist quotes before committing.',
         price_verdict: null,
         comparables: [],
         suburb_intelligence: {},

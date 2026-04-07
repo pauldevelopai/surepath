@@ -75,7 +75,7 @@ export default function OrderDetailPage() {
         <div className="space-y-6">
           {/* Decision */}
           <div className="bg-[#0D1B2A] text-white rounded-lg p-8 text-center">
-            <div className={`text-4xl font-bold tracking-widest ${decisionColor[String(r.decision)] || ""}`} style={{ color: r.decision === "BUY" ? "#27AE60" : r.decision === "NEGOTIATE" ? "#F1C40F" : r.decision === "INSPECT_FIRST" ? "#E67E22" : "#E63946" }}>
+            <div className={`text-4xl font-bold tracking-widest ${decisionColor[String(r.decision)] || ""}`} style={{ color: r.decision === "BUY" ? "#27AE60" : r.decision === "NEGOTIATE" ? "#F1C40F" : r.decision === "WALK_AWAY" ? "#E63946" : "#F1C40F" }}>
               {String(r.decision)}
             </div>
             <p className="mt-4 text-gray-300">{String(r.decision_reasoning)}</p>

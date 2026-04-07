@@ -165,7 +165,7 @@ function buildHTML(report, property, deeds, images, areaRisks) {
   }
 
   // Decision colour
-  const decisionColours = { BUY: '#27AE60', NEGOTIATE: '#F1C40F', INSPECT_FIRST: '#E67E22', WALK_AWAY: '#E63946' };
+  const decisionColours = { BUY: '#27AE60', NEGOTIATE: '#F1C40F', WALK_AWAY: '#E63946' };
   const decisionColour = decisionColours[r.decision] || '#0D1B2A';
 
   // Insurance flags
@@ -1246,10 +1246,10 @@ ${(() => {
     decisionBg = '#FFEBEE';
     reasoning = 'This property has ' + critical + ' critical issue' + (critical !== 1 ? 's' : '') + ' that could pose serious structural or safety risks. ' + (hasDolomite ? 'The dolomite/sinkhole risk adds significant geological uncertainty. ' : '') + 'These issues typically involve substantial remediation costs and may affect insurability and resale value.';
   } else if (high > 2 || totalRepairMax > 200000 || (hasFlood && high > 0)) {
-    decision = 'INSPECT FIRST';
+    decision = 'NEGOTIATE';
     decisionColor = '#F39C12';
     decisionBg = '#FFF8E1';
-    reasoning = 'We found ' + high + ' high-severity issue' + (high !== 1 ? 's' : '') + ' and estimated repairs of up to ' + formatZAR(totalRepairMax) + '. ' + (hasFlood ? 'The property is in a flood zone. ' : '') + 'Before making an offer, get a professional building inspector on site to verify these findings and provide accurate repair quotes.';
+    reasoning = 'We found ' + high + ' high-severity issue' + (high !== 1 ? 's' : '') + ' and estimated repairs of up to ' + formatZAR(totalRepairMax) + '. ' + (hasFlood ? 'The property is in a flood zone. ' : '') + 'Get specialist quotes for these issues and factor the full repair cost into your offer. Do not pay asking price without a significant reduction.';
   } else if (high > 0 || medium > 3 || totalRepairMax > 50000 || highCrime) {
     decision = 'NEGOTIATE';
     decisionColor = '#F39C12';
@@ -1403,7 +1403,7 @@ async function renderPropertyPDF(propertyId, askingPrice) {
   // Create a minimal report record
   const { rows: reportRows } = await pool.query(
     `INSERT INTO property_reports (property_id, asking_price, decision, decision_reasoning, status)
-     VALUES ($1, $2, 'INSPECT_FIRST', 'Data-driven report — review findings and make your own assessment', 'complete')
+     VALUES ($1, $2, 'NEGOTIATE', 'Data-driven report — review findings and negotiate accordingly', 'complete')
      RETURNING id`,
     [propertyId, askingPrice || property.asking_price || 0]
   );
@@ -1556,7 +1556,7 @@ async function exportInspectPagePDF(propertyId, askingPrice, options = {}) {
 
   const { rows: reportRows } = await pool.query(
     `INSERT INTO property_reports (property_id, asking_price, decision, decision_reasoning, status)
-     VALUES ($1, $2, 'INSPECT_FIRST', 'Data-driven report — exported from property page', 'complete')
+     VALUES ($1, $2, 'NEGOTIATE', 'Data-driven report — exported from property page', 'complete')
      RETURNING id`,
     [propertyId, askingPrice || propRows[0]?.asking_price || 0]
   );
