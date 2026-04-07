@@ -65,7 +65,7 @@ const METROS = {
     province: 'Western Cape',
     city: 'Cape Town',
     // Cape Town publishes GVR via their web portal
-    searchUrl: 'https://web1.capetown.gov.za/web1/gv2022/Results',
+    searchUrl: 'https://web1.capetown.gov.za/web1/gv2025/SearchProperty',
     bulkUrl: 'https://www.capetown.gov.za/Family%20and%20home/residential-property-and-houses/property-valuations/current-and-upcoming-valuations',
     type: 'portal',
   },

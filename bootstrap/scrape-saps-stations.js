@@ -52,11 +52,14 @@ function fetchPage(url) {
 // ─── Parse a SAPS station detail page ────────────────────────────────
 
 function parseStationPage(html, sapsId) {
-  // Station name — usually in an h2 or h3 tag
-  const nameMatch = html.match(/<h[23][^>]*>([^<]*(?:Police Station|SAPS)[^<]*)<\/h[23]>/i)
-    || html.match(/<h[23][^>]*>([^<]+)<\/h[23]>/i)
-    || html.match(/<title>([^<]*?)(?:\s*[-|]|<)/i);
+  // Station name — new SAPS format: "Station: Name (Province)" in page text
+  const nameMatch = html.match(/Station:\s*([^(<\n]+?)(?:\s*\(([^)]+)\))?\s*</i)
+    || html.match(/<h[23][^>]*>([^<]*(?:Police Station|SAPS)[^<]*)<\/h[23]>/i)
+    || html.match(/<title>\s*([^<]*?)(?:\s*[-|]|<)/i);
   let stationName = nameMatch ? nameMatch[1].trim() : null;
+
+  // Province from the station title line (e.g. "Station: Johannesburg Central (Gauteng)")
+  const provinceFromTitle = nameMatch?.[2]?.trim() || null;
 
   // Clean up station name
   if (stationName) {
@@ -64,48 +67,58 @@ function parseStationPage(html, sapsId) {
       .replace(/\s*SAPS\s*/gi, '')
       .replace(/\s*Police Station\s*/gi, '')
       .replace(/\s*-\s*South African Police Service\s*/i, '')
+      .replace(/^\s*Station:\s*/i, '')
       .trim();
   }
 
-  // Address
-  const addressMatch = html.match(/(?:Physical\s*Address|Address)\s*[:：]\s*([^<]+)/i)
-    || html.match(/<td[^>]*>\s*(?:Physical\s*)?Address\s*<\/td>\s*<td[^>]*>\s*([^<]+)/i);
-  const address = addressMatch ? addressMatch[1].trim().replace(/&amp;/g, '&') : null;
+  // Address — new format has "Physical Address:" as a label, content in subsequent elements
+  // Strip tags and extract text between "Physical Address:" and "Postal Address:" (or next section)
+  const stripped = html.replace(/<[^>]+>/g, '\n').replace(/&nbsp;/g, ' ');
+  const addrMatch = stripped.match(/Physical\s*Address\s*:?\s*\n+([\s\S]*?)(?:Postal\s*Address|LATITUDE|$)/i);
+  let address = null;
+  if (addrMatch) {
+    address = addrMatch[1].split('\n').map(l => l.trim()).filter(l => l.length > 0 && !/^\d{4,}$/.test(l)).slice(0, 3).join(', ');
+  }
+  if (!address) {
+    const fallback = html.match(/(?:Physical\s*Address|Address)\s*[:：]\s*([^<]+)/i);
+    address = fallback ? fallback[1].trim().replace(/&amp;/g, '&') : null;
+  }
 
-  // Phone
-  const phoneMatch = html.match(/(?:Tel(?:ephone)?|Phone)\s*[:：]\s*([0-9()+\s-]+)/i)
-    || html.match(/<td[^>]*>\s*Tel(?:ephone)?\s*<\/td>\s*<td[^>]*>\s*([^<]+)/i);
+  // Phone — new format: "Phone:" label followed by number in next element
+  const phoneFromStripped = stripped.match(/Phone\s*:\s*\n+\s*([0-9()+\s-]+)/i);
+  const phoneMatch = phoneFromStripped
+    || html.match(/(?:Tel(?:ephone)?|Phone)\s*[:：]\s*([0-9()+\s-]+)/i);
   const phone = phoneMatch ? phoneMatch[1].trim() : null;
 
-  // Email
-  const emailMatch = html.match(/(?:Email|E-mail)\s*[:：]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i)
-    || html.match(/href="mailto:([^"]+)"/i);
-  const email = emailMatch ? emailMatch[1].trim().toLowerCase() : null;
+  // Email — from stripped text, skip generic website feedback addresses
+  const emailFromStripped = stripped.match(/Email\s*:?\s*\n+\s*([a-zA-Z0-9._%+-]+@saps\.gov\.za)/i);
+  const emailMatch = emailFromStripped
+    || html.match(/(?:Email|E-mail)\s*[:：]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+  let email = emailMatch ? emailMatch[1].trim().toLowerCase() : null;
+  if (email && email.includes('websiteandsocialmedia')) email = null;
 
-  // GPS coordinates — SAPS pages often show these
-  const latMatch = html.match(/(?:Latitude|Lat)\s*[:：]\s*(-?\d+\.?\d*)/i);
-  const lngMatch = html.match(/(?:Longitude|Lng|Long)\s*[:：]\s*(-?\d+\.?\d*)/i);
+  // GPS coordinates — new format has "LATITUDE:" and "LONGITUDE:" labels
+  const latMatch = stripped.match(/LATITUDE\s*:?\s*\n+\s*(-?\d+\.?\d*)/i)
+    || html.match(/(?:Latitude|Lat)\s*[:：]\s*(-?\d+\.?\d*)/i);
+  const lngMatch = stripped.match(/LONGITUDE\s*:?\s*\n+\s*(-?\d+\.?\d*)/i)
+    || html.match(/(?:Longitude|Lng|Long)\s*[:：]\s*(-?\d+\.?\d*)/i);
   const lat = latMatch ? parseFloat(latMatch[1]) : null;
   const lng = lngMatch ? parseFloat(lngMatch[1]) : null;
 
-  // Province
-  const provinceMatch = html.match(/(?:Province)\s*[:：]\s*([^<,]+)/i)
-    || html.match(/<td[^>]*>\s*Province\s*<\/td>\s*<td[^>]*>\s*([^<]+)/i);
-  const province = provinceMatch ? provinceMatch[1].trim() : null;
+  // Province — from title first, then from body
+  const provinceMatch = !provinceFromTitle && (html.match(/(?:Province)\s*[:：]\s*([^<,]+)/i));
+  const province = provinceFromTitle || (provinceMatch ? provinceMatch[1].trim() : null);
 
   // Cluster
   const clusterMatch = html.match(/(?:Cluster)\s*[:：]\s*([^<,]+)/i)
     || html.match(/<td[^>]*>\s*Cluster\s*<\/td>\s*<td[^>]*>\s*([^<]+)/i);
   const cluster = clusterMatch ? clusterMatch[1].trim() : null;
 
-  // Station commander
-  const commanderMatch = html.match(/(?:Station\s*Commander|Commanding\s*Officer)\s*[:：]\s*([^<]+)/i)
-    || html.match(/<td[^>]*>\s*Station Commander\s*<\/td>\s*<td[^>]*>\s*([^<]+)/i);
+  // Station commander — new format has it as a section with "Contact nr:" below
+  const cmdMatch = stripped.match(/Station\s*Commander\s*\n+\s*(?:&nbsp;)?\s*\n*\s*Contact\s*nr\s*:\s*\n+\s*([0-9()+\s,/-]+)/i);
+  const commanderMatch = html.match(/(?:Station\s*Commander|Commanding\s*Officer)\s*[:：]\s*([^<]+)/i);
   const commanderName = commanderMatch ? commanderMatch[1].trim() : null;
-
-  // Commander phone
-  const cmdPhoneMatch = html.match(/(?:Commander.*?(?:Tel|Phone))\s*[:：]\s*([0-9()+\s-]+)/i);
-  const commanderPhone = cmdPhoneMatch ? cmdPhoneMatch[1].trim() : null;
+  const commanderPhone = cmdMatch ? cmdMatch[1].trim() : null;
 
   return {
     saps_id: sapsId,
