@@ -641,7 +641,7 @@ export default function PropertyDetailPage() {
                   <div key={`${sev}-${i}`} className="flex gap-2 items-start text-xs bg-gray-50 p-2 rounded">
                     <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
                     <div className="flex-1">
-                      <span>{humanize(f.observation || f.finding || "")}</span>
+                      <span>{humanize(f.what_it_means || f.output_language || f.observation || f.finding || "")}</span>
                       {f.estimated_repair_cost_zar && <span className="text-gray-400 ml-1">({formatZAR(f.estimated_repair_cost_zar.min)}–{formatZAR(f.estimated_repair_cost_zar.max)})</span>}
                       {f.source_photo && <a href={f.source_photo} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline ml-2">[photo]</a>}
                     </div>
