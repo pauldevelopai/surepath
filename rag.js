@@ -84,18 +84,21 @@ async function retrieve(queryText, opts = {}) {
   const embedding = await embedText(queryText);
   const vecStr = `[${embedding.join(',')}]`;
 
-  // Per-layer budgets — knowledge and evidence are most valuable for photo analysis
+  // Per-layer budgets — focus on data that helps photo ANALYSIS, not descriptions.
+  // Knowledge, evidence, and vision findings are the most valuable for identifying defects.
+  // Area data (live, crime) provides corroboration context.
+  // Property listings and security companies are NOT useful for photo analysis — they dilute focus.
   const layerBudgets = [
     { layers: ['knowledge'],                      limit: 5 },
     { layers: ['evidence'],                       limit: 3 },
     { layers: ['vision'],                         limit: 3 },
     { layers: ['live'],                           limit: 3 },
     { layers: ['crime'],                          limit: 2 },
-    { layers: ['security'],                       limit: 2 },
+    { layers: ['security'],                       limit: 1 },
     { layers: ['report'],                         limit: 2 },
     { layers: ['feedback'],                       limit: 2 },
-    { layers: ['property'],                       limit: 2 },
-    { layers: ['security_company'],               limit: 2 },
+    // property and security_company are NOT included — they describe listings
+    // and companies, not defects. Including them dilutes Nico's analysis focus.
   ];
 
   const allResults = [];
@@ -193,18 +196,9 @@ function formatForPrompt(chunks) {
   }
 
   const vision = chunks.filter(c => c.layer === 'vision');
-  const secCompany = chunks.filter(c => c.layer === 'security_company');
 
   if (vision.length > 0) {
     result += `\n\nPAST PHOTO ANALYSIS (${vision.length} similar images analysed):\n${vision.map(c => c.text).join('\n')}`;
-  }
-
-  if (secCompany.length > 0) {
-    result += `\n\nSECURITY COMPANIES:\n${secCompany.map(c => c.text).join('\n')}`;
-  }
-
-  if (property.length > 0) {
-    result += `\n\nSIMILAR PROPERTIES (${property.length} comparable listings):\n${property.map(c => c.text).join('\n')}`;
   }
 
   if (feedback.length > 0) {
