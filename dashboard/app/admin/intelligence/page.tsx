@@ -16,6 +16,9 @@ export default function IntelligenceHubPage() {
   const [qRunning, setQRunning] = useState(false);
   const [qResult, setQResult] = useState<A | null>(null);
   const [verdicts, setVerdicts] = useState<Record<number, string>>({});
+  const [expandedSource, setExpandedSource] = useState<string | null>(null);
+  const [sourceDetail, setSourceDetail] = useState<A | null>(null);
+  const [sourceLoading, setSourceLoading] = useState(false);
   const [wrongIdx, setWrongIdx] = useState<number | null>(null);
   const [wrongReason, setWrongReason] = useState("");
 
@@ -31,6 +34,16 @@ export default function IntelligenceHubPage() {
   useEffect(() => { load("summary"); load("quality"); load("daily_check"); load("data_sources"); }, [load]);
 
   // Actions
+  async function toggleSourceDetail(type: string) {
+    if (expandedSource === type) { setExpandedSource(null); setSourceDetail(null); return; }
+    setExpandedSource(type); setSourceLoading(true); setSourceDetail(null);
+    try {
+      const d = await (await fetch(`/api/intelligence?section=data_detail&type=${type}`)).json();
+      setSourceDetail(d);
+    } catch { setSourceDetail({ error: "Failed to load" }); }
+    setSourceLoading(false);
+  }
+
   function handlePhotoDrop(f: File) {
     const r = new FileReader();
     r.onload = async e => {
@@ -59,17 +72,66 @@ export default function IntelligenceHubPage() {
             <h2 className="font-bold text-sm">What Nico has</h2>
             <a href="/admin/data/scraper" className="text-[10px] text-blue-600 hover:underline">Run scrapers</a>
           </div>
-          <div className="grid grid-cols-4 gap-x-6 gap-y-1">
+          <div className="grid grid-cols-4 gap-x-6 gap-y-0">
             {dataSources.map((ds: A) => (
-              <div key={ds.name} className="flex items-center justify-between text-[10px] py-0.5 border-b border-gray-50">
+              <button key={ds.name} onClick={() => ds.type && ds.count > 0 && toggleSourceDetail(ds.type)}
+                className={`flex items-center justify-between text-[10px] py-0.5 border-b text-left w-full ${expandedSource === ds.type ? "border-blue-200 bg-blue-50/50" : "border-gray-50"} ${ds.count > 0 ? "hover:bg-gray-50 cursor-pointer" : "cursor-default"}`}>
                 <div className="flex items-center gap-1.5">
                   <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${ds.in_rag ? "bg-green-500" : "bg-gray-300"}`} />
-                  <span className={ds.count > 0 ? "text-gray-700" : "text-gray-400"}>{ds.name}</span>
+                  <span className={`${ds.count > 0 ? "text-gray-700" : "text-gray-400"} ${expandedSource === ds.type ? "font-bold text-blue-700" : ""}`}>{ds.name}</span>
                 </div>
                 <span className={`font-mono ${ds.count > 0 ? "text-gray-900 font-bold" : "text-gray-300"}`}>{Number(ds.count).toLocaleString()}</span>
-              </div>
+              </button>
             ))}
           </div>
+
+          {/* Expanded data detail panel */}
+          {expandedSource && (
+            <div className="mt-3 border rounded-lg overflow-hidden">
+              <div className="flex justify-between items-center bg-gray-50 px-3 py-2 border-b">
+                <span className="text-xs font-bold">{dataSources.find((ds: A) => ds.type === expandedSource)?.name} — {dataSources.find((ds: A) => ds.type === expandedSource)?.detail}</span>
+                <button onClick={() => { setExpandedSource(null); setSourceDetail(null); }} className="text-[10px] text-gray-400 hover:text-gray-600">Close</button>
+              </div>
+              {sourceLoading ? (
+                <div className="p-4 text-center text-xs text-gray-400">Loading...</div>
+              ) : sourceDetail?.error ? (
+                <div className="p-4 text-center text-xs text-red-500">{sourceDetail.error}</div>
+              ) : sourceDetail?.rows?.length > 0 ? (() => {
+                const cols: string[] = sourceDetail!.columns || Object.keys(sourceDetail!.rows[0]);
+                return (
+                <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                  <table className="w-full text-[10px]">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        {cols.map((col: string) => (
+                          <th key={col} className="px-2 py-1 text-left font-medium text-gray-500 uppercase border-b">{col.replace(/_/g, " ")}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sourceDetail!.rows.map((row: A, i: number) => (
+                        <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                          {cols.map((col: string) => {
+                            let val = row[col];
+                            if (val === null || val === undefined) val = "—";
+                            else if (typeof val === "number" && (col.includes("price") || col.includes("cost") || col.includes("value") || col.includes("zar"))) val = `R${Number(val).toLocaleString()}`;
+                            else if (typeof val === "object") val = JSON.stringify(val).substring(0, 80);
+                            else val = String(val).substring(0, 100);
+                            return <td key={col} className="px-2 py-1 text-gray-700 whitespace-nowrap">{String(val)}</td>;
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                );
+              })() : (
+                <div className="p-4 text-center text-xs text-gray-400">No records found</div>
+              )}
+              {sourceDetail && sourceDetail.total > 0 && <div className="px-3 py-1 text-[9px] text-gray-400 border-t bg-gray-50">Showing {sourceDetail.rows?.length} of {sourceDetail.total} records</div>}
+            </div>
+          )}
+
           <div className="flex gap-3 mt-2 text-[8px] text-gray-400">
             <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500" /> In Nico's RAG</span>
             <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-gray-300" /> Collected but not in RAG yet</span>

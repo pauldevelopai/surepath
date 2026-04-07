@@ -575,38 +575,152 @@ export const GET = withAuth(async (req: NextRequest) => {
     const img = imageCounts[0];
 
     return NextResponse.json({ data_sources: [
-      { name: "Properties", count: p.total, in_rag: true, detail: "Base property records" },
-      { name: "Listings (description)", count: p.with_description, in_rag: true, detail: "Property descriptions from portals" },
-      { name: "Prices", count: p.with_price, in_rag: true, detail: "Asking prices from listings" },
-      { name: "Geocoded", count: p.geocoded, in_rag: true, detail: "Lat/lng — enables all location-based data" },
-      { name: "Photos (total)", count: img.total, in_rag: false, detail: "Raw photos from listings" },
-      { name: "Photos (analysed)", count: img.analysed, in_rag: true, detail: "Vision analysis completed" },
-      { name: "Vision evidence", count: evidence, in_rag: true, detail: "Structured WHY chain per finding" },
-      { name: "Reports", count: reports, in_rag: true, detail: "Complete property reports with decisions" },
-      { name: "Knowledge base", count: kbActive, in_rag: true, detail: "Active entries in Nico's prompt" },
-      { name: "Deeds", count: deeds, in_rag: true, detail: "Ownership and municipal values" },
-      { name: "Construction era", count: p.with_era, in_rag: true, detail: "Building age — drives risk matrix" },
-      { name: "Roof material", count: p.with_roof, in_rag: true, detail: "Identified from vision analysis" },
-      { name: "Crime incidents", count: crimes, in_rag: true, detail: "SAPS data from CrimeHub" },
-      { name: "Crime by suburb", count: p.with_crime_score, in_rag: true, detail: "Properties with crime scores" },
-      { name: "Crime detailed", count: areaMap.crime_detailed || 0, in_rag: true, detail: "Suburbs with full crime breakdown" },
-      { name: "Security coverage", count: areaMap.security_community || 0, in_rag: true, detail: "Armed response + CPF + NHW" },
-      { name: "Security companies", count: securityCos, in_rag: false, detail: "Company records (feeds coverage)" },
-      { name: "SAPS precincts", count: precincts, in_rag: false, detail: "Police station records" },
-      { name: "Solar data", count: p.with_solar, in_rag: true, detail: "PVGIS irradiance measurements" },
-      { name: "Water quality", count: p.with_water, in_rag: true, detail: "DWS Blue/Green Drop scores" },
-      { name: "Water detailed", count: areaMap.water_quality || 0, in_rag: true, detail: "Suburbs with water data" },
-      { name: "GVR municipal", count: p.with_gvr, in_rag: true, detail: "Valuation roll data" },
-      { name: "Dolomite risk", count: areaMap.dolomite || 0, in_rag: true, detail: "Geological risk areas" },
-      { name: "Social concerns", count: areaMap.social_concerns || 0, in_rag: false, detail: "Google Places review sentiment" },
-      { name: "Schools", count: areaMap.school_proximity || 0, in_rag: true, detail: "School proximity scores" },
-      { name: "Climate", count: areaMap.climate || 0, in_rag: true, detail: "Rainfall, humidity, damp risk" },
-      { name: "Load shedding", count: areaMap.loadshedding || 0, in_rag: false, detail: "Schedule data (when available)" },
-      { name: "Sold prices", count: areaMap.sold_prices || 0, in_rag: true, detail: "Suburb sale price history" },
-      { name: "Fibre coverage", count: areaMap.fibre_coverage || 0, in_rag: false, detail: "ISP availability" },
-      { name: "Sewerage quality", count: areaMap.sewerage_quality || 0, in_rag: true, detail: "DWS Green Drop scores" },
-      { name: "User feedback", count: feedback, in_rag: true, detail: "Your corrections and confirmations" },
+      { name: "Properties", count: p.total, in_rag: true, detail: "Base property records", type: "properties" },
+      { name: "Listings (description)", count: p.with_description, in_rag: true, detail: "Property descriptions from portals", type: "listings" },
+      { name: "Prices", count: p.with_price, in_rag: true, detail: "Asking prices from listings", type: "prices" },
+      { name: "Geocoded", count: p.geocoded, in_rag: true, detail: "Lat/lng — enables all location-based data", type: "geocoded" },
+      { name: "Photos (total)", count: img.total, in_rag: false, detail: "Raw photos from listings", type: "photos" },
+      { name: "Photos (analysed)", count: img.analysed, in_rag: true, detail: "Vision analysis completed", type: "photos_analysed" },
+      { name: "Vision evidence", count: evidence, in_rag: true, detail: "Structured WHY chain per finding", type: "evidence" },
+      { name: "Reports", count: reports, in_rag: true, detail: "Complete property reports with decisions", type: "reports" },
+      { name: "Knowledge base", count: kbActive, in_rag: true, detail: "Active entries in Nico's prompt", type: "kb" },
+      { name: "Deeds", count: deeds, in_rag: true, detail: "Ownership and municipal values", type: "deeds" },
+      { name: "Construction era", count: p.with_era, in_rag: true, detail: "Building age — drives risk matrix", type: "construction_era" },
+      { name: "Roof material", count: p.with_roof, in_rag: true, detail: "Identified from vision analysis", type: "roof_material" },
+      { name: "Crime incidents", count: crimes, in_rag: true, detail: "SAPS data from CrimeHub", type: "crime_incidents" },
+      { name: "Crime by suburb", count: p.with_crime_score, in_rag: true, detail: "Properties with crime scores", type: "crime_scores" },
+      { name: "Crime detailed", count: areaMap.crime_detailed || 0, in_rag: true, detail: "Suburbs with full crime breakdown", type: "crime_detailed" },
+      { name: "Security coverage", count: areaMap.security_community || 0, in_rag: true, detail: "Armed response + CPF + NHW", type: "security_community" },
+      { name: "Security companies", count: securityCos, in_rag: false, detail: "Company records (feeds coverage)", type: "security_companies" },
+      { name: "SAPS precincts", count: precincts, in_rag: false, detail: "Police station records", type: "saps" },
+      { name: "Solar data", count: p.with_solar, in_rag: true, detail: "PVGIS irradiance measurements", type: "solar" },
+      { name: "Water quality", count: p.with_water, in_rag: true, detail: "DWS Blue/Green Drop scores", type: "water_quality" },
+      { name: "Water detailed", count: areaMap.water_quality || 0, in_rag: true, detail: "Suburbs with water data", type: "water_detailed" },
+      { name: "GVR municipal", count: p.with_gvr, in_rag: true, detail: "Valuation roll data", type: "gvr" },
+      { name: "Dolomite risk", count: areaMap.dolomite || 0, in_rag: true, detail: "Geological risk areas", type: "dolomite" },
+      { name: "Social concerns", count: areaMap.social_concerns || 0, in_rag: false, detail: "Google Places review sentiment", type: "social_concerns" },
+      { name: "Schools", count: areaMap.school_proximity || 0, in_rag: true, detail: "School proximity scores", type: "school_proximity" },
+      { name: "Climate", count: areaMap.climate || 0, in_rag: true, detail: "Rainfall, humidity, damp risk", type: "climate" },
+      { name: "Electricity", count: areaMap.electricity || 0, in_rag: true, detail: "Tariff rates and cost estimates", type: "electricity" },
+      { name: "Load shedding", count: areaMap.loadshedding || 0, in_rag: false, detail: "Schedule data (when available)", type: "loadshedding" },
+      { name: "Sold prices", count: areaMap.sold_prices || 0, in_rag: true, detail: "Suburb sale price history", type: "sold_prices" },
+      { name: "Fibre coverage", count: areaMap.fibre_coverage || 0, in_rag: false, detail: "ISP availability", type: "fibre_coverage" },
+      { name: "Sewerage quality", count: areaMap.sewerage_quality || 0, in_rag: true, detail: "DWS Green Drop scores", type: "sewerage_quality" },
+      { name: "User feedback", count: feedback, in_rag: true, detail: "Your corrections and confirmations", type: "feedback" },
     ]});
+  }
+
+  // ─── Data Detail: show actual records for a data source type ────────
+  if (section === "data_detail") {
+    const type = req.nextUrl.searchParams.get("type");
+    if (!type) return NextResponse.json({ error: "type required" }, { status: 400 });
+
+    let rows: Record<string, unknown>[] = [];
+    let columns: string[] = [];
+
+    try {
+      switch (type) {
+        case "properties":
+          rows = await query("SELECT id, address_raw, suburb, city, province, property_type, bedrooms, bathrooms, asking_price, construction_era, created_at FROM properties ORDER BY created_at DESC LIMIT 100");
+          columns = ["id", "address_raw", "suburb", "city", "property_type", "bedrooms", "asking_price", "construction_era"];
+          break;
+        case "listings":
+          rows = await query("SELECT id, address_raw, suburb, city, substring(description, 1, 120) AS description FROM properties WHERE description IS NOT NULL ORDER BY created_at DESC LIMIT 100");
+          columns = ["id", "address_raw", "suburb", "description"];
+          break;
+        case "prices":
+          rows = await query("SELECT id, address_raw, suburb, city, asking_price, levies, rates_and_taxes FROM properties WHERE asking_price IS NOT NULL ORDER BY asking_price DESC LIMIT 100");
+          columns = ["id", "address_raw", "suburb", "asking_price", "levies", "rates_and_taxes"];
+          break;
+        case "geocoded":
+          rows = await query("SELECT id, address_raw, suburb, city, lat, lng FROM properties WHERE lat IS NOT NULL ORDER BY created_at DESC LIMIT 100");
+          columns = ["id", "address_raw", "suburb", "lat", "lng"];
+          break;
+        case "photos":
+          rows = await query("SELECT pi.id, pi.property_id, pi.image_type, pi.image_url, p.address_raw, p.suburb FROM property_images pi JOIN properties p ON p.id = pi.property_id ORDER BY pi.id DESC LIMIT 50");
+          columns = ["id", "property_id", "image_type", "address_raw", "suburb"];
+          break;
+        case "photos_analysed":
+          rows = await query("SELECT pi.id, pi.property_id, pi.image_type, pi.vision_analysis->>'photo_type' AS photo_type, jsonb_array_length(CASE WHEN jsonb_typeof(pi.vision_analysis->'findings') = 'array' THEN pi.vision_analysis->'findings' ELSE '[]'::jsonb END) AS findings_count, p.address_raw, p.suburb FROM property_images pi JOIN properties p ON p.id = pi.property_id WHERE pi.vision_analysis IS NOT NULL ORDER BY pi.analysed_at DESC LIMIT 50");
+          columns = ["id", "property_id", "photo_type", "findings_count", "address_raw", "suburb"];
+          break;
+        case "evidence":
+          rows = await query("SELECT he.id, he.category, he.severity, he.confidence_tier, he.what_i_see, he.what_it_means, he.cost_min_zar, he.cost_max_zar, p.address_raw, p.suburb FROM holly_evidence he JOIN properties p ON p.id = he.property_id ORDER BY he.id DESC LIMIT 50").catch(() => []);
+          columns = ["id", "category", "severity", "confidence_tier", "what_i_see", "address_raw"];
+          break;
+        case "reports":
+          rows = await query("SELECT pr.id, pr.property_id, pr.decision, pr.decision_reasoning, pr.asking_price, pr.avm_low, pr.avm_high, pr.status, pr.created_at, p.address_raw, p.suburb FROM property_reports pr JOIN properties p ON p.id = pr.property_id WHERE pr.status = 'complete' ORDER BY pr.created_at DESC LIMIT 50");
+          columns = ["id", "property_id", "decision", "decision_reasoning", "asking_price", "address_raw", "suburb"];
+          break;
+        case "kb":
+          rows = await query("SELECT id, name, category, severity, cost_min_zar, cost_max_zar, description, visual_indicators, sa_context, status FROM rag_knowledge_entries ORDER BY status DESC, severity DESC").catch(() => []);
+          columns = ["id", "name", "category", "severity", "cost_min_zar", "cost_max_zar", "status"];
+          break;
+        case "deeds":
+          rows = await query("SELECT dd.id, dd.property_id, dd.registered_owner, dd.title_deed_ref, dd.municipal_value, dd.source, dd.fetched_at, p.address_raw, p.suburb FROM deeds_data dd JOIN properties p ON p.id = dd.property_id ORDER BY dd.fetched_at DESC LIMIT 50");
+          columns = ["id", "registered_owner", "title_deed_ref", "municipal_value", "address_raw", "source"];
+          break;
+        case "construction_era":
+          rows = await query("SELECT id, address_raw, suburb, city, construction_era FROM properties WHERE construction_era IS NOT NULL ORDER BY construction_era, suburb LIMIT 100");
+          columns = ["id", "address_raw", "suburb", "construction_era"];
+          break;
+        case "roof_material":
+          rows = await query("SELECT id, address_raw, suburb, roof_material FROM properties WHERE roof_material IS NOT NULL ORDER BY roof_material, suburb LIMIT 100");
+          columns = ["id", "address_raw", "suburb", "roof_material"];
+          break;
+        case "crime_incidents":
+          rows = await query("SELECT suburb, city, incident_type, COUNT(*) AS count FROM crime_incidents GROUP BY suburb, city, incident_type ORDER BY count DESC LIMIT 100");
+          columns = ["suburb", "city", "incident_type", "count"];
+          break;
+        case "crime_scores":
+          rows = await query("SELECT id, address_raw, suburb, city, suburb_crime_score FROM properties WHERE suburb_crime_score IS NOT NULL ORDER BY suburb_crime_score DESC LIMIT 100");
+          columns = ["id", "address_raw", "suburb", "suburb_crime_score"];
+          break;
+        case "security_companies":
+          rows = await query("SELECT id, name, phone, website, google_rating, google_review_count, province, armed_response FROM security_companies ORDER BY google_rating DESC NULLS LAST LIMIT 50").catch(() => []);
+          columns = ["id", "name", "phone", "google_rating", "province", "armed_response"];
+          break;
+        case "saps":
+          rows = await query("SELECT saps_id, station_name, address, phone, email, province, cluster, lat, lng FROM saps_precincts ORDER BY station_name LIMIT 100").catch(() => []);
+          columns = ["saps_id", "station_name", "address", "phone", "province"];
+          break;
+        case "solar":
+          rows = await query("SELECT id, address_raw, suburb, city, solar_ghi_kwh_year, solar_pv_output_kwh_year FROM properties WHERE solar_ghi_kwh_year IS NOT NULL ORDER BY solar_ghi_kwh_year DESC LIMIT 100");
+          columns = ["id", "address_raw", "suburb", "solar_ghi_kwh_year", "solar_pv_output_kwh_year"];
+          break;
+        case "feedback":
+          rows = await query("SELECT id, property_id, section, feedback, rating, status, created_at FROM data_feedback ORDER BY created_at DESC LIMIT 100").catch(() => []);
+          columns = ["id", "section", "feedback", "rating", "status", "created_at"];
+          break;
+        // Area risk data types — all follow the same pattern
+        case "crime_detailed": case "security_community": case "water_quality": case "water_detailed":
+        case "dolomite": case "social_concerns": case "school_proximity": case "climate":
+        case "electricity": case "loadshedding": case "sold_prices": case "fibre_coverage": case "sewerage_quality": {
+          const riskType = type === "water_detailed" ? "water_quality" : type;
+          rows = await query(
+            "SELECT suburb, city, risk_type, risk_level, risk_score, details, source_name, source_url, data_date FROM area_risk_data WHERE risk_type = $1 ORDER BY suburb, city LIMIT 100",
+            [riskType]
+          );
+          columns = ["suburb", "city", "risk_level", "risk_score", "source_name", "data_date"];
+          // Flatten key details fields for display
+          rows = rows.map(r => {
+            const d = typeof r.details === 'string' ? JSON.parse(r.details as string) : r.details as Record<string, unknown>;
+            return { ...r, details: undefined, ...(d && typeof d === 'object' ? Object.fromEntries(Object.entries(d).filter(([, v]) => typeof v !== 'object').slice(0, 5)) : {}) };
+          });
+          break;
+        }
+        case "gvr":
+          rows = await query("SELECT id, address_raw, suburb, city, gvr_source, stand_size_sqm, zoning, municipal_value FROM properties WHERE gvr_source IS NOT NULL ORDER BY suburb LIMIT 100");
+          columns = ["id", "address_raw", "suburb", "gvr_source", "stand_size_sqm", "zoning", "municipal_value"];
+          break;
+        default:
+          return NextResponse.json({ error: "Unknown data type" }, { status: 400 });
+      }
+    } catch (e) {
+      return NextResponse.json({ error: String(e) }, { status: 500 });
+    }
+
+    return NextResponse.json({ type, rows, columns, total: rows.length });
   }
 
   // ─── Prompts: show all the prompts Nico uses ───────────────────────
