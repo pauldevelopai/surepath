@@ -873,6 +873,22 @@ async function runTeaseAsync(from, phoneNumber, url) {
 // ─── WhatsApp webhook (POST /webhook/whatsapp) ────────────────────────
 
 router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async (req, res) => {
+  // Validate Twilio signature to prevent spoofed messages
+  if (process.env.TWILIO_AUTH_TOKEN && process.env.SERVER_HOST) {
+    try {
+      const twilio = require('twilio');
+      const webhookUrl = `https://${process.env.SERVER_HOST}/webhook/whatsapp`;
+      const signature = req.headers['x-twilio-signature'];
+      if (!signature || !twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN, signature, webhookUrl, req.body)) {
+        console.warn(`[whatsapp] REJECTED: invalid Twilio signature from ${req.ip}`);
+        return res.status(403).send('Forbidden');
+      }
+    } catch (e) {
+      console.warn(`[whatsapp] Signature validation error: ${e.message}`);
+      // Continue in dev if twilio module not available
+    }
+  }
+
   const from = req.body.From;
   const body = (req.body.Body || '').trim();
   const phoneNumber = from.replace('whatsapp:', '');
