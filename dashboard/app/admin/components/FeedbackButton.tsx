@@ -31,7 +31,7 @@ export default function FeedbackButton() {
 
   if (sent) {
     return (
-      <div className="fixed bottom-6 right-6 z-50 bg-green-600 text-white px-4 py-3 rounded-lg shadow-lg text-sm font-medium print:hidden">
+      <div className="fixed bottom-6 left-6 z-50 bg-green-600 text-white px-4 py-3 rounded-lg shadow-lg text-sm font-medium print:hidden">
         Feedback saved
       </div>
     );
@@ -41,17 +41,18 @@ export default function FeedbackButton() {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full bg-[#0D1B2A] text-white shadow-lg hover:bg-[#1a2d42] flex items-center justify-center text-lg print:hidden"
+        className="fixed bottom-6 left-6 z-50 h-10 px-4 rounded-full bg-green-600 text-white shadow-lg hover:bg-green-700 flex items-center justify-center gap-2 text-xs font-medium print:hidden"
         title="Submit feedback"
       >
-        ?
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Feedback
       </button>
     );
   }
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 w-80 bg-white border rounded-lg shadow-xl print:hidden">
-      <div className="flex justify-between items-center px-4 py-2 border-b bg-[#0D1B2A] rounded-t-lg">
+    <div className="fixed bottom-6 left-6 z-50 w-80 bg-white border rounded-lg shadow-xl print:hidden">
+      <div className="flex justify-between items-center px-4 py-2 border-b bg-green-600 rounded-t-lg">
         <span className="text-white text-sm font-bold">Feedback</span>
         <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-white text-lg">&times;</button>
       </div>
@@ -82,7 +83,7 @@ export default function FeedbackButton() {
           <button
             onClick={submit}
             disabled={sending || !text.trim()}
-            className="px-4 py-1.5 bg-[#0D1B2A] text-white text-xs rounded font-bold hover:bg-[#1a2d42] disabled:opacity-50"
+            className="px-4 py-1.5 bg-green-600 text-white text-xs rounded font-bold hover:bg-green-700 disabled:opacity-50"
           >
             {sending ? "Sending..." : "Send"}
           </button>
