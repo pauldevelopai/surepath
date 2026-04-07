@@ -4,6 +4,10 @@ import { withAuth } from "@/lib/auth";
 import * as fs from "fs";
 import * as path from "path";
 
+// Allow large image uploads for Test Nico comparison
+export const maxDuration = 120; // 2 minutes for Anthropic API calls
+export const dynamic = "force-dynamic";
+
 // ─── RAG Intelligence Test Helpers ───────────────────────────────────────
 
 // SA-specific terms that indicate the RAG is contributing domain knowledge
@@ -1021,27 +1025,36 @@ export const POST = withAuth(async (req: NextRequest) => {
       source: { type: "base64" as const, media_type: (image_media_type || "image/jpeg") as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: image_base64 },
     };
 
-    const Anthropic = (await import("@anthropic-ai/sdk")).default;
-    const claude = new Anthropic();
+    let responseWithout = "";
+    let responseWith = "";
 
-    // Run both in parallel — same image, SAME model (production), different prompts
-    const [withoutRag, withRag] = await Promise.all([
-      claude.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 4096,
-        system: nicoBasePrompt,
-        messages: [{ role: "user", content: [imageContent, { type: "text", text: "Analyse this property photo." }] }],
-      }),
-      claude.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 4096,
-        system: ragPrompt,
-        messages: [{ role: "user", content: [imageContent, { type: "text", text: "Analyse this property photo." }] }],
-      }),
-    ]);
+    try {
+      const Anthropic = (await import("@anthropic-ai/sdk")).default;
+      const claude = new Anthropic();
 
-    const responseWithout = withoutRag.content[0].type === "text" ? withoutRag.content[0].text : "";
-    const responseWith = withRag.content[0].type === "text" ? withRag.content[0].text : "";
+      // Run both in parallel — same image, SAME model (production), different prompts
+      const [withoutRag, withRag] = await Promise.all([
+        claude.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 4096,
+          system: nicoBasePrompt,
+          messages: [{ role: "user", content: [imageContent, { type: "text", text: "Analyse this property photo." }] }],
+        }),
+        claude.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 4096,
+          system: ragPrompt,
+          messages: [{ role: "user", content: [imageContent, { type: "text", text: "Analyse this property photo." }] }],
+        }),
+      ]);
+
+      responseWithout = withoutRag.content[0].type === "text" ? withoutRag.content[0].text : "";
+      responseWith = withRag.content[0].type === "text" ? withRag.content[0].text : "";
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("Test Nico API error:", msg);
+      return NextResponse.json({ error: `Anthropic API failed: ${msg.substring(0, 200)}` }, { status: 500 });
+    }
 
     const signals = _detectRagSignals(responseWithout, responseWith, kbNames);
 
