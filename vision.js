@@ -143,31 +143,70 @@ async function getNicoPrompt(propertyContext, categoryFilter) {
     prompt += `\n\nADDITIONAL CONTEXT:\n${envContext}`;
   }
 
-  // Append active knowledge base entries
+  // ── Vector RAG retrieval ─────────────────────────────────────────
   try {
-    let sql = `SELECT id, name, category, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar
-       FROM rag_knowledge_entries WHERE status = 'active'`;
-    const params = [];
-    if (categoryFilter && categoryFilter.length > 0) {
-      sql += ` AND category = ANY($1)`;
-      params.push(categoryFilter);
-    }
-    sql += ' ORDER BY severity DESC';
+    const { retrieve, formatForPrompt } = require('./rag');
 
-    const { rows } = await pool.query(sql, params);
-    if (rows.length > 0) {
-      const entries = rows.map(e => {
-        const lines = [`DEFECT: ${e.name} [${e.category}]`];
-        if (e.visual_indicators) lines.push(`  LOOK FOR: ${e.visual_indicators}`);
-        if (e.sa_context) lines.push(`  SA CONTEXT: ${e.sa_context}`);
-        lines.push(`  SEVERITY: ${e.severity}/5`);
-        if (e.cost_min_zar) lines.push(`  COST: R${e.cost_min_zar}–R${e.cost_max_zar}`);
-        if (e.description && e.description !== e.visual_indicators) lines.push(`  DETAIL: ${e.description}`);
-        return lines.join('\n');
-      }).join('\n\n');
-      prompt += `\n\nKNOWLEDGE BASE BRIEFING (${rows.length} entries)\nRead each entry before analysing. If you see visual evidence matching an entry, reference it by exact name in kb_entry_matched and use its cost range.\n\n${entries}`;
+    // Build semantic query from property context
+    const queryParts = [];
+    if (propertyContext?.suburb) queryParts.push(propertyContext.suburb);
+    if (propertyContext?.city) queryParts.push(propertyContext.city);
+    if (propertyContext?.construction_era) queryParts.push(`${propertyContext.construction_era} construction era`);
+    if (propertyContext?.roof_material) queryParts.push(`${propertyContext.roof_material} roof`);
+    if (propertyContext?.dolomite_risk) queryParts.push('dolomite sinkhole risk');
+    if (propertyContext?.building_age_risk?.asbestos) queryParts.push('asbestos risk pre-1990');
+    if (propertyContext?.water_quality_score) queryParts.push(`water quality ${propertyContext.water_quality_score}/10`);
+    if (categoryFilter && categoryFilter.length > 0) queryParts.push(categoryFilter.join(', ') + ' defects');
+
+    const queryText = queryParts.length > 0
+      ? queryParts.join(', ') + '. South African property defects and risks.'
+      : 'South African property defects, damp, roof, walls, electrical, plumbing';
+
+    const chunks = await retrieve(queryText, {
+      topK: 20,
+      suburb: propertyContext?.suburb || null,
+      minScore: 0.35,
+      propertyId: propertyContext?.propertyId || null,
+    });
+
+    if (chunks.length > 0) {
+      prompt += formatForPrompt(chunks);
+      console.log(`[nico] RAG retrieved ${chunks.length} chunks (scores: ${chunks[0].score.toFixed(3)}–${chunks[chunks.length - 1].score.toFixed(3)})`);
     }
-  } catch {}
+  } catch (ragErr) {
+    // Fallback: dump all active KB entries (original behaviour)
+    console.error('[nico] RAG retrieval failed, falling back to full KB dump:', ragErr.message);
+    // Log the fallback
+    pool.query(
+      `INSERT INTO rag_retrieval_log (query_text, property_id, suburb, chunks_returned, layers_hit, avg_score, top_score, fallback_used, duration_ms)
+       VALUES ($1, $2, $3, 0, '{}', 0, 0, true, 0)`,
+      ['FALLBACK: ' + ragErr.message, propertyContext?.propertyId || null, propertyContext?.suburb || null]
+    ).catch(() => {});
+    try {
+      let sql = `SELECT id, name, category, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar
+         FROM rag_knowledge_entries WHERE status = 'active'`;
+      const params = [];
+      if (categoryFilter && categoryFilter.length > 0) {
+        sql += ` AND category = ANY($1)`;
+        params.push(categoryFilter);
+      }
+      sql += ' ORDER BY severity DESC';
+
+      const { rows } = await pool.query(sql, params);
+      if (rows.length > 0) {
+        const entries = rows.map(e => {
+          const lines = [`DEFECT: ${e.name} [${e.category}]`];
+          if (e.visual_indicators) lines.push(`  LOOK FOR: ${e.visual_indicators}`);
+          if (e.sa_context) lines.push(`  SA CONTEXT: ${e.sa_context}`);
+          lines.push(`  SEVERITY: ${e.severity}/5`);
+          if (e.cost_min_zar) lines.push(`  COST: R${e.cost_min_zar}–R${e.cost_max_zar}`);
+          if (e.description && e.description !== e.visual_indicators) lines.push(`  DETAIL: ${e.description}`);
+          return lines.join('\n');
+        }).join('\n\n');
+        prompt += `\n\nKNOWLEDGE BASE BRIEFING (${rows.length} entries)\nRead each entry before analysing. If you see visual evidence matching an entry, reference it by exact name in kb_entry_matched and use its cost range.\n\n${entries}`;
+      }
+    } catch {}
+  }
 
   // ── Cross-property intelligence for this suburb ──────────────────
   if (propertyContext?.suburb) {

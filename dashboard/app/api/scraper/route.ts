@@ -363,6 +363,11 @@ export const POST = withAuth(async (req: NextRequest) => {
           try {
             const result = await collectKnowledge();
             console.log('=== Articles complete: ' + result.created + ' entries created, ' + result.skipped + ' duplicates, ' + result.errors + ' errors ===');
+            // Re-seed RAG knowledge chunks
+            try {
+              const { seedRAG } = require('./seed-rag');
+              await seedRAG();
+            } catch (e) { console.error('RAG re-seed failed:', e.message); }
           } catch (e) { console.error('Article collection failed:', e.message); }
           await pool.end();
           process.exit(0);

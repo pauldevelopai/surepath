@@ -19,7 +19,7 @@ const SCRAPERS = [
   { id: "soldprices", label: "Sold Prices", desc: "Property24 — recent suburb sale prices for AVM", color: "bg-green-700", hover: "hover:bg-green-800" },
   { id: "fibre", label: "Fibre Coverage", desc: "ISP coverage check — Openserve, Vumatel, Frogfoot", color: "bg-indigo-700", hover: "hover:bg-indigo-800" },
   { id: "electricity", label: "Electricity", desc: "Eskom/municipal tariffs + load shedding status — monthly cost estimates", color: "bg-amber-700", hover: "hover:bg-amber-800" },
-  { id: "articles", label: "Articles", desc: "SA construction, renovation, defect articles — web sources → Nico's KB", color: "bg-[#E63946]", hover: "hover:bg-red-700" },
+  { id: "articles", label: "Articles", desc: "SA construction, renovation, defect articles — web sources → Knowledge Base", color: "bg-[#E63946]", hover: "hover:bg-red-700" },
 ];
 
 export default function ScraperPage() {

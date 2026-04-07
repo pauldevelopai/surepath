@@ -587,7 +587,7 @@ export const GET = withAuth(async (req: NextRequest) => {
       { name: "Photos (analysed)", count: img.analysed, in_rag: true, detail: "Vision analysis completed", type: "photos_analysed" },
       { name: "Vision evidence", count: evidence, in_rag: true, detail: "Structured WHY chain per finding", type: "evidence" },
       { name: "Reports", count: reports, in_rag: true, detail: "Complete property reports with decisions", type: "reports" },
-      { name: "Knowledge base", count: kbActive, in_rag: true, detail: "Active entries in Nico's prompt", type: "kb" },
+      { name: "Articles", count: kbActive, in_rag: true, detail: "Active entries in Nico's prompt", type: "kb" },
       { name: "Deeds", count: deeds, in_rag: true, detail: "Ownership and municipal values", type: "deeds" },
       { name: "Construction era", count: p.with_era, in_rag: true, detail: "Building age — drives risk matrix", type: "construction_era" },
       { name: "Roof material", count: p.with_roof, in_rag: true, detail: "Identified from vision analysis", type: "roof_material" },
@@ -854,6 +854,81 @@ export const GET = withAuth(async (req: NextRequest) => {
     return NextResponse.json({ type, rows, columns, total: totalCount, page, totalPages, perPage });
   }
 
+  // ─── RAG: chunk inventory, retrieval log, quality stats, test ───────
+  if (section === "rag") {
+    const [chunkCounts, recentRetrievals, qualityStats, topArticles] = await Promise.all([
+      // Chunk inventory by layer
+      query(`SELECT layer, COUNT(*) AS count FROM rag_chunks GROUP BY layer ORDER BY count DESC`)
+        .catch(() => []),
+      // Recent retrieval log
+      query(`SELECT id, query_text, property_id, suburb, chunks_returned, layers_hit,
+                    ROUND(avg_score::numeric, 4) AS avg_score, ROUND(top_score::numeric, 4) AS top_score,
+                    fallback_used, duration_ms, created_at
+             FROM rag_retrieval_log ORDER BY created_at DESC LIMIT 30`)
+        .catch(() => []),
+      // Quality stats
+      query(`SELECT
+               COUNT(*) AS total_retrievals,
+               COUNT(*) FILTER (WHERE fallback_used) AS fallback_count,
+               ROUND(AVG(avg_score)::numeric, 4) AS overall_avg_score,
+               ROUND(AVG(top_score)::numeric, 4) AS overall_top_score,
+               ROUND(AVG(chunks_returned)::numeric, 1) AS avg_chunks,
+               ROUND(AVG(duration_ms)::numeric, 0) AS avg_duration_ms
+             FROM rag_retrieval_log`)
+        .catch(() => [{ total_retrievals: 0, fallback_count: 0, overall_avg_score: 0, overall_top_score: 0, avg_chunks: 0, avg_duration_ms: 0 }]),
+      // Most retrieved knowledge articles (from chunk_ids)
+      query(`SELECT rc.metadata->>'name' AS name, rc.layer, COUNT(*) AS times_retrieved,
+                    ROUND(AVG(sub.score)::numeric, 4) AS avg_score
+             FROM rag_retrieval_log rl,
+                  LATERAL unnest(rl.chunk_ids) AS cid,
+                  LATERAL (SELECT 1 - (rc2.embedding <=> (SELECT embedding FROM rag_chunks WHERE id = cid)) AS score
+                           FROM rag_chunks rc2 WHERE rc2.id = cid LIMIT 1) sub,
+                  rag_chunks rc
+             WHERE rc.id = cid AND rc.layer = 'knowledge'
+             GROUP BY rc.metadata->>'name', rc.layer
+             ORDER BY times_retrieved DESC LIMIT 10`)
+        .catch(() => []),
+    ]);
+
+    const totalChunks = chunkCounts.reduce((sum: number, r: Record<string, unknown>) => sum + Number(r.count), 0);
+
+    return NextResponse.json({
+      rag: {
+        chunks: { total: totalChunks, by_layer: chunkCounts },
+        quality: qualityStats[0] || {},
+        recent: recentRetrievals,
+        top_articles: topArticles,
+      },
+    });
+  }
+
+  // ─── RAG test: run a retrieval and return results ─────────────────
+  if (section === "rag_test") {
+    const testQuery = req.nextUrl.searchParams.get("q");
+    if (!testQuery) return NextResponse.json({ error: "q param required" }, { status: 400 });
+
+    try {
+      const ragPath = path.resolve(process.cwd(), "..", "rag.js");
+      const _require = eval("require") as NodeRequire;
+      const ragModule = _require(ragPath);
+      const chunks = await ragModule.retrieve(testQuery, { topK: 15, minScore: 0.35 });
+      return NextResponse.json({
+        rag_test: {
+          query: testQuery,
+          results: chunks.map((c: Record<string, unknown>) => ({
+            id: c.id,
+            layer: c.layer,
+            score: Number(Number(c.score).toFixed(4)),
+            text: (c.text as string).substring(0, 200),
+            metadata: c.metadata,
+          })),
+        },
+      });
+    } catch (err: unknown) {
+      return NextResponse.json({ error: "RAG not available: " + (err as Error).message }, { status: 500 });
+    }
+  }
+
   // ─── Prompts: show all the prompts Nico uses ───────────────────────
   if (section === "prompts") {
     // Read prompts from the actual source files
@@ -1064,6 +1139,40 @@ export const POST = withAuth(async (req: NextRequest) => {
     // Count how many data sources were actually injected into the RAG prompt
     const ragSections = (ragPrompt.match(/\n\n[A-Z][A-Z\s&—]+\(/g) || []).length;
 
+    // Get the most recent RAG retrieval log entry (the one that just happened via getNicoPrompt)
+    let ragRetrieval: Record<string, unknown> | null = null;
+    try {
+      const logRows = await query(
+        `SELECT id, query_text, chunks_returned, layers_hit,
+                ROUND(avg_score::numeric, 4) AS avg_score, ROUND(top_score::numeric, 4) AS top_score,
+                duration_ms, chunk_ids, created_at
+         FROM rag_retrieval_log ORDER BY created_at DESC LIMIT 1`
+      );
+      if (logRows.length > 0) {
+        const log = logRows[0] as Record<string, unknown>;
+        // Get the actual chunk details
+        const chunkIds = (log.chunk_ids as number[]) || [];
+        let chunks: Record<string, unknown>[] = [];
+        if (chunkIds.length > 0) {
+          chunks = await query(
+            `SELECT id, layer, metadata->>'name' AS name, LEFT(text, 150) AS text_preview,
+                    metadata->>'category' AS category, metadata->>'suburb' AS suburb
+             FROM rag_chunks WHERE id = ANY($1)`,
+            [chunkIds]
+          );
+        }
+        ragRetrieval = {
+          query_text: log.query_text,
+          chunks_returned: log.chunks_returned,
+          layers_hit: log.layers_hit,
+          avg_score: log.avg_score,
+          top_score: log.top_score,
+          duration_ms: log.duration_ms,
+          chunks,
+        };
+      }
+    } catch {}
+
     return NextResponse.json({
       ok: true,
       response_without_rag: responseWithout,
@@ -1074,6 +1183,7 @@ export const POST = withAuth(async (req: NextRequest) => {
       baseline_prompt_length: nicoBasePrompt.length,
       property_context: ragContext,
       signals,
+      rag_retrieval: ragRetrieval,
     });
   }
 

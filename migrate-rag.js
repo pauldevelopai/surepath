@@ -55,6 +55,44 @@ async function migrateRAG() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_rag_kb_category ON rag_knowledge_entries(category)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_rag_quality_type ON rag_quality_runs(run_type, created_at)`);
 
+    // ─── Vector RAG chunks (pgvector) ────────────────────────────────
+    await client.query(`CREATE EXTENSION IF NOT EXISTS vector`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS rag_chunks (
+        id SERIAL PRIMARY KEY,
+        chunk_key TEXT UNIQUE NOT NULL,
+        text TEXT NOT NULL,
+        embedding vector(384) NOT NULL,
+        layer TEXT NOT NULL,
+        source_table TEXT,
+        source_id INTEGER,
+        metadata JSONB DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding ON rag_chunks USING hnsw (embedding vector_cosine_ops)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_rag_chunks_layer ON rag_chunks(layer)`);
+
+    // ─── RAG retrieval log ───────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS rag_retrieval_log (
+        id SERIAL PRIMARY KEY,
+        query_text TEXT NOT NULL,
+        property_id INTEGER,
+        suburb TEXT,
+        chunks_returned INTEGER NOT NULL DEFAULT 0,
+        layers_hit TEXT[] NOT NULL DEFAULT '{}',
+        avg_score NUMERIC(5,4),
+        top_score NUMERIC(5,4),
+        fallback_used BOOLEAN NOT NULL DEFAULT false,
+        duration_ms INTEGER,
+        chunk_ids INTEGER[] DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_rag_log_created ON rag_retrieval_log(created_at DESC)`);
+
     // ─── Additive columns (safe to run multiple times) ───────────────
     await client.query(`ALTER TABLE rag_knowledge_entries ADD COLUMN IF NOT EXISTS source_url TEXT`);
     await client.query(`ALTER TABLE rag_knowledge_entries ADD COLUMN IF NOT EXISTS image_id INTEGER`);

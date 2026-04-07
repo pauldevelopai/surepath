@@ -12,6 +12,11 @@ export default function IntelligenceHubPage() {
   const [dataSources, setDataSources] = useState<A[] | null>(null);
   const [prompts, setPrompts] = useState<A[] | null>(null);
   const [showPrompts, setShowPrompts] = useState(false);
+  const [rag, setRag] = useState<A | null>(null);
+  const [showRag, setShowRag] = useState(false);
+  const [ragTestQuery, setRagTestQuery] = useState("");
+  const [ragTestResult, setRagTestResult] = useState<A | null>(null);
+  const [ragTestLoading, setRagTestLoading] = useState(false);
 
   const [qRunning, setQRunning] = useState(false);
   const [qResult, setQResult] = useState<A | null>(null);
@@ -31,6 +36,7 @@ export default function IntelligenceHubPage() {
     if (s === "daily_check") setDailyCheck(d.daily_check);
     if (s === "data_sources") setDataSources(d.data_sources);
     if (s === "prompts") setPrompts(d.prompts);
+    if (s === "rag") setRag(d.rag);
   }, []);
 
   useEffect(() => { load("summary"); load("quality"); load("daily_check"); load("data_sources"); }, [load]);
@@ -88,7 +94,7 @@ export default function IntelligenceHubPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold mb-1">Nico's Brain</h1>
-      <p className="text-sm text-gray-500 mb-4">Everything feeding Nico, your daily sanity check, and the knowledge base that makes him better over time.</p>
+      <p className="text-sm text-gray-500 mb-4">Everything feeding Nico, your daily sanity check, and the Knowledge Base that makes him better over time.</p>
 
       {/* ─── Data Sources ───────────────────────────────────────────── */}
       {dataSources && (
@@ -208,7 +214,7 @@ export default function IntelligenceHubPage() {
                       item.type === "report_decision" ? "bg-purple-100 text-purple-700" :
                       item.type === "knowledge_entry" ? "bg-yellow-100 text-yellow-700" :
                       "bg-gray-100 text-gray-600"
-                    }`}>{item.type === "vision_finding" ? "Photo Finding" : item.type === "report_decision" ? "Decision" : item.type === "knowledge_entry" ? "KB Entry" : "Evidence"}</span>
+                    }`}>{item.type === "vision_finding" ? "Photo Finding" : item.type === "report_decision" ? "Decision" : item.type === "knowledge_entry" ? "Article" : "Evidence"}</span>
                     {item.severity && <span className={`px-1 rounded text-[7px] shrink-0 ${severityColor[item.severity] || "bg-gray-200"}`}>{item.severity}</span>}
                     {item.confidence_tier && <span className="text-[8px] text-gray-400">Tier {item.confidence_tier}</span>}
                     {date && <span className="text-[8px] text-gray-300 ml-auto">{date}</span>}
@@ -255,7 +261,7 @@ export default function IntelligenceHubPage() {
       {/* ─── Test Nico ──────────────────────────────────────────────── */}
       <div className="bg-white border rounded-lg p-4 shadow-sm mb-6">
         <h2 className="font-bold text-sm mb-1">Test Nico</h2>
-        <p className="text-xs text-gray-400 mb-2">Drop a property photo. Left = Base Nico (no data). Right = Nico with everything in the knowledge base.</p>
+        <p className="text-xs text-gray-400 mb-2">Drop a property photo. Left = Base Nico (no data). Right = Nico with everything in the Knowledge Base.</p>
 
         <div className={`border-2 border-dashed rounded p-6 text-center ${qRunning ? "bg-yellow-50 border-yellow-300" : "bg-gray-50 hover:bg-gray-100 border-gray-300"} cursor-pointer`}
           onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add("border-blue-400", "bg-blue-50"); }}
@@ -269,18 +275,208 @@ export default function IntelligenceHubPage() {
           <div className="mt-3">
             {qResult.error ? (
               <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700">{qResult.error}</div>
-            ) : (
+            ) : (<>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <div className="text-[9px] font-bold text-gray-400 uppercase mb-1">Base Nico</div>
+                  <div className="text-[9px] font-bold text-gray-400 uppercase mb-1">Base Nico ({qResult.baseline_prompt_length ? Math.round(qResult.baseline_prompt_length / 1000) + 'k' : '?'} chars)</div>
                   <div className="bg-gray-50 rounded p-2 text-[10px] whitespace-pre-wrap max-h-64 overflow-y-auto border">{qResult.response_without_rag}</div>
                 </div>
                 <div>
-                  <div className="text-[9px] font-bold text-green-700 uppercase mb-1">Nico + Knowledge ({qResult.kb_entries_used || 0} KB entries, {qResult.rag_prompt_length ? Math.round(qResult.rag_prompt_length / 1000) + 'k' : '?'} chars context)</div>
+                  <div className="text-[9px] font-bold text-green-700 uppercase mb-1">Nico + RAG ({qResult.rag_retrieval?.chunks_returned || qResult.kb_entries_used || 0} chunks, {qResult.rag_prompt_length ? Math.round(qResult.rag_prompt_length / 1000) + 'k' : '?'} chars context)</div>
                   <div className="bg-green-50 rounded p-2 text-[10px] whitespace-pre-wrap max-h-64 overflow-y-auto border border-green-200">{qResult.response_with_rag}</div>
                 </div>
               </div>
+
+              {/* RAG retrieval details */}
+              {qResult.rag_retrieval && (
+                <div className="mt-3 bg-blue-50 border border-blue-200 rounded p-3">
+                  <div className="text-[9px] font-bold text-blue-700 uppercase mb-2">RAG Retrieval Details</div>
+                  <div className="grid grid-cols-5 gap-2 text-center mb-2">
+                    <div className="bg-white rounded p-1">
+                      <div className="text-sm font-bold">{qResult.rag_retrieval.chunks_returned}</div>
+                      <div className="text-[8px] text-gray-500">chunks</div>
+                    </div>
+                    <div className="bg-white rounded p-1">
+                      <div className="text-sm font-bold">{(qResult.rag_retrieval.layers_hit || []).length}</div>
+                      <div className="text-[8px] text-gray-500">layers</div>
+                    </div>
+                    <div className="bg-white rounded p-1">
+                      <div className="text-sm font-bold">{Number(qResult.rag_retrieval.top_score).toFixed(3)}</div>
+                      <div className="text-[8px] text-gray-500">top score</div>
+                    </div>
+                    <div className="bg-white rounded p-1">
+                      <div className="text-sm font-bold">{Number(qResult.rag_retrieval.avg_score).toFixed(3)}</div>
+                      <div className="text-[8px] text-gray-500">avg score</div>
+                    </div>
+                    <div className="bg-white rounded p-1">
+                      <div className="text-sm font-bold">{qResult.rag_retrieval.duration_ms}ms</div>
+                      <div className="text-[8px] text-gray-500">latency</div>
+                    </div>
+                  </div>
+                  <div className="text-[8px] text-blue-600 mb-1">Layers: {(qResult.rag_retrieval.layers_hit || []).join(", ")}</div>
+                  <div className="text-[8px] text-gray-500 mb-2 truncate" title={qResult.rag_retrieval.query_text}>Query: {qResult.rag_retrieval.query_text}</div>
+                  {(qResult.rag_retrieval.chunks || []).length > 0 && (
+                    <div className="max-h-32 overflow-y-auto">
+                      {qResult.rag_retrieval.chunks.map((c: A, i: number) => (
+                        <div key={i} className="flex items-start gap-1.5 text-[8px] py-0.5 border-b border-blue-100">
+                          <span className={`px-1 rounded shrink-0 ${
+                            c.layer === 'knowledge' ? 'bg-yellow-100 text-yellow-700' :
+                            c.layer === 'evidence' ? 'bg-purple-100 text-purple-700' :
+                            c.layer === 'live' ? 'bg-green-100 text-green-700' :
+                            c.layer === 'crime' ? 'bg-red-100 text-red-700' :
+                            c.layer === 'security' ? 'bg-orange-100 text-orange-700' :
+                            c.layer === 'property' ? 'bg-indigo-100 text-indigo-700' :
+                            'bg-gray-100 text-gray-600'
+                          }`}>{c.layer}</span>
+                          <span className="text-gray-600">{c.name || c.suburb || c.text_preview?.substring(0, 80)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>)}
+          </div>
+        )}
+      </div>
+
+      {/* ─── RAG ───────────────────────────────────────────────────── */}
+      <div className="bg-white border rounded-lg p-4 shadow-sm mb-6">
+        <div className="flex justify-between items-center">
+          <h2 className="font-bold text-sm">Vector RAG</h2>
+          <button onClick={() => { if (!rag) load("rag"); setShowRag(!showRag); }} className="text-[10px] text-blue-600 hover:underline">{showRag ? "Hide" : "Show"}</button>
+        </div>
+
+        {showRag && rag && (
+          <div className="mt-3 space-y-4">
+            {/* Chunk inventory */}
+            <div>
+              <h3 className="text-xs font-bold mb-1">Chunk Inventory ({rag.chunks?.total?.toLocaleString() || 0} total)</h3>
+              <div className="grid grid-cols-4 gap-2">
+                {(rag.chunks?.by_layer || []).map((l: A) => (
+                  <div key={l.layer} className="bg-gray-50 rounded p-2 text-center">
+                    <div className="text-lg font-bold">{Number(l.count).toLocaleString()}</div>
+                    <div className="text-[9px] text-gray-500">{l.layer}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Quality stats */}
+            {rag.quality && Number(rag.quality.total_retrievals) > 0 && (
+              <div>
+                <h3 className="text-xs font-bold mb-1">Retrieval Quality</h3>
+                <div className="grid grid-cols-6 gap-2 text-center">
+                  <div className="bg-blue-50 rounded p-2">
+                    <div className="text-sm font-bold">{rag.quality.total_retrievals}</div>
+                    <div className="text-[9px] text-gray-500">retrievals</div>
+                  </div>
+                  <div className="bg-green-50 rounded p-2">
+                    <div className="text-sm font-bold">{Number(rag.quality.avg_chunks).toFixed(1)}</div>
+                    <div className="text-[9px] text-gray-500">avg chunks</div>
+                  </div>
+                  <div className="bg-green-50 rounded p-2">
+                    <div className="text-sm font-bold">{Number(rag.quality.overall_avg_score).toFixed(3)}</div>
+                    <div className="text-[9px] text-gray-500">avg score</div>
+                  </div>
+                  <div className="bg-green-50 rounded p-2">
+                    <div className="text-sm font-bold">{Number(rag.quality.overall_top_score).toFixed(3)}</div>
+                    <div className="text-[9px] text-gray-500">top score</div>
+                  </div>
+                  <div className="bg-gray-50 rounded p-2">
+                    <div className="text-sm font-bold">{rag.quality.avg_duration_ms}ms</div>
+                    <div className="text-[9px] text-gray-500">avg latency</div>
+                  </div>
+                  <div className={`rounded p-2 ${Number(rag.quality.fallback_count) > 0 ? 'bg-red-50' : 'bg-green-50'}`}>
+                    <div className="text-sm font-bold">{rag.quality.fallback_count}</div>
+                    <div className="text-[9px] text-gray-500">fallbacks</div>
+                  </div>
+                </div>
+              </div>
             )}
+
+            {/* Top articles */}
+            {(rag.top_articles || []).length > 0 && (
+              <div>
+                <h3 className="text-xs font-bold mb-1">Most Retrieved Articles</h3>
+                <div className="space-y-0.5">
+                  {rag.top_articles.map((a: A, i: number) => (
+                    <div key={i} className="flex justify-between text-[10px] py-0.5 border-b border-gray-50">
+                      <span>{a.name}</span>
+                      <span className="text-gray-400">{a.times_retrieved}x (avg {Number(a.avg_score).toFixed(3)})</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Recent retrievals */}
+            {(rag.recent || []).length > 0 && (
+              <div>
+                <h3 className="text-xs font-bold mb-1">Recent Retrievals</h3>
+                <div className="max-h-48 overflow-y-auto">
+                  <table className="w-full text-[9px]">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th className="text-left p-1">Time</th>
+                        <th className="text-left p-1">Query</th>
+                        <th className="text-right p-1">Chunks</th>
+                        <th className="text-left p-1">Layers</th>
+                        <th className="text-right p-1">Top</th>
+                        <th className="text-right p-1">Avg</th>
+                        <th className="text-right p-1">ms</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rag.recent.map((r: A) => (
+                        <tr key={r.id} className={`border-b border-gray-50 ${r.fallback_used ? 'bg-red-50' : ''}`}>
+                          <td className="p-1 text-gray-400 whitespace-nowrap">{new Date(r.created_at).toLocaleString("en-ZA", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                          <td className="p-1 max-w-[200px] truncate" title={r.query_text}>{r.fallback_used ? "FALLBACK" : r.query_text?.substring(0, 60)}</td>
+                          <td className="p-1 text-right font-mono">{r.chunks_returned}</td>
+                          <td className="p-1">{(r.layers_hit || []).join(", ")}</td>
+                          <td className="p-1 text-right font-mono">{Number(r.top_score).toFixed(3)}</td>
+                          <td className="p-1 text-right font-mono">{Number(r.avg_score).toFixed(3)}</td>
+                          <td className="p-1 text-right font-mono">{r.duration_ms}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Test retrieval */}
+            <div>
+              <h3 className="text-xs font-bold mb-1">Test Retrieval</h3>
+              <div className="flex gap-2">
+                <input type="text" value={ragTestQuery} onChange={e => setRagTestQuery(e.target.value)}
+                  placeholder="e.g. pre-1977 asbestos roof Centurion Gauteng"
+                  className="flex-1 border rounded px-2 py-1 text-xs"
+                  onKeyDown={e => { if (e.key === "Enter" && ragTestQuery.trim()) { setRagTestLoading(true); fetch(`/api/intelligence?section=rag_test&q=${encodeURIComponent(ragTestQuery)}`).then(r => r.json()).then(d => { setRagTestResult(d.rag_test || d); setRagTestLoading(false); }).catch(() => setRagTestLoading(false)); } }} />
+                <button onClick={() => { if (!ragTestQuery.trim()) return; setRagTestLoading(true); fetch(`/api/intelligence?section=rag_test&q=${encodeURIComponent(ragTestQuery)}`).then(r => r.json()).then(d => { setRagTestResult(d.rag_test || d); setRagTestLoading(false); }).catch(() => setRagTestLoading(false)); }}
+                  disabled={ragTestLoading || !ragTestQuery.trim()}
+                  className="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 disabled:opacity-50">
+                  {ragTestLoading ? "..." : "Search"}
+                </button>
+              </div>
+              {ragTestResult?.results && (
+                <div className="mt-2 max-h-48 overflow-y-auto">
+                  {ragTestResult.results.map((r: A, i: number) => (
+                    <div key={i} className="flex items-start gap-2 text-[9px] py-1 border-b border-gray-50">
+                      <span className={`px-1 rounded font-mono ${
+                        r.layer === 'knowledge' ? 'bg-yellow-100 text-yellow-700' :
+                        r.layer === 'evidence' ? 'bg-blue-100 text-blue-700' :
+                        r.layer === 'live' ? 'bg-green-100 text-green-700' :
+                        r.layer === 'property' ? 'bg-purple-100 text-purple-700' :
+                        'bg-gray-100 text-gray-600'
+                      }`}>{r.layer}</span>
+                      <span className="font-mono text-gray-400 w-10 text-right shrink-0">{r.score.toFixed(3)}</span>
+                      <span className="flex-1">{r.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
