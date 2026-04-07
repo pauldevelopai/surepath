@@ -58,8 +58,26 @@ export default function IntelligenceHubPage() {
       const [h, b] = d.split(",");
       const media = h.match(/:(.*?);/)?.[1] || "image/jpeg";
       setQRunning(true); setQResult(null);
-      const res = await (await fetch("/api/intelligence", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "run_comparison", image_base64: b, image_media_type: media, rag_enabled: true }) })).json();
-      setQResult(res); setQRunning(false);
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 120000); // 2 min timeout
+        const resp = await fetch("/api/intelligence", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "run_comparison", image_base64: b, image_media_type: media, rag_enabled: true }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+          setQResult({ error: `Server error: ${resp.status} ${resp.statusText}` });
+        } else {
+          const res = await resp.json();
+          setQResult(res);
+        }
+      } catch (err) {
+        setQResult({ error: err instanceof Error && err.name === "AbortError" ? "Timed out after 2 minutes — try a smaller image" : `Failed: ${err instanceof Error ? err.message : "unknown error"}` });
+      }
+      setQRunning(false);
     };
     r.readAsDataURL(f);
   }
@@ -243,16 +261,20 @@ export default function IntelligenceHubPage() {
 
         {qResult && (
           <div className="mt-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <div className="text-[9px] font-bold text-gray-400 uppercase mb-1">Base Nico</div>
-                <div className="bg-gray-50 rounded p-2 text-[10px] whitespace-pre-wrap max-h-64 overflow-y-auto border">{qResult.response_without_rag}</div>
+            {qResult.error ? (
+              <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700">{qResult.error}</div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="text-[9px] font-bold text-gray-400 uppercase mb-1">Base Nico</div>
+                  <div className="bg-gray-50 rounded p-2 text-[10px] whitespace-pre-wrap max-h-64 overflow-y-auto border">{qResult.response_without_rag}</div>
+                </div>
+                <div>
+                  <div className="text-[9px] font-bold text-green-700 uppercase mb-1">Nico + Knowledge ({qResult.kb_entries_used || 0} KB entries, {qResult.rag_prompt_length ? Math.round(qResult.rag_prompt_length / 1000) + 'k' : '?'} chars context)</div>
+                  <div className="bg-green-50 rounded p-2 text-[10px] whitespace-pre-wrap max-h-64 overflow-y-auto border border-green-200">{qResult.response_with_rag}</div>
+                </div>
               </div>
-              <div>
-                <div className="text-[9px] font-bold text-green-700 uppercase mb-1">Nico + Knowledge ({qResult.kb_entries_used || 0} KB entries, {qResult.rag_prompt_length ? Math.round(qResult.rag_prompt_length / 1000) + 'k' : '?'} chars context)</div>
-                <div className="bg-green-50 rounded p-2 text-[10px] whitespace-pre-wrap max-h-64 overflow-y-auto border border-green-200">{qResult.response_with_rag}</div>
-              </div>
-            </div>
+            )}
           </div>
         )}
       </div>
