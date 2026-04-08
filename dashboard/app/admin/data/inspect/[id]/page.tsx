@@ -383,19 +383,25 @@ export default function PropertyDetailPage() {
             )}
           </div>
         )}
-        <div className="flex gap-4 mt-2 text-xs">
+        <div className="flex gap-3 mt-2 text-xs flex-wrap">
+          {p.listing_status && p.listing_status !== "active" && (
+            <div className={`border rounded px-2 py-1 font-bold ${p.listing_status === "sold" ? "bg-red-50 border-red-200 text-red-700" : p.listing_status === "under_offer" ? "bg-orange-50 border-orange-200 text-orange-700" : "bg-blue-50 border-blue-200 text-blue-700"}`}>
+              {p.listing_status === "sold" ? "SOLD" : p.listing_status === "under_offer" ? "UNDER OFFER" : p.listing_status === "price_reduced" ? "PRICE REDUCED" : p.listing_status.toUpperCase()}
+              {p.status_changed_at && <span className="font-normal ml-1">({formatDate(p.status_changed_at)})</span>}
+            </div>
+          )}
           {p.listing_date && (
             <div className="bg-blue-50 border border-blue-200 rounded px-2 py-1">
               <span className="text-blue-500">Listed:</span> <span className="font-medium">{formatDate(p.listing_date)}</span>
-              <span className="text-blue-400 ml-1">(from listing)</span>
+              {(() => { const days = Math.floor((Date.now() - new Date(p.listing_date).getTime()) / 86400000); return days > 0 ? <span className="text-blue-400 ml-1">({days} days on market)</span> : null; })()}
             </div>
           )}
           <div className="bg-gray-50 border border-gray-200 rounded px-2 py-1">
-            <span className="text-gray-500">First captured:</span> <span className="font-medium">{formatDate(p.created_at)}</span>
+            <span className="text-gray-500">First scraped:</span> <span className="font-medium">{formatDate(p.first_scraped_at || p.created_at)}</span>
           </div>
-          {p.last_scraped_at && (
+          {p.last_checked_at && (
             <div className="bg-gray-50 border border-gray-200 rounded px-2 py-1">
-              <span className="text-gray-500">Last scraped:</span> <span className="font-medium">{formatDate(p.last_scraped_at)}</span>
+              <span className="text-gray-500">Last checked:</span> <span className="font-medium">{formatDate(p.last_checked_at)}</span>
             </div>
           )}
         </div>
@@ -1683,7 +1689,11 @@ export default function PropertyDetailPage() {
             <Datum label="City" value={p.city} source={src("city")} />
             <Datum label="Province" value={p.province} source={src("province")} />
             {p.listing_date && <Datum label="Listing Date" value={formatDate(p.listing_date)} source={src("listing_date")} />}
+            {p.listing_status && <Datum label="Listing Status" value={p.listing_status === "under_offer" ? "Under Offer" : p.listing_status === "price_reduced" ? "Price Reduced" : p.listing_status.charAt(0).toUpperCase() + p.listing_status.slice(1)} source={{ name: "PrivateProperty", confidence: "scraped" }} />}
             {p.property_type && <Datum label="Property Type" value={p.property_type} source={src("property_type")} />}
+            {p.first_scraped_at && <Datum label="First Scraped" value={formatDate(p.first_scraped_at)} source={{ name: "Surepath", confidence: "verified" }} />}
+            {p.last_checked_at && <Datum label="Last Checked" value={formatDate(p.last_checked_at)} source={{ name: "Surepath", confidence: "verified" }} />}
+            {p.listing_date && (() => { const days = Math.floor((Date.now() - new Date(p.listing_date).getTime()) / 86400000); return days > 0 ? <Datum label="Days on Market" value={`${days} days`} source={{ name: "Calculated", confidence: "estimated" }} /> : null; })()}
           </div>
         </section>
 
@@ -1697,6 +1707,34 @@ export default function PropertyDetailPage() {
               {p.levies && <Datum label="Monthly Levies" value={formatZAR(p.levies)} source={src("levies")} />}
               {p.rates_and_taxes && <Datum label="Monthly Rates &amp; Taxes" value={formatZAR(p.rates_and_taxes)} source={src("rates_and_taxes")} />}
             </div>
+            {/* Price history */}
+            {p.price_history && Array.isArray(p.price_history) && p.price_history.length > 0 && (
+              <div className="mt-3 border-t pt-2">
+                <div className="text-[10px] text-gray-500 font-bold uppercase mb-1">Price History</div>
+                <div className="space-y-1">
+                  {p.price_history.map((ph: any, i: number) => (
+                    <div key={i} className="flex justify-between text-xs bg-gray-50 rounded px-2 py-1">
+                      <span className="text-gray-400 font-mono">{ph.date}</span>
+                      <span className="font-bold">{formatZAR(ph.price)}</span>
+                      <span className="text-gray-400">{ph.event === "price_change" ? "Price changed" : ph.event}</span>
+                    </div>
+                  ))}
+                </div>
+                {p.asking_price && p.price_history.length > 0 && (() => {
+                  const original = p.price_history[0].price;
+                  const diff = p.asking_price - original;
+                  const pct = Math.round((diff / original) * 100);
+                  return diff !== 0 ? (
+                    <p className="text-xs text-gray-500 mt-1">
+                      {diff < 0
+                        ? `Price dropped ${formatZAR(Math.abs(diff))} (${Math.abs(pct)}%) from original — seller may be motivated.`
+                        : `Price increased ${formatZAR(diff)} (${pct}%) since first listed.`
+                      }
+                    </p>
+                  ) : null;
+                })()}
+              </div>
+            )}
           </section>
         ) : null}
 
@@ -1887,9 +1925,19 @@ export default function PropertyDetailPage() {
           // Days on market
           if (p.listing_date) {
             const days = Math.floor((Date.now() - new Date(p.listing_date).getTime()) / 86400000);
-            if (days > 30) leverage.push({ point: `Listed for ${days} days (market average ~45 days)`, saving: null, source: "Property24" });
-            if (days > 90) leverage.push({ point: `On market for ${days} days — seller likely motivated`, saving: null, source: "Property24" });
+            if (days > 30) leverage.push({ point: `Listed for ${days} days (market average ~45 days)`, saving: null, source: "PrivateProperty" });
+            if (days > 90) leverage.push({ point: `On market for ${days} days — seller likely motivated`, saving: null, source: "PrivateProperty" });
           }
+          // Price has been reduced
+          if (p.price_history && Array.isArray(p.price_history) && p.price_history.length > 0) {
+            const original = p.price_history[0].price;
+            if (p.asking_price && p.asking_price < original) {
+              const drop = original - p.asking_price;
+              leverage.push({ point: `Price already dropped ${formatZAR(drop)} (was ${formatZAR(original)}) — seller is negotiating with themselves`, saving: formatZAR(drop), source: "Price history" });
+            }
+          }
+          // Listing status
+          if (p.listing_status === "price_reduced") leverage.push({ point: "Price has been reduced — seller is motivated to move", saving: null, source: "PrivateProperty" });
           // Levies/rates are high
           if (p.levies && p.levies > 3000) leverage.push({ point: `High monthly levies: ${formatZAR(p.levies)}`, saving: null, source: "Property24" });
           // Crime area
