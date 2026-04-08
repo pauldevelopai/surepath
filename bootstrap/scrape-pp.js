@@ -132,6 +132,18 @@ async function extractListing(_unused, url) {
   // Validate — small numbers are not prices
   if (r.price && r.price < 50000) r.price = null;
 
+  // Listing date — look for date patterns in the page
+  const dateMatch = html.match(/(?:Listed|Published|Date)[:\s]*(\d{1,2}[\s/-]\w{3,9}[\s/-]\d{4})/i)
+    || html.match(/(\d{4}-\d{2}-\d{2})T/); // ISO format in JSON-LD
+  r.listing_date = dateMatch ? dateMatch[1] : null;
+
+  // Listing status — detect sold/under offer badges
+  const statusLower = html.toLowerCase();
+  if (statusLower.includes('sold') && (statusLower.includes('status-sold') || statusLower.includes('badge-sold') || statusLower.includes('>sold<'))) r.listing_status = 'sold';
+  else if (statusLower.includes('under offer') || statusLower.includes('offer accepted')) r.listing_status = 'under_offer';
+  else if (statusLower.includes('price reduced') || statusLower.includes('price drop')) r.listing_status = 'price_reduced';
+  else r.listing_status = 'active';
+
   // Levies and rates
   const levyMatch = bodyText.match(/Lev(?:y|ies)[:\s]*R\s*([\d\s]+)/i);
   const rateMatch = bodyText.match(/Rates[:\s]*R\s*([\d\s]+)/i);
@@ -179,9 +191,39 @@ async function extractListing(_unused, url) {
 async function storeListing(listing, meta, listingUrl) {
   const erfNumber = `PP_${meta.id}`;
 
-  // Skip if already stored
-  const { rows: existing } = await pool.query('SELECT id FROM properties WHERE erf_number = $1', [erfNumber]);
-  if (existing.length > 0) return { id: existing[0].id, skipped: true };
+  // Check if already stored — update key fields if so (price, status, last_checked)
+  const { rows: existing } = await pool.query('SELECT id, asking_price, listing_status FROM properties WHERE erf_number = $1', [erfNumber]);
+  if (existing.length > 0) {
+    const prop = existing[0];
+    const newStatus = listing.listing_status || 'active';
+    const priceChanged = listing.price && prop.asking_price && listing.price !== prop.asking_price;
+    const statusChanged = newStatus !== (prop.listing_status || 'active');
+
+    // Track price changes
+    if (priceChanged) {
+      await pool.query(
+        "UPDATE properties SET price_history = COALESCE(price_history, '[]'::jsonb) || $1::jsonb WHERE id = $2",
+        [JSON.stringify([{ price: prop.asking_price, date: new Date().toISOString().split('T')[0], event: 'price_change' }]), prop.id]
+      );
+    }
+
+    // Update the listing
+    await pool.query(
+      `UPDATE properties SET
+        asking_price = COALESCE($1, asking_price),
+        listing_status = $2,
+        last_checked_at = NOW(),
+        last_scraped_at = NOW()
+        ${statusChanged ? ", status_changed_at = NOW()" : ""}
+      WHERE id = $3`,
+      [listing.price || null, newStatus, prop.id]
+    );
+
+    if (priceChanged) console.log(`  PRICE CHANGE: ${erfNumber} R${prop.asking_price} → R${listing.price}`);
+    if (statusChanged) console.log(`  STATUS CHANGE: ${erfNumber} ${prop.listing_status} → ${newStatus}`);
+
+    return { id: prop.id, skipped: true, updated: priceChanged || statusChanged };
+  }
 
   // Derive suburb/city from URL path
   const suburb = meta.suburb.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -198,8 +240,8 @@ async function storeListing(listing, meta, listingUrl) {
       levies, rates_and_taxes, parking_spaces,
       pet_friendly, furnished, description,
       agent_name, agency_name,
-      listing_image_url, last_scraped_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,NOW())
+      listing_image_url, last_scraped_at, listing_status, listing_date, first_scraped_at, last_checked_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,NOW(),$23,$24,NOW(),NOW())
     ON CONFLICT (erf_number) DO NOTHING RETURNING id`,
     [
       erfNumber, title, suburb, cityRegion, province,
@@ -209,6 +251,8 @@ async function storeListing(listing, meta, listingUrl) {
       listing.pet_friendly || null, listing.furnished || null, listing.description,
       listing.agent_name, listing.agency_name,
       listing.photos[0] || null,
+      listing.listing_status || 'active',
+      listing.listing_date || null,
     ]
   );
 
