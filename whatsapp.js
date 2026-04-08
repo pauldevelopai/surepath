@@ -165,7 +165,13 @@ async function runTeaseAsync(from, phoneNumber, url) {
     const conv = await getConversation(phoneNumber);
     if (conv?.tease_data && conv?.listing_url === url) {
       const tease = typeof conv.tease_data === 'string' ? JSON.parse(conv.tease_data) : conv.tease_data;
-      if (tease.nicoTease) {
+      // Only reuse if it's a real Nico tease, not a fallback from when API credits were empty
+      const isFallbackTease = !tease.nicoTease ||
+        tease.nicoTease.includes('Get the full report for deeds') ||
+        tease.nicoTease.includes('Photos look clean from what we can see') ||
+        tease.nicoTease.startsWith('Key concerns:') ||
+        (tease.nicoTease.length < 60 && !tease.nicoTease.includes('.'));
+      if (tease.nicoTease && !isFallbackTease) {
         console.log(`[tease] Same URL sent again by same user — reusing stored tease`);
 
         const address = tease.address;
