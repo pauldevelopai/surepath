@@ -2,118 +2,76 @@ import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { withAuth } from "@/lib/auth";
 
-// Source table configs — what to query and how to build preview text
-const SOURCES = [
+interface SourceConfig {
+  key: string;
+  label: string;
+  layer: string;
+  table: string;         // primary table name
+  alias: string;         // alias used in queries
+  listQuery: string;     // base query WITHOUT WHERE/ORDER — we add those
+  countQuery: string;    // count query for summary card
+  orderBy: string;       // ORDER BY clause
+}
+
+const SOURCES: SourceConfig[] = [
   {
-    key: "area_risk_data",
-    label: "Area Risk Data",
-    layer: "live / crime",
-    query: `SELECT id, suburb, city, risk_type, risk_level, risk_score, source_name, source_url, data_date, rag_status, created_at,
-              details::text AS details_json
-            FROM area_risk_data ORDER BY created_at DESC`,
-    countQuery: `SELECT COUNT(*) as total,
-      COUNT(*) FILTER (WHERE rag_status = 'approved') as approved,
-      COUNT(*) FILTER (WHERE rag_status = 'rejected') as rejected,
-      COUNT(*) FILTER (WHERE rag_status = 'pending_review') as pending_review,
-      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'area_risk_data' AND rc.source_id = area_risk_data.id)) as in_rag
-    FROM area_risk_data`,
-    preview: (r: Record<string, unknown>) => `${r.risk_type}: ${r.suburb}, ${r.city} — ${r.risk_level || ''} (score ${r.risk_score || '?'})`,
+    key: "area_risk_data", label: "Area Risk Data", layer: "live / crime", table: "area_risk_data", alias: "ard",
+    listQuery: `SELECT ard.id, ard.suburb, ard.city, ard.risk_type, ard.risk_level, ard.risk_score, ard.source_name, ard.source_url, ard.data_date, ard.rag_status, ard.created_at, ard.details::text AS details_json FROM area_risk_data ard`,
+    countQuery: `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE rag_status='approved') as approved, COUNT(*) FILTER (WHERE rag_status='rejected') as rejected, COUNT(*) FILTER (WHERE rag_status='pending_review') as pending_review, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table='area_risk_data' AND rc.source_id=area_risk_data.id)) as in_rag FROM area_risk_data`,
+    orderBy: "ard.created_at DESC",
   },
   {
-    key: "properties",
-    label: "Properties",
-    layer: "property",
-    query: `SELECT id, suburb, city, address_raw, asking_price, bedrooms, property_type, rag_status, created_at
-            FROM properties WHERE suburb IS NOT NULL ORDER BY created_at DESC`,
-    countQuery: `SELECT COUNT(*) as total,
-      COUNT(*) FILTER (WHERE rag_status = 'approved') as approved,
-      COUNT(*) FILTER (WHERE rag_status = 'rejected') as rejected,
-      COUNT(*) FILTER (WHERE rag_status = 'pending_review') as pending_review,
-      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'properties' AND rc.source_id = properties.id)) as in_rag
-    FROM properties WHERE suburb IS NOT NULL`,
-    preview: (r: Record<string, unknown>) => `${r.address_raw || r.suburb} — ${r.bedrooms || '?'}bed ${r.property_type || ''} R${r.asking_price ? Number(r.asking_price).toLocaleString() : '?'}`,
+    key: "properties", label: "Properties", layer: "property", table: "properties", alias: "p",
+    listQuery: `SELECT p.id, p.suburb, p.city, p.address_raw, p.asking_price, p.bedrooms, p.property_type, p.rag_status, p.created_at FROM properties p WHERE p.suburb IS NOT NULL`,
+    countQuery: `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE rag_status='approved') as approved, COUNT(*) FILTER (WHERE rag_status='rejected') as rejected, COUNT(*) FILTER (WHERE rag_status='pending_review') as pending_review, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table='properties' AND rc.source_id=properties.id)) as in_rag FROM properties WHERE suburb IS NOT NULL`,
+    orderBy: "p.created_at DESC",
   },
   {
-    key: "holly_evidence",
-    label: "Vision Evidence",
-    layer: "evidence",
-    query: `SELECT he.id, he.category, he.severity, he.observation, he.what_i_see, p.suburb, p.city, he.rag_status, he.created_at
-            FROM holly_evidence he JOIN properties p ON p.id = he.property_id ORDER BY he.created_at DESC`,
-    countQuery: `SELECT COUNT(*) as total,
-      COUNT(*) FILTER (WHERE rag_status = 'approved') as approved,
-      COUNT(*) FILTER (WHERE rag_status = 'rejected') as rejected,
-      COUNT(*) FILTER (WHERE rag_status = 'pending_review') as pending_review,
-      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'holly_evidence' AND rc.source_id = holly_evidence.id)) as in_rag
-    FROM holly_evidence`,
-    preview: (r: Record<string, unknown>) => `[${r.severity}] ${r.category}: ${((r.what_i_see || r.observation || '') as string).substring(0, 120)}`,
+    key: "holly_evidence", label: "Vision Evidence", layer: "evidence", table: "holly_evidence", alias: "he",
+    listQuery: `SELECT he.id, he.category, he.severity, he.observation, he.what_i_see, he.defect_or_risk, he.sa_context, he.cost_min_zar, he.cost_max_zar, p.suburb, p.city, he.rag_status, he.created_at FROM holly_evidence he JOIN properties p ON p.id = he.property_id`,
+    countQuery: `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE rag_status='approved') as approved, COUNT(*) FILTER (WHERE rag_status='rejected') as rejected, COUNT(*) FILTER (WHERE rag_status='pending_review') as pending_review, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table='holly_evidence' AND rc.source_id=holly_evidence.id)) as in_rag FROM holly_evidence`,
+    orderBy: "he.created_at DESC",
   },
   {
-    key: "security_companies",
-    label: "Security Companies",
-    layer: "security_company",
-    query: `SELECT id, name, province, armed_response, google_rating, rag_status, created_at
-            FROM security_companies ORDER BY name`,
-    countQuery: `SELECT COUNT(*) as total,
-      COUNT(*) FILTER (WHERE rag_status = 'approved') as approved,
-      COUNT(*) FILTER (WHERE rag_status = 'rejected') as rejected,
-      COUNT(*) FILTER (WHERE rag_status = 'pending_review') as pending_review,
-      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'security_companies' AND rc.source_id = security_companies.id)) as in_rag
-    FROM security_companies`,
-    preview: (r: Record<string, unknown>) => `${r.name} — ${r.province || '?'} ${r.armed_response ? '[armed]' : ''} ${r.google_rating ? r.google_rating + '★' : ''}`,
+    key: "security_companies", label: "Security Companies", layer: "security_company", table: "security_companies", alias: "sc",
+    listQuery: `SELECT sc.id, sc.name, sc.province, sc.armed_response, sc.google_rating, sc.google_review_count, sc.rag_status, sc.created_at FROM security_companies sc`,
+    countQuery: `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE rag_status='approved') as approved, COUNT(*) FILTER (WHERE rag_status='rejected') as rejected, COUNT(*) FILTER (WHERE rag_status='pending_review') as pending_review, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table='security_companies' AND rc.source_id=security_companies.id)) as in_rag FROM security_companies`,
+    orderBy: "sc.name",
   },
   {
-    key: "property_reports",
-    label: "Property Reports",
-    layer: "report",
-    query: `SELECT pr.id, pr.decision, pr.property_id, p.suburb, p.city, p.address_raw, pr.rag_status, pr.created_at
-            FROM property_reports pr JOIN properties p ON p.id = pr.property_id ORDER BY pr.created_at DESC`,
-    countQuery: `SELECT COUNT(*) as total,
-      COUNT(*) FILTER (WHERE rag_status = 'approved') as approved,
-      COUNT(*) FILTER (WHERE rag_status = 'rejected') as rejected,
-      COUNT(*) FILTER (WHERE rag_status = 'pending_review') as pending_review,
-      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'property_reports' AND rc.source_id = property_reports.id)) as in_rag
-    FROM property_reports`,
-    preview: (r: Record<string, unknown>) => `${r.address_raw || r.suburb}: ${r.decision || 'no decision'}`,
+    key: "property_reports", label: "Property Reports", layer: "report", table: "property_reports", alias: "pr",
+    listQuery: `SELECT pr.id, pr.decision, pr.decision_reasoning, pr.property_id, p.suburb, p.city, p.address_raw, pr.rag_status, pr.created_at FROM property_reports pr JOIN properties p ON p.id = pr.property_id`,
+    countQuery: `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE rag_status='approved') as approved, COUNT(*) FILTER (WHERE rag_status='rejected') as rejected, COUNT(*) FILTER (WHERE rag_status='pending_review') as pending_review, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table='property_reports' AND rc.source_id=property_reports.id)) as in_rag FROM property_reports`,
+    orderBy: "pr.created_at DESC",
   },
   {
-    key: "data_feedback",
-    label: "User Feedback",
-    layer: "feedback",
-    query: `SELECT df.id, df.section, df.rating, df.feedback, df.finding_hash, p.suburb, df.rag_status, df.created_at
-            FROM data_feedback df LEFT JOIN properties p ON p.id = df.property_id ORDER BY df.created_at DESC`,
-    countQuery: `SELECT COUNT(*) as total,
-      COUNT(*) FILTER (WHERE rag_status = 'approved') as approved,
-      COUNT(*) FILTER (WHERE rag_status = 'rejected') as rejected,
-      COUNT(*) FILTER (WHERE rag_status = 'pending_review') as pending_review,
-      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'data_feedback' AND rc.source_id = data_feedback.id)) as in_rag
-    FROM data_feedback`,
-    preview: (r: Record<string, unknown>) => `[${r.rating || '?'}] ${r.section}: ${((r.feedback || r.finding_hash || '') as string).substring(0, 100)}`,
+    key: "data_feedback", label: "User Feedback", layer: "feedback", table: "data_feedback", alias: "df",
+    listQuery: `SELECT df.id, df.section, df.rating, df.feedback, df.finding_hash, df.page_url, p.suburb, df.rag_status, df.created_at FROM data_feedback df LEFT JOIN properties p ON p.id = df.property_id`,
+    countQuery: `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE rag_status='approved') as approved, COUNT(*) FILTER (WHERE rag_status='rejected') as rejected, COUNT(*) FILTER (WHERE rag_status='pending_review') as pending_review, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table='data_feedback' AND rc.source_id=data_feedback.id)) as in_rag FROM data_feedback`,
+    orderBy: "df.created_at DESC",
   },
   {
-    key: "rag_knowledge_entries",
-    label: "Knowledge Base",
-    layer: "knowledge",
-    query: `SELECT id, name, category, severity, status, description, visual_indicators, sa_context,
-              cost_min_zar, cost_max_zar, source_url, rag_status, created_at
-            FROM rag_knowledge_entries ORDER BY created_at DESC`,
-    countQuery: `SELECT COUNT(*) as total,
-      COUNT(*) FILTER (WHERE rag_status = 'approved') as approved,
-      COUNT(*) FILTER (WHERE rag_status = 'rejected') as rejected,
-      COUNT(*) FILTER (WHERE rag_status = 'pending_review') as pending_review,
-      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'rag_knowledge_entries' AND rc.source_id = rag_knowledge_entries.id)) as in_rag
-    FROM rag_knowledge_entries`,
-    preview: (r: Record<string, unknown>) => `[${r.category}] ${r.name} — severity ${r.severity}/5 (${r.status})`,
+    key: "rag_knowledge_entries", label: "Knowledge Base", layer: "knowledge", table: "rag_knowledge_entries", alias: "rke",
+    listQuery: `SELECT rke.id, rke.name, rke.category, rke.severity, rke.status, rke.description, rke.visual_indicators, rke.sa_context, rke.cost_min_zar, rke.cost_max_zar, rke.source_url, rke.rag_status, rke.created_at FROM rag_knowledge_entries rke`,
+    countQuery: `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE rag_status='approved') as approved, COUNT(*) FILTER (WHERE rag_status='rejected') as rejected, COUNT(*) FILTER (WHERE rag_status='pending_review') as pending_review, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table='rag_knowledge_entries' AND rc.source_id=rag_knowledge_entries.id)) as in_rag FROM rag_knowledge_entries`,
+    orderBy: "rke.created_at DESC",
+  },
+  {
+    key: "crime_incidents", label: "Crime Data (by suburb)", layer: "crime", table: "crime_incidents", alias: "ci",
+    listQuery: `SELECT MIN(ci.id) as id, ci.suburb, ci.city, COUNT(*) as incident_count, COUNT(DISTINCT ci.incident_type) as type_count, MAX(ci.incident_date) as latest_date, MIN(ci.incident_date) as earliest_date, 'approved' as rag_status, MAX(ci.created_at) as created_at FROM crime_incidents ci GROUP BY ci.suburb, ci.city`,
+    countQuery: `SELECT COUNT(DISTINCT (suburb||'|'||city)) as total, COUNT(DISTINCT (suburb||'|'||city)) as approved, 0 as rejected, 0 as pending_review, (SELECT COUNT(*) FROM rag_chunks WHERE layer='crime') as in_rag FROM crime_incidents`,
+    orderBy: "incident_count DESC",
   },
 ];
 
 export const GET = withAuth(async (req: NextRequest) => {
   const source = req.nextUrl.searchParams.get("source");
   const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
-  const filter = req.nextUrl.searchParams.get("filter") || "all"; // all, approved, rejected, pending_review, not_in_rag
+  const filter = req.nextUrl.searchParams.get("filter") || "all";
   const limit = 50;
   const offset = (page - 1) * limit;
 
-  // Summary view — counts per source
+  // Summary view
   if (!source) {
     const summary = [];
     for (const s of SOURCES) {
@@ -127,45 +85,50 @@ export const GET = withAuth(async (req: NextRequest) => {
     return NextResponse.json({ sources: summary });
   }
 
-  // Detail view — paginated rows for a specific source
+  // Detail view
   const cfg = SOURCES.find(s => s.key === source);
   if (!cfg) return NextResponse.json({ error: "Unknown source" }, { status: 400 });
 
-  let filterClause = "";
-  if (filter === "approved") filterClause = " AND rag_status = 'approved'";
-  else if (filter === "rejected") filterClause = " AND rag_status = 'rejected'";
-  else if (filter === "pending_review") filterClause = " AND rag_status = 'pending_review'";
-  else if (filter === "not_in_rag") filterClause = ` AND NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = '${source}' AND rc.source_id = ${source === "property_reports" ? "property_reports" : source === "holly_evidence" ? "holly_evidence" : source === "data_feedback" ? "data_feedback" : source}.id)`;
+  try {
+    // Build filter clause using the alias
+    let filterClause = "";
+    if (filter === "approved") filterClause = ` AND ${cfg.alias}.rag_status = 'approved'`;
+    else if (filter === "rejected") filterClause = ` AND ${cfg.alias}.rag_status = 'rejected'`;
+    else if (filter === "pending_review") filterClause = ` AND ${cfg.alias}.rag_status = 'pending_review'`;
+    else if (filter === "not_in_rag") filterClause = ` AND NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = '${cfg.table}' AND rc.source_id = ${cfg.alias}.id)`;
 
-  // Wrap the base query with filter and pagination
-  const baseQuery = cfg.query.replace(" ORDER BY", filterClause + " ORDER BY");
-  const rows = await query(baseQuery + ` LIMIT ${limit} OFFSET ${offset}`);
+    // For grouped queries (crime), filters don't apply the same way
+    const isGrouped = cfg.listQuery.includes("GROUP BY");
+    const havingClause = isGrouped && filter !== "all" ? "" : ""; // crime doesn't have rag_status per row
 
-  // Get total count with filter
-  const countBase = cfg.countQuery.split("FROM")[1];
-  let countSql = `SELECT COUNT(*) as cnt FROM ${countBase}`;
-  if (filter !== "all") {
-    if (filter === "not_in_rag") {
-      countSql = `SELECT COUNT(*) as cnt FROM ${source} WHERE NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = '${source}' AND rc.source_id = ${source}.id)`;
+    // Build the full query
+    const hasWhere = cfg.listQuery.includes(" WHERE ");
+    const connector = isGrouped ? " HAVING true" : (hasWhere ? "" : " WHERE true");
+    const fullQuery = `${cfg.listQuery}${connector}${isGrouped ? "" : filterClause} ORDER BY ${cfg.orderBy} LIMIT ${limit} OFFSET ${offset}`;
+
+    const rows = await query(fullQuery);
+
+    // Count
+    let total = 0;
+    if (filter === "all" || isGrouped) {
+      // Use a simple count
+      const countRows = await query(`SELECT COUNT(*) as cnt FROM (${cfg.listQuery}) sub`);
+      total = parseInt(String(countRows[0].cnt));
+    } else if (filter === "not_in_rag") {
+      const countRows = await query(`SELECT COUNT(*) as cnt FROM ${cfg.table} WHERE NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = '${cfg.table}' AND rc.source_id = ${cfg.table}.id)`);
+      total = parseInt(String(countRows[0].cnt));
     } else {
-      countSql = `SELECT COUNT(*) as cnt FROM ${source} WHERE rag_status = '${filter}'`;
+      const countRows = await query(`SELECT COUNT(*) as cnt FROM ${cfg.table} WHERE rag_status = $1`, [filter]);
+      total = parseInt(String(countRows[0].cnt));
     }
-  } else {
-    countSql = `SELECT COUNT(*) as cnt FROM ${source}`;
-  }
-  const countResult = await query(countSql).catch(() => [{ cnt: 0 }]);
-  const total = parseInt(String(countResult[0].cnt));
 
-  return NextResponse.json({
-    source: cfg.key,
-    label: cfg.label,
-    layer: cfg.layer,
-    rows,
-    total,
-    page,
-    pages: Math.ceil(total / limit),
-    filter,
-  });
+    return NextResponse.json({
+      source: cfg.key, label: cfg.label, layer: cfg.layer,
+      rows, total, page, pages: Math.ceil(total / limit), filter,
+    });
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message, source: cfg.key }, { status: 500 });
+  }
 });
 
 export const POST = withAuth(async (req: NextRequest) => {
@@ -173,21 +136,17 @@ export const POST = withAuth(async (req: NextRequest) => {
 
   if (action === "update_status") {
     if (!source || !ids || !Array.isArray(ids) || !status) {
-      return NextResponse.json({ error: "source, ids (array), and status required" }, { status: 400 });
+      return NextResponse.json({ error: "source, ids, and status required" }, { status: 400 });
     }
     if (!["approved", "rejected", "pending_review"].includes(status)) {
-      return NextResponse.json({ error: "status must be approved, rejected, or pending_review" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid status" }, { status: 400 });
     }
     const validSources = SOURCES.map(s => s.key);
     if (!validSources.includes(source)) {
-      return NextResponse.json({ error: "Invalid source table" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid source" }, { status: 400 });
     }
-
-    const result = await query(
-      `UPDATE ${source} SET rag_status = $1 WHERE id = ANY($2::int[])`,
-      [status, ids]
-    );
-    return NextResponse.json({ ok: true, updated: result.length || ids.length });
+    await query(`UPDATE ${source} SET rag_status = $1 WHERE id = ANY($2::int[])`, [status, ids]);
+    return NextResponse.json({ ok: true });
   }
 
   if (action === "bulk_approve_all") {
@@ -196,13 +155,6 @@ export const POST = withAuth(async (req: NextRequest) => {
     return NextResponse.json({ ok: true });
   }
 
-  if (action === "bulk_reject_all") {
-    if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
-    await query(`UPDATE ${source} SET rag_status = 'rejected' WHERE rag_status != 'approved'`);
-    return NextResponse.json({ ok: true });
-  }
-
-  // Activate/deactivate knowledge entries (changes status field, not rag_status)
   if (action === "activate_knowledge") {
     if (!ids || !Array.isArray(ids)) return NextResponse.json({ error: "ids required" }, { status: 400 });
     await query("UPDATE rag_knowledge_entries SET status = 'active' WHERE id = ANY($1::int[])", [ids]);
