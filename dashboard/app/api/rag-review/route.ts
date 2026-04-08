@@ -147,6 +147,11 @@ export const POST = withAuth(async (req: NextRequest) => {
       return NextResponse.json({ error: "Invalid source" }, { status: 400 });
     }
     await query(`UPDATE ${source} SET rag_status = $1 WHERE id = ANY($2::int[])`, [status, ids]);
+    // For knowledge entries: approved = active, rejected = draft
+    if (source === "rag_knowledge_entries") {
+      if (status === "approved") await query("UPDATE rag_knowledge_entries SET status = 'active' WHERE id = ANY($1::int[])", [ids]);
+      else if (status === "rejected") await query("UPDATE rag_knowledge_entries SET status = 'draft' WHERE id = ANY($1::int[])", [ids]);
+    }
     return NextResponse.json({ ok: true });
   }
 
@@ -165,6 +170,11 @@ export const POST = withAuth(async (req: NextRequest) => {
     else if (f === "pending_review") where = "WHERE rag_status = 'pending_review'";
 
     await query(`UPDATE ${source} SET rag_status = $1 ${where}`, [status]);
+    // For knowledge entries: approved = active, rejected = draft
+    if (source === "rag_knowledge_entries") {
+      if (status === "approved") await query(`UPDATE rag_knowledge_entries SET status = 'active' ${where}`);
+      else if (status === "rejected") await query(`UPDATE rag_knowledge_entries SET status = 'draft' ${where}`);
+    }
     return NextResponse.json({ ok: true });
   }
 
