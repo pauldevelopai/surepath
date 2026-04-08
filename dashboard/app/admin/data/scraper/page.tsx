@@ -240,77 +240,15 @@ export default function ScraperPage() {
         </div>
       )}
 
-      {/* RAG Knowledge Base status */}
-      <div className="mb-4 bg-[#0D1B2A] rounded-lg p-4 border border-gray-800">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-bold text-gray-200">RAG Knowledge Base</span>
-            <span className="text-xs text-gray-500 font-mono">{ragTotal.toLocaleString()} chunks</span>
-            {totalRagPending > 0 && (
-              <span className="text-xs text-amber-400 font-mono">{totalRagPending.toLocaleString()} pending</span>
-            )}
-          </div>
-          <div className="flex items-center gap-3">
-            {ragLastSeeded && (
-              <span className="text-[10px] text-gray-500">
-                Last seeded: {new Date(ragLastSeeded).toLocaleString()}
-              </span>
-            )}
-            <button
-              onClick={() => post({ action: "rag_reseed" })}
-              disabled={ragReseedRunning}
-              className={`px-3 py-1 rounded text-xs font-semibold ${ragReseedRunning ? "bg-gray-700 text-gray-400" : "bg-amber-600 text-white hover:bg-amber-700"}`}
-            >
-              {ragReseedRunning ? "Re-seeding..." : "Re-seed RAG"}
-            </button>
-          </div>
+      {/* RAG summary link */}
+      <div className="mb-4 bg-[#0D1B2A] rounded-lg p-3 border border-gray-800 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-bold text-gray-200">Knowledge Base</span>
+          <span className="text-xs text-gray-500 font-mono">{ragTotal.toLocaleString()} chunks</span>
+          {totalRagPending > 0 && <span className="text-xs text-amber-400 font-mono">{totalRagPending.toLocaleString()} pending</span>}
+          {ragLastSeeded && <span className="text-[10px] text-gray-600">seeded {new Date(ragLastSeeded).toLocaleString()}</span>}
         </div>
-
-        {/* Layer breakdown */}
-        {ragTotal > 0 && (
-          <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3">
-            {Object.entries(ragLayers)
-              .sort(([, a], [, b]) => b - a)
-              .map(([layer, count]) => {
-                const pct = Math.round((count / ragTotal) * 100);
-                return (
-                  <div key={layer} className="flex items-center gap-1.5">
-                    <span className={"w-2 h-2 rounded-full " + (layerColors[layer] || "bg-gray-500")} />
-                    <span className="text-[11px] text-gray-300">{layer}</span>
-                    <span className="text-[10px] text-gray-500 font-mono">{count.toLocaleString()} ({pct}%)</span>
-                  </div>
-                );
-              })}
-          </div>
-        )}
-
-        {/* RAG pending data — what needs to be seeded */}
-        {totalRagPending > 0 && (
-          <div className="border-t border-gray-700 pt-2 mt-2">
-            <div className="text-[10px] text-amber-400 font-semibold mb-1">Data waiting for RAG:</div>
-            <div className="grid grid-cols-4 gap-2">
-              {Object.entries(ragPending)
-                .filter(([, v]) => v.pending > 0)
-                .sort(([, a], [, b]) => b.pending - a.pending)
-                .map(([source, info]) => (
-                  <div key={source} className="text-[10px] text-gray-400 flex justify-between bg-gray-800/50 px-2 py-1 rounded">
-                    <span>{source.replace(/_/g, " ")}</span>
-                    <span className="text-amber-400 font-mono">{info.pending.toLocaleString()} &rarr; {info.layer}</span>
-                  </div>
-                ))}
-            </div>
-            <div className="text-[9px] text-gray-600 mt-1">Run &quot;Re-seed RAG&quot; to embed pending data into the knowledge base</div>
-          </div>
-        )}
-
-        {/* RAG re-seed log */}
-        {getLog("rag-reseed").length > 0 && (
-          <div className="border-t border-gray-700 pt-2 mt-2 font-mono text-[10px] max-h-32 overflow-y-auto">
-            {getLog("rag-reseed").slice(-20).map((line, i) => (
-              <div key={i} className={line.includes("ERROR") ? "text-red-400" : "text-gray-500"}>{line}</div>
-            ))}
-          </div>
-        )}
+        <a href="/admin/data/knowledge-base" className="px-3 py-1 bg-amber-600 text-white rounded text-xs font-semibold hover:bg-amber-700">Manage</a>
       </div>
 
       {/* Running process status bar */}

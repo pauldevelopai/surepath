@@ -76,7 +76,7 @@ export default function RAGReviewPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-1">Knowledge Base</h1>
+      <h1 className="text-2xl font-bold mb-1">RAG Review</h1>
       <p className="text-sm text-gray-500 mb-4">Review scraped data before it gets seeded. Pending items need your approval. Only approved items enter RAG.</p>
 
       {/* Source summary cards */}
