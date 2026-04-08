@@ -949,31 +949,14 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
       return;
     }
 
-    // Bug report: "bug: <message>" or "problem: <message>"
-    const bugMatch = body.match(/^(?:bug|problem|issue|broken)[:\s]+(.+)/i);
-    if (bugMatch) {
-      const bugText = bugMatch[1].trim();
-      await pool.query(
-        "INSERT INTO data_feedback (property_id, section, feedback, rating, page_url) VALUES ($1, 'bug', $2, 'bug_report', $3)",
-        [conv?.property_id || null, bugText, `whatsapp:${phoneNumber}`]
-      );
-      console.log(`[whatsapp] Bug report from ${phoneNumber}: "${bugText}"`);
-      await sendWhatsApp(from, "Thanks for reporting that — we'll look into it. Sorry for the trouble.\n\nTo check a property, send a listing link anytime.");
-      res.type('text/xml').send('<Response></Response>');
-      return;
-    }
-
     // Help command
     if (['help', 'commands', 'menu', '?'].includes(normalised)) {
       await sendWhatsApp(from,
-        "*Surepath Commands*\n\n" +
-        "📋 Send a *Property24* or *PrivateProperty* listing link to get started\n\n" +
-        "*1* — Get the full report (after preview)\n" +
-        "*hello* / *hi* — Start fresh\n" +
-        "*feedback:* your message — Send us feedback\n" +
-        "*bug:* your message — Report a problem\n" +
-        "*help* — Show this menu\n\n" +
-        "Questions? Just type and we'll get back to you."
+        "*Surepath*\n\n" +
+        "Send a *Property24* or *PrivateProperty* listing link to get a property checked.\n\n" +
+        "*1* — Get the full report\n" +
+        "*feedback:* your message — Tell us what you think\n" +
+        "*help* — Show this menu"
       );
       res.type('text/xml').send('<Response></Response>');
       return;
@@ -1414,7 +1397,8 @@ async function runPipelineAsync(order, conv) {
 
     const reportMsg = `*Your Surepath Report is Ready*\n\n` +
       `We've checked the listing photos, Street View, satellite imagery, deeds history, crime stats, infrastructure risks, and compliance requirements.\n\n` +
-      `If you have questions about what we found, reply here.\n\nTo check another property, send me a new listing link.`;
+      `To check another property, send a new listing link.\n\n` +
+      `We'd love to hear what you think — type *feedback:* followed by your thoughts.`;
 
     if (publicPdfUrl) {
       console.log(`[pipeline] Sending PDF: ${publicPdfUrl}`);
