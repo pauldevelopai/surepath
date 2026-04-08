@@ -314,8 +314,9 @@ async function generateTease(extractedData) {
             ? topRiskFlags.join('; ')
             : 'none found in first 3 photos';
 
+          const { getModel } = require('./model-config');
           const message = await anthropicClient.messages.create({
-            model: 'claude-sonnet-4-6',
+            model: getModel('tease'),
             max_tokens: 150,
             system: "You are Nico, a South African ex-property agent with 20 years experience, aged 38-42. Calm, direct, slightly contrarian. Write exactly 2 sentences for a potential buyer about this property. Rules: NEVER say 'no red flags' or 'nothing jumped out' or 'looks clean' — that kills curiosity. NEVER mention photos, street view, or what you can/cannot see. NEVER mention the report, Surepath, deeds, or crime stats. Instead: make a specific, interesting observation about the property — comment on the price vs area, the size, the layout implied by bedrooms/bathrooms, the suburb's reputation, or what a smart buyer should ask about. If risk flags were found, reference them directly. Be conversational South African English. Make the buyer want to know more.",
             messages: [{
@@ -329,7 +330,7 @@ async function generateTease(extractedData) {
           // Log cost
           try {
             const { logClaude } = require('./costs');
-            await logClaude('claude-sonnet-4-6', message.usage.input_tokens, message.usage.output_tokens, 'tease/nico');
+            await logClaude(getModel('tease'), message.usage.input_tokens, message.usage.output_tokens, 'tease/nico');
           } catch {}
         } catch (visionErr) {
           console.error(`[tease] Vision/Claude tease failed: ${visionErr.message} — falling back to listing data`);
@@ -345,9 +346,9 @@ async function generateTease(extractedData) {
         const bedsStr = extractedData.bedrooms ? `${extractedData.bedrooms} bedroom` : '';
         const locationStr = extractedData.address || 'this area';
         const resp = await anthropicClient.messages.create({
-          model: 'claude-sonnet-4-6',
+          model: getModel('tease'),
           max_tokens: 150,
-          system: "You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. Write exactly 2 sentences about this property for a potential buyer. Focus on the property details — size, price, location, what makes it interesting. NEVER say you haven't seen photos. NEVER mention missing data. Do NOT mention the full report, Surepath, deeds, crime stats, or what the report covers. Do not mention AI. Write in plain conversational South African English.",
+          system: "You are Nico, a South African ex-property agent with 20 years experience, aged 38-42. Calm, direct, slightly contrarian. Write exactly 2 sentences for a potential buyer about this property. Rules: NEVER say 'no red flags' or 'nothing jumped out' or 'looks clean' — that kills curiosity. NEVER mention photos, street view, or what you can/cannot see. NEVER mention the report, Surepath, deeds, or crime stats. Instead: make a specific, interesting observation about the property — comment on the price vs area, the size, the layout implied by bedrooms/bathrooms, the suburb's reputation, or what a smart buyer should ask about. If risk flags were found, reference them directly. Be conversational South African English. Make the buyer want to know more.",
           messages: [{ role: 'user', content: `Property: ${bedsStr} property at ${locationStr}. Asking ${priceStr}.` }],
         });
         nicoTease = resp.content[0].text;

@@ -24,7 +24,7 @@ async function extractFromDescription(description) {
   if (!description || description.length < 20) return null;
 
   const message = await client.messages.create({
-    model: 'claude-3-haiku-20240307',
+    model: require('./model-config').getModel('extract'),
     max_tokens: 2048,
     messages: [{
       role: 'user',
@@ -66,7 +66,7 @@ ${description}`,
   // Log cost
   try {
     const { logClaude } = require('./costs');
-    await logClaude('claude-3-haiku-20240307', message.usage.input_tokens, message.usage.output_tokens, 'extract/features');
+    await logClaude(require('./model-config').getModel('extract'), message.usage.input_tokens, message.usage.output_tokens, 'extract/features');
   } catch {}
 
   let text = message.content[0].text.trim();

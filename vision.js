@@ -9,8 +9,8 @@ const pool = require('./db');
 
 const client = new Anthropic();
 
+const { getModel } = require('./model-config');
 const BATCH_SIZE = 6;
-const VISION_MODEL = 'claude-sonnet-4-6';
 
 // ─── Nico: the vision reasoning system ────────────────────────────────
 // Nico sees the photo. Nico matches it against what he knows. Nico
@@ -521,7 +521,7 @@ async function analyseBatch(images, hfResults, propertyContext, propertyId) {
 
   const systemPrompt = await getNicoPrompt(propertyContext);
   const message = await client.messages.create({
-    model: VISION_MODEL,
+    model: getModel('vision'),
     max_tokens: 8192,
     system: systemPrompt,
     messages: [{ role: 'user', content }],
@@ -530,7 +530,7 @@ async function analyseBatch(images, hfResults, propertyContext, propertyId) {
   // Log cost
   try {
     const { logClaude } = require('./costs');
-    await logClaude(VISION_MODEL, message.usage.input_tokens, message.usage.output_tokens, 'nico/analyse_batch');
+    await logClaude(getModel('vision'), message.usage.input_tokens, message.usage.output_tokens, 'nico/analyse_batch');
   } catch {}
 
   const parsed = parseVisionResponse(message.content[0].text);
@@ -603,7 +603,7 @@ async function analyseBatch(images, hfResults, propertyContext, propertyId) {
               f.needs_inspection || null, // new column
               f.estimated_repair_cost_zar?.min || null, f.estimated_repair_cost_zar?.max || null,
               f.cost_source || 'nico_estimate',
-              VISION_MODEL, NICO_PROMPT_VERSION,
+              getModel('vision'), NICO_PROMPT_VERSION,
             ]
           );
         } catch (err) {
@@ -747,7 +747,7 @@ async function analysePropertyImages(imageUrls, propertyId) {
 async function analyseStreetView(imageBase64, propertyContext) {
   const streetViewPrompt = await getNicoPrompt(propertyContext, ['walls', 'damp', 'structure', 'roof', 'security']);
   const message = await client.messages.create({
-    model: VISION_MODEL,
+    model: getModel('vision'),
     max_tokens: 8192,
     system: streetViewPrompt,
     messages: [{
@@ -774,7 +774,7 @@ async function analyseStreetView(imageBase64, propertyContext) {
 async function analyseSatellite(imageBase64, propertyContext) {
   const satellitePrompt = await getNicoPrompt(propertyContext, ['roof', 'structure']);
   const message = await client.messages.create({
-    model: VISION_MODEL,
+    model: getModel('vision'),
     max_tokens: 8192,
     system: satellitePrompt,
     messages: [{
@@ -1214,7 +1214,7 @@ Return ONLY valid JSON. No markdown fences.`;
 
 async function analyseDBBoard(imageBase64) {
   const message = await client.messages.create({
-    model: VISION_MODEL,
+    model: getModel('vision'),
     max_tokens: 8192,
     system: DB_BOARD_PROMPT,
     messages: [{
@@ -1228,7 +1228,7 @@ async function analyseDBBoard(imageBase64) {
 
   try {
     const { logClaude } = require('./costs');
-    await logClaude(VISION_MODEL, message.usage.input_tokens, message.usage.output_tokens, 'vision/db_board');
+    await logClaude(getModel('vision'), message.usage.input_tokens, message.usage.output_tokens, 'vision/db_board');
   } catch {}
 
   return parseVisionResponse(message.content[0].text);
@@ -1274,7 +1274,7 @@ Return ONLY valid JSON. No markdown fences.`;
 
 async function analyseCeilingDeep(imageBase64) {
   const message = await client.messages.create({
-    model: VISION_MODEL,
+    model: getModel('vision'),
     max_tokens: 8192,
     system: CEILING_PROMPT,
     messages: [{
@@ -1288,7 +1288,7 @@ async function analyseCeilingDeep(imageBase64) {
 
   try {
     const { logClaude } = require('./costs');
-    await logClaude(VISION_MODEL, message.usage.input_tokens, message.usage.output_tokens, 'vision/ceiling_deep');
+    await logClaude(getModel('vision'), message.usage.input_tokens, message.usage.output_tokens, 'vision/ceiling_deep');
   } catch {}
 
   return parseVisionResponse(message.content[0].text);
@@ -1344,7 +1344,7 @@ Return ONLY valid JSON. No markdown fences.`;
 
 async function analyseExteriorSecurity(imageBase64) {
   const message = await client.messages.create({
-    model: VISION_MODEL,
+    model: getModel('vision'),
     max_tokens: 8192,
     system: SECURITY_PROMPT,
     messages: [{
@@ -1358,7 +1358,7 @@ async function analyseExteriorSecurity(imageBase64) {
 
   try {
     const { logClaude } = require('./costs');
-    await logClaude(VISION_MODEL, message.usage.input_tokens, message.usage.output_tokens, 'vision/exterior_security');
+    await logClaude(getModel('vision'), message.usage.input_tokens, message.usage.output_tokens, 'vision/exterior_security');
   } catch {}
 
   return parseVisionResponse(message.content[0].text);
@@ -1414,7 +1414,7 @@ Return ONLY valid JSON. No markdown fences.`;
 
 async function analysePlumbing(imageBase64) {
   const message = await client.messages.create({
-    model: VISION_MODEL,
+    model: getModel('vision'),
     max_tokens: 8192,
     system: PLUMBING_PROMPT,
     messages: [{
@@ -1428,7 +1428,7 @@ async function analysePlumbing(imageBase64) {
 
   try {
     const { logClaude } = require('./costs');
-    await logClaude(VISION_MODEL, message.usage.input_tokens, message.usage.output_tokens, 'vision/plumbing');
+    await logClaude(getModel('vision'), message.usage.input_tokens, message.usage.output_tokens, 'vision/plumbing');
   } catch {}
 
   return parseVisionResponse(message.content[0].text);
@@ -1465,7 +1465,7 @@ No markdown fences.`;
 
 async function analyseTemporalChange(currentBase64, historicalBase64) {
   const message = await client.messages.create({
-    model: VISION_MODEL,
+    model: getModel('vision'),
     max_tokens: 8192,
     system: TEMPORAL_PROMPT,
     messages: [{
@@ -1482,7 +1482,7 @@ async function analyseTemporalChange(currentBase64, historicalBase64) {
 
   try {
     const { logClaude } = require('./costs');
-    await logClaude(VISION_MODEL, message.usage.input_tokens, message.usage.output_tokens, 'vision/temporal_change');
+    await logClaude(getModel('vision'), message.usage.input_tokens, message.usage.output_tokens, 'vision/temporal_change');
   } catch {}
 
   return parseVisionResponse(message.content[0].text);

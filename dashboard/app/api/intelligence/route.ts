@@ -1023,6 +1023,18 @@ export const GET = withAuth(async (req: NextRequest) => {
     }});
   }
 
+  if (section === "model_config") {
+    try {
+      const modPath = path.resolve(process.cwd(), "..", "model-config.js");
+      const mc = await import(/* webpackIgnore: true */ modPath);
+      const loadConfig = mc.loadConfig || mc.default?.loadConfig;
+      const defaults = mc.DEFAULTS || mc.default?.DEFAULTS;
+      return NextResponse.json({ config: loadConfig(), defaults });
+    } catch (e) {
+      return NextResponse.json({ config: {}, defaults: {}, error: (e as Error).message });
+    }
+  }
+
   if (section === "prompts") {
     // Read prompts from the actual source files
     const fs = await import("fs");
@@ -1051,6 +1063,18 @@ export const GET = withAuth(async (req: NextRequest) => {
 export const POST = withAuth(async (req: NextRequest) => {
   const body = await req.json();
   const { action } = body;
+
+  if (action === "save_model_config") {
+    try {
+      const modPath = path.resolve(process.cwd(), "..", "model-config.js");
+      const mc = await import(/* webpackIgnore: true */ modPath);
+      const saveConfig = mc.saveConfig || mc.default?.saveConfig;
+      const saved = saveConfig(body.config || {});
+      return NextResponse.json({ ok: true, config: saved });
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    }
+  }
 
   if (action === "save_knowledge") {
     const { id, name, description, visual_indicators, sa_context, severity, cost_min_zar, cost_max_zar, category, status, image_id, image_url, property_id, original_finding } = body;

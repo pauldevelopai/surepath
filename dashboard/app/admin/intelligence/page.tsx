@@ -2,6 +2,91 @@
 import { useEffect, useState, useCallback } from "react";
 import { formatZAR, formatDate, formatDateTime, severityColor, humanize } from "@/lib/format";
 
+const AVAILABLE_MODELS = [
+  { id: "claude-3-haiku-20240307", label: "Haiku 3 (cheapest)", cost: "$0.25/$1.25 per M tokens" },
+  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", cost: "$0.80/$4 per M tokens" },
+  { id: "claude-sonnet-4-6", label: "Sonnet 4.6 (recommended)", cost: "$3/$15 per M tokens" },
+  { id: "claude-opus-4-6", label: "Opus 4.6 (most capable)", cost: "$15/$75 per M tokens" },
+];
+
+const ROLE_LABELS: Record<string, { label: string; desc: string }> = {
+  vision: { label: "Photo Analysis", desc: "Listing photos, Street View, satellite — the main cost driver" },
+  synthesis: { label: "Report Synthesis", desc: "Final property report with decisions and risk scores" },
+  tease: { label: "WhatsApp Tease", desc: "2-sentence property preview sent before the report" },
+  extract: { label: "Feature Extraction", desc: "Extract structured data from listing descriptions" },
+};
+
+function ModelConfig() {
+  const [config, setConfig] = useState<Record<string, string> | null>(null);
+  const [defaults, setDefaults] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/intelligence?section=model_config").then(r => r.json()).then(d => {
+      setConfig(d.config || {});
+      setDefaults(d.defaults || {});
+    });
+  }, []);
+
+  async function save() {
+    if (!config) return;
+    setSaving(true);
+    const r = await fetch("/api/intelligence", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "save_model_config", config }),
+    });
+    const d = await r.json();
+    if (d.ok) { setConfig(d.config); setMsg("Saved — takes effect on next API call"); }
+    else setMsg("Error: " + d.error);
+    setSaving(false);
+    setTimeout(() => setMsg(null), 4000);
+  }
+
+  if (!config) return null;
+
+  return (
+    <div className="bg-white border rounded-lg p-4 shadow-sm mb-6">
+      <div className="flex justify-between items-center mb-3">
+        <div>
+          <h2 className="font-bold text-sm">Model Configuration</h2>
+          <p className="text-[10px] text-gray-400">Choose which Claude model to use for each task. Lower models save money, higher models improve quality.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {msg && <span className="text-xs text-green-600">{msg}</span>}
+          <button onClick={save} disabled={saving} className="px-4 py-1.5 bg-[#0D1B2A] text-white rounded text-xs font-semibold hover:bg-gray-800 disabled:opacity-50">
+            {saving ? "Saving..." : "Save Changes"}
+          </button>
+        </div>
+      </div>
+      <div className="space-y-3">
+        {Object.entries(ROLE_LABELS).map(([role, info]) => (
+          <div key={role} className="flex items-center gap-4 bg-gray-50 rounded p-3">
+            <div className="w-40 shrink-0">
+              <div className="text-xs font-bold">{info.label}</div>
+              <div className="text-[9px] text-gray-400">{info.desc}</div>
+            </div>
+            <select
+              value={config[role] || defaults[role] || ""}
+              onChange={e => setConfig({ ...config, [role]: e.target.value })}
+              className="flex-1 border rounded px-2 py-1.5 text-sm bg-white"
+            >
+              {AVAILABLE_MODELS.map(m => (
+                <option key={m.id} value={m.id}>{m.label} — {m.cost}</option>
+              ))}
+            </select>
+            {config[role] !== defaults[role] && (
+              <button onClick={() => setConfig({ ...config, [role]: defaults[role] })} className="text-[9px] text-blue-500 hover:underline shrink-0">
+                Reset to default
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type A = Record<string, any>;
 
@@ -357,6 +442,9 @@ export default function IntelligenceHubPage() {
           </div>
         )}
       </div>
+
+      {/* ─── Model Configuration ─────────────────────────────────── */}
+      <ModelConfig />
 
       {/* ─── Test Nico ──────────────────────────────────────────────── */}
       <div className="bg-white border rounded-lg p-4 shadow-sm mb-6">

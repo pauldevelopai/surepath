@@ -299,7 +299,7 @@ async function synthesiseReport(propertyId, askingPrice) {
   console.log('[synthesis] Calling Claude Opus for report synthesis...');
 
   const message = await client.messages.create({
-    model: 'claude-3-haiku-20240307',
+    model: require('./model-config').getModel('synthesis'),
     max_tokens: 4096,
     system: SYNTHESIS_SYSTEM_PROMPT,
     messages: [{
@@ -376,7 +376,7 @@ ${JSON.stringify(context, null, 2)}`,
   // Log to api_costs table
   try {
     const { logClaude } = require('./costs');
-    await logClaude('claude-3-haiku-20240307', inputTokens, outputTokens, 'synthesis/report', propertyId);
+    await logClaude(require('./model-config').getModel('synthesis'), inputTokens, outputTokens, 'synthesis/report', propertyId);
   } catch {}
 
   // Step 6: Store in property_reports
