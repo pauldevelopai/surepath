@@ -883,6 +883,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
         const urls = [
           `https://${process.env.SERVER_HOST}/webhook/whatsapp`,
           `http://${process.env.SERVER_HOST}/webhook/whatsapp`,
+          `http://13.43.118.177/webhook/whatsapp`,
           `http://13.43.118.177:3000/webhook/whatsapp`,
         ];
         const valid = urls.some(url => twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN, signature, url, req.body));
