@@ -67,7 +67,7 @@ export default function MoneyPage() {
         <div className="grid grid-cols-2 gap-4">
           <div className="border rounded p-3">
             <div className="text-xs font-bold mb-1">PayFast</div>
-            <div className="text-xs text-gray-500 mb-2">Consumer payments for property reports (R149 per report)</div>
+            <div className="text-xs text-gray-500 mb-2">Consumer payments for property reports (R169 per report)</div>
             <a href="https://payf.st/zcg1y" target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">Open PayFast dashboard</a>
             <div className="mt-2 text-[10px] text-gray-400">
               Webhook: POST /api/payfast/notify<br />
@@ -93,7 +93,7 @@ export default function MoneyPage() {
         <div className="grid grid-cols-3 gap-4 text-xs">
           <div className="bg-gray-50 rounded p-3">
             <div className="text-gray-500 font-bold mb-1">Consumer Report</div>
-            <div className="text-2xl font-bold">R149</div>
+            <div className="text-2xl font-bold">R169</div>
             <div className="text-[10px] text-gray-400 mt-1">Per property report. Includes vision analysis, risk scoring, negotiation intel.</div>
           </div>
           <div className="bg-gray-50 rounded p-3">
