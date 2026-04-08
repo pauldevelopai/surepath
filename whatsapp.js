@@ -934,6 +934,51 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
     const url = extractURL(body);
     const hasListingURL = url && (isProperty24URL(url) || isPrivatePropertyURL(url));
 
+    // ── Global commands — work in any state ──────────────────────────
+    // Feedback: "feedback: <message>" or just "feedback <message>"
+    const feedbackMatch = body.match(/^feedback[:\s]+(.+)/i);
+    if (feedbackMatch) {
+      const feedbackText = feedbackMatch[1].trim();
+      await pool.query(
+        "INSERT INTO data_feedback (property_id, section, feedback, rating, page_url) VALUES ($1, 'whatsapp', $2, 'user_feedback', $3)",
+        [conv?.property_id || null, feedbackText, `whatsapp:${phoneNumber}`]
+      );
+      console.log(`[whatsapp] Feedback from ${phoneNumber}: "${feedbackText}"`);
+      await sendWhatsApp(from, "Thanks for your feedback — it's been logged and our team will review it. 🙏\n\nTo check a property, send a listing link anytime.");
+      res.type('text/xml').send('<Response></Response>');
+      return;
+    }
+
+    // Bug report: "bug: <message>" or "problem: <message>"
+    const bugMatch = body.match(/^(?:bug|problem|issue|broken)[:\s]+(.+)/i);
+    if (bugMatch) {
+      const bugText = bugMatch[1].trim();
+      await pool.query(
+        "INSERT INTO data_feedback (property_id, section, feedback, rating, page_url) VALUES ($1, 'bug', $2, 'bug_report', $3)",
+        [conv?.property_id || null, bugText, `whatsapp:${phoneNumber}`]
+      );
+      console.log(`[whatsapp] Bug report from ${phoneNumber}: "${bugText}"`);
+      await sendWhatsApp(from, "Thanks for reporting that — we'll look into it. Sorry for the trouble.\n\nTo check a property, send a listing link anytime.");
+      res.type('text/xml').send('<Response></Response>');
+      return;
+    }
+
+    // Help command
+    if (['help', 'commands', 'menu', '?'].includes(normalised)) {
+      await sendWhatsApp(from,
+        "*Surepath Commands*\n\n" +
+        "📋 Send a *Property24* or *PrivateProperty* listing link to get started\n\n" +
+        "*1* — Get the full report (after preview)\n" +
+        "*hello* / *hi* — Start fresh\n" +
+        "*feedback:* your message — Send us feedback\n" +
+        "*bug:* your message — Report a problem\n" +
+        "*help* — Show this menu\n\n" +
+        "Questions? Just type and we'll get back to you."
+      );
+      res.type('text/xml').send('<Response></Response>');
+      return;
+    }
+
     // ── If generating/scraping but user sends a NEW listing URL, start fresh ──
     if ((state === 'generating' || state === 'scraping') && hasListingURL && conv?.listing_url !== url) {
       console.log(`[whatsapp] New URL while ${state} — resetting to new tease`);
