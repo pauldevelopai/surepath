@@ -46,6 +46,14 @@ async function embedText(text) {
  * @returns {Promise<number>} The chunk ID
  */
 async function upsertChunk(text, metadata, layer, sourceTable, sourceId, chunkKey) {
+  // Skip if chunk already exists with identical text (no need to re-embed)
+  const { rows: existing } = await pool.query(
+    'SELECT id, text FROM rag_chunks WHERE chunk_key = $1', [chunkKey]
+  );
+  if (existing.length > 0 && existing[0].text === text) {
+    return existing[0].id; // Already seeded with same content
+  }
+
   const embedding = await embedText(text);
   const vecStr = `[${embedding.join(',')}]`;
 
