@@ -112,7 +112,7 @@ async function collectForProperty(propertyId) {
                  VALUES ($1, $2, 'sold_prices', 'info', 0, $3, 'ooba.co.za', $4, CURRENT_DATE) ON CONFLICT DO NOTHING`,
                 [suburb, city, JSON.stringify(oobaResult), oobaUrl]
               );
-            } catch {}
+            } catch (e) { console.error(`[sold-prices] ooba DB insert failed:`, e.message); }
             console.log(`[sold-prices] ooba: ${city} avg R${(avgPrice || 0).toLocaleString()}, median R${(medPrice || 0).toLocaleString()}`);
             return oobaResult;
           }
@@ -150,7 +150,7 @@ async function collectForProperty(propertyId) {
        ON CONFLICT DO NOTHING`,
       [suburb, city, uniqueSales.length, JSON.stringify(result)]
     );
-  } catch {}
+  } catch (e) { console.error(`[sold-prices] DB insert failed for ${suburb}:`, e.message); }
 
   console.log(`[sold-prices] ${suburb}: ${uniqueSales.length} sales, avg R${avg.toLocaleString()}, median R${median.toLocaleString()}`);
   return result;

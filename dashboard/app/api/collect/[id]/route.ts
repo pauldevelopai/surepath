@@ -101,47 +101,61 @@ export const POST = withAuth(async (req: NextRequest, { params }: { params: Prom
 
       const photos: string[] = await page.evaluate(() => {
         const found: string[] = [];
+        const seen = new Set<string>();
+        function add(url: string) {
+          if (!url || seen.has(url) || url.includes("NoImage") || url.includes("blank") || url.includes("icon") || url.includes(".svg") || url.includes(".gif")) return;
+          seen.add(url);
+          found.push(url);
+        }
+
         // Get all image sources including lazy-loaded and background images
         document.querySelectorAll("img[src], img[data-src], img[data-lazy-src], [style*='background-image']").forEach((el: Element) => {
           const htmlEl = el as HTMLElement;
-          let src = (el as HTMLImageElement).src || (el as HTMLElement).dataset?.src || (el as HTMLElement).dataset?.lazySrc || "";
+          let src = (el as HTMLImageElement).src || htmlEl.dataset?.src || htmlEl.dataset?.lazySrc || "";
           if (!src && htmlEl.style?.backgroundImage) {
             const m = htmlEl.style.backgroundImage.match(/url\(["']?([^"')]+)/);
             if (m) src = m[1];
           }
-          if (src && src.includes("images.prop24.com") && !src.includes("NoImage") && !found.includes(src)) {
-            // Get the highest resolution version
-            const hiRes = src.replace(/\/Fit\d+x\d+/, "/Ensure960x540").replace(/\/Crop\d+x\d+/, "/Ensure960x540");
-            if (!found.includes(hiRes)) found.push(hiRes);
+
+          // Property24 images
+          if (src.includes("images.prop24.com")) {
+            add(src.replace(/\/Fit\d+x\d+/, "/Ensure960x540").replace(/\/Crop\d+x\d+/, "/Ensure960x540"));
+          }
+          // PrivateProperty images
+          if (src.includes("images.pp.co.za")) {
+            add(src.replace(/\/\d+\/\d+\/contain/, "/1600/1066/contain"));
           }
         });
 
-        // Also check for image URLs in any JSON data on the page
-        document.querySelectorAll("script").forEach(s => {
-          const matches = s.innerHTML.matchAll(/https:\/\/images\.prop24\.com\/\d+\/[A-Za-z0-9]+/g);
-          for (const m of matches) {
-            const url = m[0];
-            if (!found.some(f => f.includes(url.split("/")[3]))) {
-              found.push(url);
-            }
-          }
-        });
+        // Scan HTML source for image CDN URLs (catches lazy-loaded, JSON data, etc.)
+        const html = document.documentElement.innerHTML;
+
+        // Property24 images in scripts/JSON
+        const p24Matches = html.matchAll(/https:\/\/images\.prop24\.com\/\d+\/[A-Za-z0-9]+/g);
+        for (const m of p24Matches) add(m[0]);
+
+        // PrivateProperty images in scripts/JSON
+        const ppMatches = html.matchAll(/https:\/\/images\.pp\.co\.za\/listing\/\d+\/[A-Za-z0-9_-]+/g);
+        for (const m of ppMatches) add(m[0] + "/1600/1066/contain/jpegorpng");
 
         return found;
       });
       await browser.close();
 
-      // Delete old P24 photos for this property, store fresh ones
-      await query("DELETE FROM property_images WHERE property_id=$1 AND source='property24'", [id]);
+      // Determine source based on listing URL
+      const imgSource = prop.listing_url?.includes("privateproperty") ? "privateproperty" : "property24";
+
+      // Delete old photos for this property from same source, store fresh ones
+      await query("DELETE FROM property_images WHERE property_id=$1 AND source=$2", [id, imgSource]);
       let stored = 0;
       const seen = new Set<string>();
       for (const url of photos) {
-        // Dedupe by image ID (the number after prop24.com/)
-        const imgId = url.match(/prop24\.com\/(\d+)/)?.[1];
+        // Dedupe by image hash (the unique ID part of the URL)
+        const imgId = url.match(/prop24\.com\/(\d+)/)?.[1] || url.match(/pp\.co\.za\/listing\/\d+\/([A-Za-z0-9_-]+)/)?.[1];
         if (imgId && seen.has(imgId)) continue;
         if (imgId) seen.add(imgId);
 
-        await query("INSERT INTO property_images (property_id, source, image_url, image_type) VALUES ($1,'property24',$2,'listing')", [id, url]);
+        await query("INSERT INTO property_images (property_id, source, image_url, image_type) VALUES ($1,$2,$3,'listing')", [id, imgSource, url]);
         stored++;
       }
 
@@ -522,6 +536,30 @@ export const POST = withAuth(async (req: NextRequest, { params }: { params: Prom
         return NextResponse.json({ ok: true, message: `Load shedding: Group ${result.group || '?'}. ${result.area || ''}` });
       } catch (e: unknown) {
         return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Loadshedding collection failed" });
+      }
+    }
+
+    // ── PRICE TRENDS ──
+    if (action === "pricetrends") {
+      try {
+        const mod = await loadModule("collect-price-trends");
+        const result = await mod.collectForProperty(parseInt(id));
+        if (!result || result.error) return NextResponse.json({ ok: false, message: result?.error || "No price trend data" });
+        return NextResponse.json({ ok: true, message: `Price trends: avg ${result.internal_data?.avg_price ? 'R' + result.internal_data.avg_price.toLocaleString() : 'N/A'}, ${result.regional_trend?.trend || 'unknown'} market` });
+      } catch (e: unknown) {
+        return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Price trends failed" });
+      }
+    }
+
+    // ── PROPERTY COSTS ──
+    if (action === "propertycosts") {
+      try {
+        const mod = await loadModule("collect-property-costs");
+        const result = await mod.collectForProperty(parseInt(id));
+        if (!result || result.error) return NextResponse.json({ ok: false, message: result?.error || "No cost data" });
+        return NextResponse.json({ ok: true, message: `Real cost: R${result.real_purchase_cost?.toLocaleString()} (+${result.premium_over_asking_pct}% over asking)` });
+      } catch (e: unknown) {
+        return NextResponse.json({ ok: false, message: e instanceof Error ? e.message : "Cost calculation failed" });
       }
     }
 

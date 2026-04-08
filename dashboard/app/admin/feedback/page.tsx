@@ -84,12 +84,25 @@ export default function FeedbackPage() {
                     <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${STATUS_STYLE[item.status] || "bg-gray-100"}`}>
                       {item.status === "in_progress" ? "IN PROGRESS" : item.status?.toUpperCase()}
                     </span>
-                    <span className="px-1.5 py-0.5 rounded text-[9px] bg-gray-100 text-gray-600">
-                      {SECTION_LABEL[item.section] || item.section}
-                    </span>
+                    {item.feedback_type === "finding_rating" ? (
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${item.rating === "good" || item.rating === "correct" ? "bg-green-100 text-green-700" : item.rating === "bad" || item.rating === "incorrect" ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-600"}`}>
+                        Finding: {item.rating?.toUpperCase()}
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] bg-gray-100 text-gray-600">
+                        {SECTION_LABEL[item.section] || item.section}
+                      </span>
+                    )}
                     <span className="text-[10px] text-gray-400">{formatDateTime(item.created_at)}</span>
                   </div>
-                  <div className="text-sm mt-1">{item.feedback}</div>
+                  <div className="text-sm mt-1">
+                    {item.feedback || (item.feedback_type === "finding_rating" && item.context ? (() => {
+                      try {
+                        const ctx = typeof item.context === "string" ? JSON.parse(item.context) : item.context;
+                        return ctx?.observation || ctx?.what_i_see || ctx?.category || `Rating on finding in ${item.section}`;
+                      } catch { return `Rating on finding in ${item.section}`; }
+                    })() : "No text")}
+                  </div>
                   <div className="flex gap-3 mt-1.5 text-[10px] text-gray-400">
                     {item.page_url && <span>Page: <span className="font-mono">{item.page_url}</span></span>}
                     {item.address_raw && <span>Property: {item.address_raw}{item.suburb ? `, ${item.suburb}` : ""}</span>}

@@ -110,7 +110,7 @@ async function collectForProperty(propertyId) {
       [suburb, city, schoolScore >= 7 ? 'good' : schoolScore >= 4 ? 'moderate' : 'poor',
        schoolScore, JSON.stringify({ schools: unique.slice(0, 20), total_found: unique.length, within_1km: within1km.length, within_2km: within2km.length })]
     );
-  } catch {}
+  } catch (e) { console.error(`[schools] DB insert failed for ${suburb}:`, e.message); }
 
   console.log(`[schools] ${suburb}: ${unique.length} schools found, ${within1km.length} within 1km, score ${schoolScore}/10`);
   return { school_score: schoolScore, total: unique.length, within_1km: within1km.length, schools: unique.slice(0, 10) };

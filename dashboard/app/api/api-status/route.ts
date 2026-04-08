@@ -59,6 +59,23 @@ export const GET = withAuth(async () => {
     results.twilio = { status: "not_configured", message: "No Twilio credentials", action: "https://console.twilio.com" };
   }
 
+  // Lightsail — check if we can reach ourselves (server health)
+  try {
+    const os = await import("os");
+    const uptime = os.uptime();
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const memUsedPct = Math.round((1 - freeMem / totalMem) * 100);
+    const uptimeDays = Math.floor(uptime / 86400);
+    const loadAvg = os.loadavg()[0].toFixed(2);
+    results.lightsail = {
+      status: memUsedPct > 90 ? "down" : "ok",
+      message: `${uptimeDays}d uptime · ${memUsedPct}% RAM · load ${loadAvg} · $40/mo (2 vCPU, 4GB)`,
+    };
+  } catch {
+    results.lightsail = { status: "ok", message: "Lightsail eu-west-2 · $40/mo" };
+  }
+
   // Other services — check if keys are configured
   results.windeed = { status: process.env.WINDEED_API_KEY ? "configured" : "not_configured", message: process.env.WINDEED_API_KEY ? "Key set" : "No key — optional" };
   results.elevenlabs = { status: process.env.ELEVENLABS_API_KEY ? "configured" : "not_configured", message: process.env.ELEVENLABS_API_KEY ? "Key set" : "No key — optional" };

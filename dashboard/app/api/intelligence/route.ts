@@ -933,6 +933,96 @@ export const GET = withAuth(async (req: NextRequest) => {
   }
 
   // ─── Prompts: show all the prompts Nico uses ───────────────────────
+  if (section === "sample_images") {
+    const images = await query(`
+      SELECT pi.id, pi.image_url, pi.image_type,
+             pi.vision_analysis->>'photo_type' AS photo_type,
+             p.id AS property_id, p.address_raw, p.suburb, p.city, p.construction_era
+      FROM property_images pi
+      JOIN properties p ON p.id = pi.property_id
+      WHERE pi.image_url IS NOT NULL AND pi.image_url LIKE 'http%'
+        AND p.suburb IS NOT NULL
+      ORDER BY RANDOM() LIMIT 12
+    `);
+    return NextResponse.json({ images });
+  }
+
+  if (section === "nico_recipe") {
+    // Return the "recipe" — what Nico uses for each activity
+    return NextResponse.json({ recipe: {
+      activities: [
+        {
+          name: "Photo Analysis (Listing Photos)",
+          prompt: "NICO_SYSTEM_PROMPT (vision.js)",
+          model: "claude-haiku-4-5",
+          inputs: ["Up to 6 images per batch", "Property context (era, suburb, roof, zoning, water quality, dolomite risk)"],
+          rag: { enabled: true, query: "Suburb + construction era + roof material + known risks", layers: ["knowledge", "evidence", "vision", "live", "crime", "security", "report", "feedback"], budget: "20 chunks, minScore 0.35" },
+          output: "JSON array of findings with severity, category, cost estimates, SA context",
+          cost: "~R0.10 per batch (Haiku)",
+        },
+        {
+          name: "Street View Analysis",
+          prompt: "NICO_SYSTEM_PROMPT + street-view focus",
+          model: "claude-haiku-4-5",
+          inputs: ["1 Street View image", "Property context"],
+          rag: { enabled: true, query: "Same as photo + focus on walls, damp, structure, roof, security", layers: ["knowledge", "evidence", "vision", "live", "crime", "security"], budget: "20 chunks" },
+          output: "Exterior assessment — walls, roof visible, security, access, neighbourhood",
+          cost: "~R0.03 per image",
+        },
+        {
+          name: "Satellite/Aerial Analysis",
+          prompt: "NICO_SYSTEM_PROMPT + satellite focus",
+          model: "claude-haiku-4-5",
+          inputs: ["1 satellite image", "Property context"],
+          rag: { enabled: true, query: "Focus on roof, structure", layers: ["knowledge", "evidence"], budget: "20 chunks" },
+          output: "Roof condition, extensions, pool, outbuildings, stand boundaries",
+          cost: "~R0.03 per image",
+        },
+        {
+          name: "Report Synthesis",
+          prompt: "SYNTHESIS_SYSTEM_PROMPT (synthesis.js)",
+          model: "claude-sonnet-4-5",
+          inputs: ["All vision findings", "Property data", "Area risk data", "Crime stats", "Sold prices"],
+          rag: { enabled: false, query: null, layers: [], budget: null },
+          output: "Full property report with decision, risk scores, repair estimates",
+          cost: "~R0.08 per report (Sonnet)",
+        },
+        {
+          name: "WhatsApp Tease",
+          prompt: "Short summary prompt (pipeline.js)",
+          model: "claude-haiku-4-5",
+          inputs: ["Property summary", "Key findings"],
+          rag: { enabled: false, query: null, layers: [], budget: null },
+          output: "2-line WhatsApp-friendly property summary",
+          cost: "~R0.002 per tease",
+        },
+        {
+          name: "Feature Extraction",
+          prompt: "Extract features prompt (pipeline.js)",
+          model: "claude-haiku-4-5",
+          inputs: ["Listing description text"],
+          rag: { enabled: false, query: null, layers: [], budget: null },
+          output: "Structured features: pool, garden, braai, security, pet-friendly etc.",
+          cost: "~R0.01 per extraction",
+        },
+      ],
+      rag_layers: [
+        { layer: "knowledge", source: "rag_knowledge_entries", desc: "SA defect knowledge base — what to look for, costs, severity", seeded_by: "seed-rag.js" },
+        { layer: "evidence", source: "holly_evidence", desc: "Past vision findings from analysed properties", seeded_by: "seed-live-data.js" },
+        { layer: "vision", source: "property_images", desc: "Photo analysis results with finding summaries", seeded_by: "seed-live-data.js" },
+        { layer: "live", source: "area_risk_data", desc: "Climate, schools, sold prices, fibre, electricity, water, social", seeded_by: "seed-live-data.js" },
+        { layer: "crime", source: "crime_incidents", desc: "Crime aggregates by suburb", seeded_by: "seed-live-data.js" },
+        { layer: "security", source: "suburb_security_coverage", desc: "Security companies and coverage by suburb", seeded_by: "seed-live-data.js" },
+        { layer: "security_company", source: "security_companies", desc: "Individual security company records", seeded_by: "seed-live-data.js" },
+        { layer: "property", source: "properties", desc: "Property listings with descriptions (not used in prompts — too noisy)", seeded_by: "seed-live-data.js" },
+        { layer: "report", source: "property_reports", desc: "Past report decisions and reasoning", seeded_by: "seed-live-data.js" },
+        { layer: "feedback", source: "data_feedback", desc: "User corrections and ratings on findings", seeded_by: "seed-live-data.js" },
+      ],
+      embedding: { model: "all-MiniLM-L6-v2", dims: 384, library: "@xenova/transformers", index: "none (sequential scan — fast at <50K rows)" },
+      reseed: { schedule: "Daily 3am via PM2 cron (rag-reseed)", manual: "Re-seed RAG button on scraper page", auto: "Not auto-seeded after scraping — accumulates until next reseed" },
+    }});
+  }
+
   if (section === "prompts") {
     // Read prompts from the actual source files
     const fs = await import("fs");

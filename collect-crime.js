@@ -80,15 +80,19 @@ async function getHierarchy() {
   console.log('[crime] Building CrimeHub hierarchy cache...');
   const hierarchy = { provinces: [], municipalities: [], precinctsByMuni: {} };
 
+  const delay = (ms) => new Promise(r => setTimeout(r, ms));
+
   try {
     const provData = await fetchJSON('https://crimehub.org/lookups/provinces');
     hierarchy.provinces = provData.results || [];
 
     for (const prov of hierarchy.provinces) {
+      await delay(300);
       const distData = await fetchJSON(`https://crimehub.org/lookups/districts?parents=${prov.id}`);
       const districts = distData.results || [];
 
       for (const dist of districts) {
+        await delay(300);
         const muniData = await fetchJSON(`https://crimehub.org/lookups/municipalities?parents=${dist.id}`);
         const municipalities = muniData.results || [];
 
@@ -100,6 +104,7 @@ async function getHierarchy() {
             province: prov.text,
           });
 
+          await delay(300);
           // Fetch precincts for this municipality
           try {
             const precData = await fetchJSON(`https://crimehub.org/lookups/precincts?municipalities=${muni.id}`);

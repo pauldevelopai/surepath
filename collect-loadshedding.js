@@ -88,7 +88,7 @@ async function collectForProperty(propertyId) {
        currentStage,
        JSON.stringify(result)]
     );
-  } catch {}
+  } catch (e) { console.error(`[loadshedding] DB insert failed for ${suburb}:`, e.message); }
 
   console.log(`[loadshedding] ${suburb}: stage ${currentStage}, next event: ${nextEvent?.start || 'none scheduled'}`);
   return result;

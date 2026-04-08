@@ -1,8 +1,7 @@
 "use client";
 import { useEffect, useState, useRef, useCallback } from "react";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type A = Record<string, any>;
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 const SCRAPERS = [
   { id: "pp", label: "PrivateProperty", desc: "Listings, photos, pricing — the raw property data that starts every report", color: "bg-blue-600", hover: "hover:bg-blue-700" },
@@ -17,16 +16,31 @@ const SCRAPERS = [
   { id: "climate", label: "Climate", desc: "Open-Meteo — 5yr rainfall, humidity, wind, frost, damp risk", color: "bg-orange-700", hover: "hover:bg-orange-800" },
   { id: "loadshedding", label: "Load Shedding", desc: "EskomSePush — schedules and stage by area", color: "bg-gray-700", hover: "hover:bg-gray-800" },
   { id: "soldprices", label: "Sold Prices", desc: "Property24 — recent suburb sale prices for AVM", color: "bg-green-700", hover: "hover:bg-green-800" },
+  { id: "pricetrends", label: "Price Trends", desc: "Suburb price history, YoY growth, market indicators, price per sqm", color: "bg-lime-700", hover: "hover:bg-lime-800" },
+  { id: "propertycosts", label: "Property Costs", desc: "Transfer duty, bond costs, attorney fees, agent commission — the REAL price", color: "bg-rose-700", hover: "hover:bg-rose-800" },
   { id: "fibre", label: "Fibre Coverage", desc: "ISP coverage check — Openserve, Vumatel, Frogfoot", color: "bg-indigo-700", hover: "hover:bg-indigo-800" },
   { id: "electricity", label: "Electricity", desc: "Eskom/municipal tariffs + load shedding status — monthly cost estimates", color: "bg-amber-700", hover: "hover:bg-amber-800" },
-  { id: "articles", label: "Articles", desc: "SA construction, renovation, defect articles — web sources → Knowledge Base", color: "bg-[#E63946]", hover: "hover:bg-red-700" },
+  { id: "articles", label: "Articles", desc: "SA construction, renovation, defect articles — web sources to Knowledge Base", color: "bg-[#E63946]", hover: "hover:bg-red-700" },
 ];
 
+function formatDuration(startStr: string): string {
+  const ms = Date.now() - new Date(startStr).getTime();
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
 export default function ScraperPage() {
-  const [data, setData] = useState<A | null>(null);
-  const [stats, setStats] = useState<A | null>(null);
+  const [data, setData] = useState<any>(null);
+  const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [masterStatus, setMasterStatus] = useState<A | null>(null);
+  const [masterStatus, setMasterStatus] = useState<any>(null);
+  const [showErrors, setShowErrors] = useState(false);
+  const [expandedLogs, setExpandedLogs] = useState<Record<string, boolean>>({});
+  const [now, setNow] = useState(Date.now());
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   const load = useCallback(() => {
@@ -40,99 +54,95 @@ export default function ScraperPage() {
 
   const anyRunning = data?.scraper_running;
   useEffect(() => {
-    pollRef.current = setInterval(load, anyRunning ? 2000 : 15000);
+    pollRef.current = setInterval(() => { load(); setNow(Date.now()); }, anyRunning ? 2000 : 15000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [anyRunning, load]);
 
-  async function startScraper(id: string) {
-    await fetch("/api/scraper", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "start", source: id }),
-    });
+  // Suppress unused var warning — now is used to trigger re-renders for duration display
+  void now;
+
+  async function post(body: any) {
+    await fetch("/api/scraper", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     load();
   }
 
-  async function stopScraper(name: string) {
-    await fetch("/api/scraper", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "stop", name }),
-    });
-    load();
+  function getProcessInfo(id: string) {
+    const procs = data?.scraper_processes || [];
+    const proc = procs.find((p: any) => p.name === id);
+    if (!proc) return { running: false, orphaned: false, pid: 0, started: "" };
+    return {
+      running: proc.running,
+      orphaned: (proc.log?.[0] || "").includes("orphaned"),
+      pid: proc.pid || 0,
+      started: proc.started || "",
+    };
   }
 
-  async function stopAll() {
-    await fetch("/api/scraper", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "stop" }),
-    });
-    load();
-  }
-
-  async function runAll() {
-    await fetch("/api/scraper", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "scrape_all" }),
-    });
-    load();
-  }
-
-  async function stopMaster() {
-    await fetch("/api/scraper", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "stop_all_scraping" }),
-    });
-    load();
-  }
-
-  async function forceKillAll() {
-    if (!confirm("Force kill ALL scraper processes? This sends SIGKILL.")) return;
-    await fetch("/api/scraper", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "kill_all_scrapers" }),
-    });
-    // Also stop master
-    await fetch("/api/scraper", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "stop_all_scraping" }),
-    });
-    load();
-  }
-
-
-  function isRunning(id: string) {
-    return (data?.scraper_processes || []).some((p: A) => p.name === id && p.running);
-  }
   function getLog(id: string): string[] {
-    return (data?.scraper_processes || []).find((p: A) => p.name === id)?.log || [];
+    return (data?.scraper_processes || []).find((p: any) => p.name === id)?.log || [];
+  }
+
+  function getAllErrors(): string[] {
+    const errors: string[] = [];
+    for (const p of (data?.scraper_processes || [])) {
+      for (const line of (p.log || [])) {
+        if (line.includes("ERROR") || line.includes("FAIL") || line.includes("FATAL") || line.includes("KILLED")) {
+          errors.push(line);
+        }
+      }
+    }
+    for (const line of (data?.scraper_log || [])) {
+      if ((line.includes("ERROR") || line.includes("FAIL") || line.includes("FATAL") || line.includes("KILLED")) && !errors.includes(line)) {
+        errors.push(line);
+      }
+    }
+    return errors.slice(-50);
   }
 
   if (loading || !data) return <p className="text-gray-500 p-8">Loading...</p>;
 
-  const { totals } = data;
+  const totals = data.totals || {};
   const s = stats || {};
+  const errors = getAllErrors();
 
-  // Pending and done counts per scraper
-  const counts: Record<string, { pending: number; done: number; unit: string }> = {
-    pp:         { pending: (s.pp_universe || 0) - (s.pp_total || totals.pp_properties || 0), done: s.pp_total || totals.pp_properties || 0, unit: "listings" },
-    crime:      { pending: s.crime_pending || 0,   done: s.crime_total || 0,                     unit: "suburbs" },
-    solar:      { pending: s.solar_pending || 0,   done: s.solar_total || 0,                     unit: "properties" },
-    water:      { pending: s.water_pending || 0,   done: s.water_total || 0,                     unit: "cities" },
-    gvr:        { pending: 0,                       done: s.gvr_total || 0,                       unit: "properties" },
-    saps:       { pending: (1154 - (s.saps_total || 0)), done: s.saps_total || 0,                unit: "stations" },
-    assist247:  { pending: 0,                       done: s.assist247_suburbs || 0,               unit: "suburbs" },
-    procompare: { pending: 0,                       done: s.procompare_companies || 0,            unit: "companies" },
-    schools:    { pending: s.schools_pending || 0, done: s.schools_total || 0,                   unit: "suburbs" },
-    climate:    { pending: s.climate_pending || 0, done: s.climate_total || 0,                   unit: "suburbs" },
-    loadshedding: { pending: 0,                    done: s.loadshedding_total || 0,              unit: "areas" },
-    soldprices: { pending: 0,                      done: s.soldprices_total || 0,                unit: "suburbs" },
-    fibre:      { pending: 0,                      done: s.fibre_total || 0,                     unit: "areas" },
-    electricity: { pending: 0,                     done: s.electricity_total || 0,                unit: "areas" },
-    articles:   { pending: 0,                      done: s.kb_total || 0,                        unit: "entries" },
+  const counts: Record<string, { pending: number; done: number; total: number; unit: string }> = {
+    pp:           { pending: (s.pp_universe || 0) - (s.pp_total || totals.pp_properties || 0), done: s.pp_total || totals.pp_properties || 0, total: s.pp_universe || 208500, unit: "listings" },
+    crime:        { pending: s.crime_pending || 0, done: s.crime_total || 0, total: (s.crime_pending || 0) + (s.crime_total || 0), unit: "suburbs" },
+    solar:        { pending: s.solar_pending || 0, done: s.solar_total || 0, total: (s.solar_pending || 0) + (s.solar_total || 0), unit: "properties" },
+    water:        { pending: s.water_pending || 0, done: s.water_total || 0, total: (s.water_pending || 0) + (s.water_total || 0), unit: "cities" },
+    gvr:          { pending: 0, done: s.gvr_total || 0, total: s.gvr_total || 0, unit: "properties" },
+    saps:         { pending: Math.max(0, 1154 - (s.saps_total || 0)), done: s.saps_total || 0, total: 1154, unit: "stations" },
+    assist247:    { pending: 0, done: s.assist247_suburbs || 0, total: s.assist247_suburbs || 0, unit: "suburbs" },
+    procompare:   { pending: 0, done: s.procompare_companies || 0, total: s.procompare_companies || 0, unit: "companies" },
+    schools:      { pending: s.schools_pending || 0, done: s.schools_total || 0, total: (s.schools_pending || 0) + (s.schools_total || 0), unit: "suburbs" },
+    climate:      { pending: s.climate_pending || 0, done: s.climate_total || 0, total: (s.climate_pending || 0) + (s.climate_total || 0), unit: "suburbs" },
+    loadshedding: { pending: 0, done: s.loadshedding_total || 0, total: s.loadshedding_total || 0, unit: "areas" },
+    soldprices:    { pending: 0, done: s.soldprices_total || 0, total: s.soldprices_total || 0, unit: "suburbs" },
+    pricetrends:   { pending: s.pricetrends_pending || 0, done: s.pricetrends_total || 0, total: (s.pricetrends_pending || 0) + (s.pricetrends_total || 0), unit: "suburbs" },
+    propertycosts: { pending: s.propertycosts_pending || 0, done: s.propertycosts_total || 0, total: (s.propertycosts_pending || 0) + (s.propertycosts_total || 0), unit: "properties" },
+    fibre:         { pending: 0, done: s.fibre_total || 0, total: s.fibre_total || 0, unit: "areas" },
+    electricity:   { pending: 0, done: s.electricity_total || 0, total: s.electricity_total || 0, unit: "areas" },
+    articles:      { pending: 0, done: s.kb_total || 0, total: s.kb_total || 0, unit: "entries" },
+  };
+
+  const ragLayers: Record<string, number> = s.rag_chunks_by_layer || {};
+  const ragTotal: number = s.rag_total_chunks || 0;
+  const ragLastSeeded: string | null = s.rag_last_seeded || null;
+  const ragPending: Record<string, { pending: number; layer: string }> = s.rag_pending_by_source || {};
+  const totalRagPending = Object.values(ragPending).reduce((sum, v) => sum + (v.pending || 0), 0);
+
+  const ragReseedRunning = getProcessInfo("rag-reseed").running;
+
+  const layerColors: Record<string, string> = {
+    knowledge: "bg-amber-600", evidence: "bg-red-600", vision: "bg-purple-600",
+    live: "bg-sky-600", crime: "bg-red-800", security: "bg-teal-600",
+    report: "bg-green-600", feedback: "bg-orange-600", property: "bg-blue-600",
+    security_company: "bg-cyan-700",
   };
 
   return (
     <div>
-      {/* ─── Master scraper status banner ─── */}
+      {/* Master scraper status banner */}
       {masterStatus?.running && (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
           <div className="flex justify-between items-center">
@@ -140,28 +150,44 @@ export default function ScraperPage() {
               <span className="w-3 h-3 rounded-full bg-green-500 animate-pulse" />
               <div>
                 <span className="font-bold text-sm text-green-800">Scraping Everything</span>
-                <span className="text-xs text-green-600 ml-2">Pass {masterStatus.pass} — {masterStatus.current_scraper || 'starting'}</span>
+                <span className="text-xs text-green-600 ml-2">
+                  Pass {masterStatus.pass} — {masterStatus.current_scraper || "starting"}
+                </span>
               </div>
             </div>
             <div className="flex items-center gap-4">
               <span className="text-xs text-green-700 font-mono">{masterStatus.total_collected} collected</span>
-              <span className="text-[9px] text-green-500">Started {masterStatus.started_at ? new Date(masterStatus.started_at).toLocaleTimeString() : '?'}</span>
-              <button onClick={stopMaster} className="px-4 py-1.5 bg-red-600 text-white rounded text-sm font-semibold hover:bg-red-700">Stop</button>
+              {masterStatus.started_at && (
+                <span className="text-xs text-green-700 font-mono font-bold">
+                  {formatDuration(masterStatus.started_at)}
+                </span>
+              )}
+              <span className="text-[9px] text-green-500">
+                Started {masterStatus.started_at ? new Date(masterStatus.started_at).toLocaleTimeString() : "?"}
+              </span>
+              <button onClick={() => post({ action: "stop_all_scraping" })} className="px-4 py-1.5 bg-red-600 text-white rounded text-sm font-semibold hover:bg-red-700">
+                Stop
+              </button>
             </div>
           </div>
-          {Object.keys(masterStatus.scrapers || {}).length > 0 && (
-            <div className="flex flex-wrap gap-3 mt-2">
-              {Object.entries(masterStatus.scrapers as Record<string, A>).map(([name, s]) => (
-                <span key={name} className={`text-[9px] px-2 py-0.5 rounded ${s.done ? 'bg-green-200 text-green-800' : 'bg-green-100 text-green-700'}`}>
-                  {name}: {s.total_processed} {s.done ? '(done)' : ''}
-                </span>
+          {masterStatus.scrapers && Object.keys(masterStatus.scrapers).length > 0 && (
+            <div className="grid grid-cols-5 gap-2 mt-3">
+              {Object.entries(masterStatus.scrapers).map(([name, sc]: [string, any]) => (
+                <div key={name} className={`text-[10px] px-2 py-1 rounded ${sc.done ? "bg-green-200 text-green-800" : masterStatus.current_scraper?.toLowerCase().includes(name) ? "bg-green-300 text-green-900 font-bold" : "bg-green-100 text-green-700"}`}>
+                  <div className="flex justify-between">
+                    <span>{name}</span>
+                    <span>{sc.total_processed}{sc.done ? " done" : ""}</span>
+                  </div>
+                  {sc.total_errors > 0 && <span className="text-red-600"> ({sc.total_errors} err)</span>}
+                </div>
               ))}
             </div>
           )}
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-6">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold">Scrapers</h1>
           <p className="text-sm text-gray-500">
@@ -170,66 +196,211 @@ export default function ScraperPage() {
         </div>
         <div className="flex gap-2">
           {!masterStatus?.running ? (
-            <button onClick={runAll} className="bg-[#E63946] text-white px-5 py-2 rounded font-semibold text-sm hover:bg-red-700">
+            <button onClick={() => post({ action: "scrape_all" })} className="bg-[#E63946] text-white px-5 py-2 rounded font-semibold text-sm hover:bg-red-700">
               Scrape Everything
             </button>
           ) : (
-            <button onClick={stopMaster} className="bg-red-600 text-white px-5 py-2 rounded font-semibold text-sm hover:bg-red-700">
+            <button onClick={() => post({ action: "stop_all_scraping" })} className="bg-red-600 text-white px-5 py-2 rounded font-semibold text-sm hover:bg-red-700">
               Stop Scraping
             </button>
           )}
           {anyRunning && (
-            <button onClick={stopAll} className="bg-red-600 text-white px-5 py-2 rounded font-semibold text-sm hover:bg-red-700">
+            <button onClick={() => post({ action: "stop" })} className="bg-red-600 text-white px-5 py-2 rounded font-semibold text-sm hover:bg-red-700">
               Stop All
             </button>
           )}
-          <button onClick={forceKillAll} className="bg-gray-800 text-white px-4 py-2 rounded font-semibold text-sm hover:bg-black" title="Force kill all scraper processes (SIGKILL)">
+          <button
+            onClick={() => { if (confirm("Force kill ALL scraper processes? This sends SIGKILL.")) { post({ action: "kill_all_scrapers" }).then(() => post({ action: "stop_all_scraping" })); } }}
+            className="bg-gray-800 text-white px-4 py-2 rounded font-semibold text-sm hover:bg-black"
+            title="Force kill all scraper processes (SIGKILL)"
+          >
             Force Kill
           </button>
         </div>
       </div>
 
-      {/* Scraper cards — each with its own log */}
-      <div className="flex flex-col gap-4">
+      {/* Error log panel */}
+      {errors.length > 0 && (
+        <div className="mb-4">
+          <button
+            onClick={() => setShowErrors(!showErrors)}
+            className="flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800 hover:bg-red-100 w-full text-left"
+          >
+            <span className="w-2 h-2 rounded-full bg-red-500" />
+            <span className="font-semibold">{errors.length} error{errors.length !== 1 ? "s" : ""}</span>
+            <span className="text-red-500 text-xs ml-1">click to {showErrors ? "hide" : "show"}</span>
+          </button>
+          {showErrors && (
+            <div className="mt-1 bg-[#1a0a0a] rounded-b-lg px-4 py-3 font-mono text-[11px] max-h-64 overflow-y-auto border border-red-900/30">
+              {errors.map((line, i) => (
+                <div key={i} className="text-red-400">{line}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* RAG Knowledge Base status */}
+      <div className="mb-4 bg-[#0D1B2A] rounded-lg p-4 border border-gray-800">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-bold text-gray-200">RAG Knowledge Base</span>
+            <span className="text-xs text-gray-500 font-mono">{ragTotal.toLocaleString()} chunks</span>
+            {totalRagPending > 0 && (
+              <span className="text-xs text-amber-400 font-mono">{totalRagPending.toLocaleString()} pending</span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            {ragLastSeeded && (
+              <span className="text-[10px] text-gray-500">
+                Last seeded: {new Date(ragLastSeeded).toLocaleString()}
+              </span>
+            )}
+            <button
+              onClick={() => post({ action: "rag_reseed" })}
+              disabled={ragReseedRunning}
+              className={`px-3 py-1 rounded text-xs font-semibold ${ragReseedRunning ? "bg-gray-700 text-gray-400" : "bg-amber-600 text-white hover:bg-amber-700"}`}
+            >
+              {ragReseedRunning ? "Re-seeding..." : "Re-seed RAG"}
+            </button>
+          </div>
+        </div>
+
+        {/* Layer breakdown */}
+        {ragTotal > 0 && (
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3">
+            {Object.entries(ragLayers)
+              .sort(([, a], [, b]) => b - a)
+              .map(([layer, count]) => {
+                const pct = Math.round((count / ragTotal) * 100);
+                return (
+                  <div key={layer} className="flex items-center gap-1.5">
+                    <span className={"w-2 h-2 rounded-full " + (layerColors[layer] || "bg-gray-500")} />
+                    <span className="text-[11px] text-gray-300">{layer}</span>
+                    <span className="text-[10px] text-gray-500 font-mono">{count.toLocaleString()} ({pct}%)</span>
+                  </div>
+                );
+              })}
+          </div>
+        )}
+
+        {/* RAG pending data — what needs to be seeded */}
+        {totalRagPending > 0 && (
+          <div className="border-t border-gray-700 pt-2 mt-2">
+            <div className="text-[10px] text-amber-400 font-semibold mb-1">Data waiting for RAG:</div>
+            <div className="grid grid-cols-4 gap-2">
+              {Object.entries(ragPending)
+                .filter(([, v]) => v.pending > 0)
+                .sort(([, a], [, b]) => b.pending - a.pending)
+                .map(([source, info]) => (
+                  <div key={source} className="text-[10px] text-gray-400 flex justify-between bg-gray-800/50 px-2 py-1 rounded">
+                    <span>{source.replace(/_/g, " ")}</span>
+                    <span className="text-amber-400 font-mono">{info.pending.toLocaleString()} &rarr; {info.layer}</span>
+                  </div>
+                ))}
+            </div>
+            <div className="text-[9px] text-gray-600 mt-1">Run &quot;Re-seed RAG&quot; to embed pending data into the knowledge base</div>
+          </div>
+        )}
+
+        {/* RAG re-seed log */}
+        {getLog("rag-reseed").length > 0 && (
+          <div className="border-t border-gray-700 pt-2 mt-2 font-mono text-[10px] max-h-32 overflow-y-auto">
+            {getLog("rag-reseed").slice(-20).map((line, i) => (
+              <div key={i} className={line.includes("ERROR") ? "text-red-400" : "text-gray-500"}>{line}</div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Running process status bar */}
+      {(data.scraper_processes || []).length > 0 && (
+        <div className="mb-4 flex flex-wrap gap-2">
+          {(data.scraper_processes || []).map((p: any) => {
+            const isOrphaned = (p.log?.[0] || "").includes("orphaned");
+            return (
+              <div key={p.name} className={"flex items-center gap-2 px-3 py-1.5 rounded text-xs font-mono " + (isOrphaned ? "bg-yellow-50 border border-yellow-300 text-yellow-800" : "bg-green-50 border border-green-200 text-green-800")}>
+                <span className={"w-2 h-2 rounded-full animate-pulse " + (isOrphaned ? "bg-yellow-500" : "bg-green-500")} />
+                <span className="font-semibold">{p.name}</span>
+                <span className="text-gray-500">PID {p.pid}</span>
+                {isOrphaned && <span className="text-yellow-600 text-[9px]">(orphaned)</span>}
+                {p.started && <span className="text-gray-600 font-bold">{formatDuration(p.started)}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Scraper cards */}
+      <div className="flex flex-col gap-3">
         {SCRAPERS.map(sc => {
-          const running = isRunning(sc.id);
+          const proc = getProcessInfo(sc.id);
           const log = getLog(sc.id);
           const ct = counts[sc.id];
+          const pct = ct.total > 0 ? Math.round((ct.done / ct.total) * 100) : 0;
+          const hasErrors = log.some(l => l.includes("ERROR") || l.includes("FAIL"));
+          const logExpanded = expandedLogs[sc.id] || false;
 
           return (
             <div key={sc.id} className="rounded-lg overflow-hidden border">
-              {/* Header bar */}
-              <div className={`flex items-center justify-between px-5 py-3 text-white ${sc.color}`}>
-                <div className="flex-1">
+              <div className={"flex items-center justify-between px-4 py-2.5 text-white " + sc.color}>
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="font-bold">{sc.label}</span>
-                    {running && <span className="w-2 h-2 rounded-full bg-white animate-pulse" />}
+                    <span className="font-bold text-sm">{sc.label}</span>
+                    {proc.running && !proc.orphaned && <span className="w-2 h-2 rounded-full bg-white animate-pulse" />}
+                    {proc.orphaned && (
+                      <span className="px-1.5 py-0.5 bg-yellow-400 text-yellow-900 text-[9px] rounded font-bold">ORPHANED</span>
+                    )}
+                    {proc.running && proc.pid > 0 && (
+                      <span className="text-[9px] opacity-60 font-mono">PID {proc.pid}</span>
+                    )}
+                    {proc.running && proc.started && (
+                      <span className="text-[10px] opacity-80 font-mono font-bold">{formatDuration(proc.started)}</span>
+                    )}
+                    {hasErrors && !proc.running && (
+                      <span className="px-1.5 py-0.5 bg-red-500/40 text-white text-[9px] rounded">ERRORS</span>
+                    )}
                   </div>
-                  <div className="text-[11px] opacity-70">{sc.desc}</div>
+                  <div className="text-[10px] opacity-60 truncate">{sc.desc}</div>
                 </div>
 
-                {/* Counts */}
-                <div className="flex gap-4 mx-4 text-center">
-                  {ct.pending > 0 && (
-                    <div>
-                      <div className="text-lg font-bold">{ct.pending.toLocaleString()}</div>
-                      <div className="text-[9px] opacity-60">pending</div>
+                {/* Progress bar + counts */}
+                <div className="flex items-center gap-3 mx-3">
+                  {ct.total > 0 && (
+                    <div className="w-32">
+                      <div className="flex justify-between text-[9px] opacity-70 mb-0.5">
+                        <span>{ct.done.toLocaleString()} {ct.unit}</span>
+                        <span>{pct}%</span>
+                      </div>
+                      <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-white/70 rounded-full transition-all duration-500"
+                          style={{ width: `${Math.max(pct, 1)}%` }}
+                        />
+                      </div>
+                      {ct.pending > 0 && (
+                        <div className="text-[9px] opacity-50 mt-0.5">{ct.pending.toLocaleString()} pending</div>
+                      )}
                     </div>
                   )}
-                  <div>
-                    <div className="text-lg font-bold">{ct.done.toLocaleString()}</div>
-                    <div className="text-[9px] opacity-60">{ct.unit} done</div>
-                  </div>
                 </div>
 
-                {/* Start/Stop */}
-                <div>
-                  {running ? (
-                    <button onClick={() => stopScraper(sc.id)} className="bg-white/20 hover:bg-white/30 text-white px-4 py-1.5 rounded text-sm font-medium">
+                {/* Start/Stop + log toggle */}
+                <div className="flex items-center gap-1.5">
+                  {log.length > 0 && (
+                    <button
+                      onClick={() => setExpandedLogs(prev => ({ ...prev, [sc.id]: !prev[sc.id] }))}
+                      className="bg-white/10 hover:bg-white/20 text-white px-2 py-1.5 rounded text-[10px]"
+                    >
+                      {logExpanded ? "Hide" : "Log"} ({log.length})
+                    </button>
+                  )}
+                  {proc.running ? (
+                    <button onClick={() => post({ action: "stop", name: sc.id })} className="bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded text-sm font-medium">
                       Stop
                     </button>
                   ) : (
-                    <button onClick={() => startScraper(sc.id)} className={`bg-white/20 ${sc.hover} text-white px-4 py-1.5 rounded text-sm font-medium`}>
+                    <button onClick={() => post({ action: "start", source: sc.id })} className={"bg-white/20 text-white px-3 py-1.5 rounded text-sm font-medium " + sc.hover}>
                       Start
                     </button>
                   )}
@@ -237,19 +408,20 @@ export default function ScraperPage() {
               </div>
 
               {/* Log output */}
-              {log.length > 0 && (
+              {(logExpanded || proc.running) && log.length > 0 && (
                 <div className="bg-[#0D1B2A] px-4 py-3 font-mono text-[11px] max-h-48 overflow-y-auto">
                   {log.slice(-40).map((line: string, i: number) => (
                     <div key={i} className={
-                      line.includes("ERROR") || line.includes("FAIL") ? "text-red-400" :
+                      line.includes("ERROR") || line.includes("FAIL") || line.includes("FATAL") ? "text-red-400" :
                       line.includes("NEW") ? "text-green-300 font-bold" :
                       line.includes("OK") || line.includes("success") ? "text-green-300" :
                       line.includes("SKIP") || line.includes("skipped") ? "text-gray-600" :
                       line.includes("===") || line.includes("complete") || line.includes("Complete") ? "text-green-400 font-bold" :
+                      line.includes("KILLED") || line.includes("timeout") ? "text-yellow-400" :
                       "text-gray-400"
                     }>{line}</div>
                   ))}
-                  {running && <div className="text-gray-500 animate-pulse mt-1">Running...</div>}
+                  {proc.running && <div className="text-gray-500 animate-pulse mt-1">Running...</div>}
                 </div>
               )}
             </div>

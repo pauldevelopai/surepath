@@ -13,12 +13,14 @@
  *   Google Maps Static: $2/1000 requests ($0.002 each)
  *   ElevenLabs: ~$0.30 per 1000 chars
  *
- * USD to ZAR: uses a fixed rate, update as needed
+ * USD to ZAR: fetched weekly from open.er-api.com, cached to /tmp/surepath-exchange-rate.json
  */
 
 const pool = require('./db');
+const { getRateSync } = require('./exchange-rate');
 
-const USD_TO_ZAR = 18.5; // Update this periodically
+// Live rate — reads from cache file (updated weekly by billing API or on first use)
+const USD_TO_ZAR = getRateSync();
 
 const PRICING = {
   'claude-3-haiku-20240307': { input_per_m: 0.25, output_per_m: 1.25 },

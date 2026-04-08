@@ -224,6 +224,13 @@ export default function PropertyDetailPage() {
       { action: "analyse_satellite", label: "Analysing satellite" },
       { action: "social", label: "Neighbourhood Pros and Cons" },
       { action: "security", label: "Security & Community" },
+      { action: "schools", label: "Schools nearby" },
+      { action: "climate", label: "Climate profile" },
+      { action: "soldprices", label: "Sold prices" },
+      { action: "pricetrends", label: "Market trends" },
+      { action: "electricity", label: "Electricity data" },
+      { action: "fibre", label: "Fibre coverage" },
+      { action: "propertycosts", label: "Property costs" },
     ];
 
     const results: string[] = [];
@@ -654,16 +661,130 @@ export default function PropertyDetailPage() {
           ) : <p className="text-sm text-gray-400">{(images?.length || 0) > 0 ? "Select photos above then click Analyse." : "No photos to analyse."}</p>}
         </section>
 
-        {/* ── DEEDS ── */}
+        {/* ── DEEDS & OWNERSHIP ── */}
         <section className="bg-white border rounded-lg p-4">
-          <h2 className="font-bold text-sm">Deeds &amp; Ownership</h2>
-          {hasDeeds ? (
+          <div className="flex justify-between items-start mb-2">
             <div>
-              <Datum label="Registered Owner" value={d.registered_owner} source={{ name: "Windeed", url: "https://www.windeed.co.za", confidence: "verified" }} />
-              <Datum label="Title Deed" value={d.title_deed_ref} source={{ name: "Windeed", url: "https://www.windeed.co.za", confidence: "verified" }} />
-              <Datum label="Municipal Value" value={formatZAR(d.municipal_value)} source={{ name: "Windeed", url: "https://www.windeed.co.za", confidence: "verified" }} />
+              <h2 className="font-bold text-sm">Deeds &amp; Ownership</h2>
+              <div className="text-[10px] text-gray-400">
+                {d?.source === "deedsweb" ? "DeedsWeb (Chief Registrar)" : "Windeed"}{d?.fetched_at ? ` · fetched ${formatDate(d.fetched_at)}` : ""}
+                {p.gvr_source ? ` · GVR: ${p.gvr_source}` : ""}
+              </div>
             </div>
-          ) : <p className="text-sm text-gray-400">Data unavailable</p>}
+            <FeedbackBtn propertyId={p.id} section="deeds" />
+          </div>
+
+          {hasDeeds || p.owner_name_gvr || p.bond_holder ? (
+            <div className="space-y-3">
+              {/* Current ownership */}
+              <div className="bg-gray-50 rounded p-3 space-y-1">
+                {d?.registered_owner && <Datum label="Registered Owner" value={d.registered_owner} source={{ name: d.source || "Windeed", url: "https://www.windeed.co.za", confidence: "verified" }} />}
+                {!d?.registered_owner && p.owner_name_gvr && <Datum label="Owner (GVR)" value={p.owner_name_gvr} source={{ name: `GVR ${p.gvr_source || ""}`, confidence: "verified" }} />}
+                {d?.title_deed_ref && <Datum label="Title Deed" value={d.title_deed_ref} source={{ name: d.source || "Windeed", confidence: "verified" }} />}
+                {d?.lpi_code && <Datum label="LPI Code" value={d.lpi_code} source={{ name: "Deeds Office", confidence: "verified" }} />}
+                {d?.deeds_office && <Datum label="Deeds Office" value={d.deeds_office} source={{ name: "DeedsWeb", confidence: "verified" }} />}
+              </div>
+
+              {/* Valuation & zoning */}
+              {(d?.municipal_value || p.municipal_valuation || p.zoning) && (
+                <div className="bg-gray-50 rounded p-3 space-y-1">
+                  {(d?.municipal_value || p.municipal_valuation) && (
+                    <>
+                      <Datum label="Municipal Valuation" value={formatZAR(d?.municipal_value || p.municipal_valuation)} source={{ name: d?.source || "GVR", confidence: "verified" }} />
+                      {p.asking_price && (d?.municipal_value || p.municipal_valuation) && (() => {
+                        const mv = d?.municipal_value || p.municipal_valuation;
+                        const diff = Math.round(((p.asking_price / mv) - 1) * 100);
+                        return <p className="text-xs text-gray-500 ml-4">{
+                          diff > 30 ? `Asking price is ${diff}% above municipal valuation — significant premium, use as negotiation leverage.`
+                          : diff > 0 ? `Asking price is ${diff}% above municipal valuation — slight premium, fairly normal.`
+                          : diff < -10 ? `Asking price is ${Math.abs(diff)}% below municipal valuation — potential bargain.`
+                          : `Asking price aligns with municipal valuation.`
+                        }</p>;
+                      })()}
+                    </>
+                  )}
+                  {p.zoning && <Datum label="Zoning" value={p.zoning} source={{ name: `GVR ${p.gvr_source || ""}`, confidence: "verified" }} />}
+                  {p.property_category && <Datum label="Property Category" value={p.property_category} source={{ name: `GVR ${p.gvr_source || ""}`, confidence: "verified" }} />}
+                  {p.stand_size_sqm && <Datum label="Stand Size" value={`${Number(p.stand_size_sqm).toLocaleString()} m²`} source={{ name: p.gvr_source ? `GVR ${p.gvr_source}` : "listing", confidence: p.gvr_source ? "verified" : "estimated" }} />}
+                </div>
+              )}
+
+              {/* Bond information */}
+              {(p.bond_holder || p.bond_amount) && (
+                <div className="bg-blue-50 rounded p-3 space-y-1">
+                  <div className="text-[10px] text-blue-600 font-bold uppercase mb-1">Current Bond</div>
+                  {p.bond_holder && <Datum label="Bond Holder" value={p.bond_holder} source={{ name: "DeedsWeb", confidence: "verified" }} />}
+                  {p.bond_amount && <Datum label="Bond Amount" value={formatZAR(p.bond_amount)} source={{ name: "DeedsWeb", confidence: "verified" }} />}
+                  {p.bond_amount && p.asking_price && (
+                    <p className="text-xs text-blue-600 ml-4">
+                      {p.bond_amount > p.asking_price
+                        ? `Bond exceeds asking price by ${formatZAR(p.bond_amount - p.asking_price)} — seller may be under financial pressure. Strong negotiation position.`
+                        : `Bond is ${Math.round((p.bond_amount / p.asking_price) * 100)}% of asking price. Equity: ~${formatZAR(p.asking_price - p.bond_amount)}.`
+                      }
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Transfer history */}
+              {d?.transfer_history && Array.isArray(d.transfer_history) && d.transfer_history.length > 0 && (
+                <div>
+                  <div className="text-[10px] text-gray-500 font-bold uppercase mb-1">Transfer History</div>
+                  <div className="space-y-1">
+                    {d.transfer_history.map((t: A, ti: number) => {
+                      const prevPrice = d.transfer_history[ti + 1]?.price;
+                      const appreciation = prevPrice && t.price ? Math.round(((t.price / prevPrice) - 1) * 100) : null;
+                      return (
+                        <div key={ti} className="bg-gray-50 rounded p-2 text-xs flex items-center gap-3">
+                          <div className="shrink-0 text-gray-400 font-mono w-24">{t.date || t.registration_date || "Unknown"}</div>
+                          <div className="flex-1">
+                            {t.buyer && <span className="font-medium">{t.buyer}</span>}
+                            {t.seller && <span className="text-gray-400"> from {t.seller}</span>}
+                          </div>
+                          <div className="shrink-0 font-bold">{t.price ? formatZAR(t.price) : "—"}</div>
+                          {appreciation !== null && (
+                            <span className={`shrink-0 text-[10px] font-bold ${appreciation >= 0 ? "text-green-600" : "text-red-600"}`}>
+                              {appreciation >= 0 ? "+" : ""}{appreciation}%
+                            </span>
+                          )}
+                          {t.bond && <span className="shrink-0 text-[10px] text-blue-500">Bond: {formatZAR(t.bond)}</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {d.transfer_history.length >= 2 && (() => {
+                    const first = d.transfer_history[d.transfer_history.length - 1];
+                    const last = d.transfer_history[0];
+                    if (first?.price && last?.price && first.price > 0) {
+                      const totalAppreciation = Math.round(((last.price / first.price) - 1) * 100);
+                      const firstYear = parseInt(first.date || first.registration_date || "0");
+                      const lastYear = parseInt(last.date || last.registration_date || "0");
+                      const years = lastYear - firstYear;
+                      const annualized = years > 0 ? (totalAppreciation / years).toFixed(1) : null;
+                      return (
+                        <p className="text-xs text-gray-500 mt-2">
+                          Property value changed {totalAppreciation >= 0 ? "+" : ""}{totalAppreciation}% across {d.transfer_history.length} transfers
+                          {annualized ? ` (~${annualized}%/year over ${years} years)` : ""}.
+                          {p.asking_price && last.price ? ` Current asking is ${Math.round(((p.asking_price / last.price) - 1) * 100)}% ${p.asking_price >= last.price ? "above" : "below"} last transfer price.` : ""}
+                        </p>
+                      );
+                    }
+                    return null;
+                  })()}
+                </div>
+              )}
+
+              {/* Owner ID (if available, partially masked) */}
+              {p.owner_id_number && (
+                <div className="text-[10px] text-gray-400">Owner ID: {p.owner_id_number.substring(0, 6)}****{p.owner_id_number.slice(-2)}</div>
+              )}
+            </div>
+          ) : (
+            <div className="text-sm text-gray-400">
+              <p>No deeds data yet.</p>
+              <p className="text-[10px] mt-1">Deeds data is fetched automatically during report generation via Windeed/DeedsWeb. GVR data can be collected via the scraper page.</p>
+            </div>
+          )}
         </section>
 
         {/* ── CRIME ── */}
@@ -1149,14 +1270,17 @@ export default function PropertyDetailPage() {
             </div>
             <div className="space-y-2">
               {[
-                { label: "Electrical CoC", needed: p.electrical_coc_required, src: "OHS Act 1993", explain: "Required for every property transfer. The seller must provide a valid certificate (less than 2 years old) confirming the electrical installation is safe. Cost: R1,500-R5,000 depending on property size. If the installation fails, the seller pays for repairs." },
-                { label: "Plumbing CoC", needed: p.plumbing_coc_required, src: "Cape Town by-laws", explain: "Required in Cape Town for all property transfers. Confirms plumbing meets municipal standards. Cost: R1,000-R3,000. Common failures: leaking taps, non-compliant geyser installations, incorrect pipe sizing." },
-                { label: "Beetle Certificate", needed: p.beetle_cert_required, src: "WC/KZN requirement", explain: "Required in Western Cape and KZN. Confirms the property is free from wood-boring beetles. If beetles are found, treatment costs R3,000-R15,000 depending on severity. Roof timbers are the main concern." },
-                { label: "Gas CoC", needed: p.gas_coc_required, src: "Pressure Equipment Regs", explain: "Required if the property has any gas installation (stove, heater, braai). Must be issued by a registered gas installer. Cost: R800-R2,000." },
-                { label: "Electric Fence CoC", needed: p.electric_fence_coc_required, src: "OHS Act", explain: "Required if the property has an electric fence. Must comply with SANS 10222-3. Cost: R500-R1,500. Non-compliant fences must be upgraded at seller's expense." },
+                { label: "Electrical CoC", needed: p.electrical_coc_required, src: "OHS Act 1993", cost: "R2,500", explain: "Required for every property transfer. The seller must provide a valid certificate (less than 2 years old) confirming the electrical installation is safe. If the installation fails, the seller pays for repairs." },
+                { label: "Plumbing CoC", needed: p.plumbing_coc_required, src: "Cape Town by-laws", cost: "R1,500", explain: "Required in Cape Town for all property transfers. Confirms plumbing meets municipal standards. Common failures: leaking taps, non-compliant geyser installations, incorrect pipe sizing." },
+                { label: "Beetle Certificate", needed: p.beetle_cert_required, src: "WC/KZN requirement", cost: "R1,200", explain: "Required in Western Cape and KZN. Confirms the property is free from wood-boring beetles. If beetles are found, treatment costs R3,000-R15,000 depending on severity." },
+                { label: "Gas CoC", needed: p.gas_coc_required, src: "Pressure Equipment Regs", cost: "R800", explain: "Required if the property has any gas installation (stove, heater, braai). Must be issued by a registered gas installer." },
+                { label: "Electric Fence CoC", needed: p.electric_fence_coc_required, src: "OHS Act", cost: "R1,500", explain: "Required if the property has an electric fence. Must comply with SANS 10222-3. Non-compliant fences must be upgraded at seller's expense." },
               ].filter(c => c.needed).map(c => (
                 <div key={c.label} className="bg-yellow-50 border border-yellow-200 rounded p-3 text-xs">
-                  <div className="font-bold text-yellow-800">{c.label} <span className="font-normal text-yellow-600">— {c.src}</span></div>
+                  <div className="flex justify-between items-center">
+                    <div className="font-bold text-yellow-800">{c.label} <span className="font-normal text-yellow-600">— {c.src}</span></div>
+                    {"cost" in c && <span className="font-bold text-yellow-800">{(c as any).cost}</span>}
+                  </div>
                   <p className="text-yellow-700 mt-1">{c.explain}</p>
                 </div>
               ))}
@@ -1205,11 +1329,25 @@ export default function PropertyDetailPage() {
               const d = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
               if (!d) return null;
               return (
-                <div key={i} className="grid grid-cols-4 gap-2 mt-2">
-                  <div className="bg-gray-50 rounded p-2 text-center"><div className="text-lg font-bold">{d.annual_rainfall_mm}mm</div><div className="text-[9px] text-gray-500">Annual Rain</div></div>
-                  <div className="bg-gray-50 rounded p-2 text-center"><div className="text-lg font-bold">{d.avg_humidity}%</div><div className="text-[9px] text-gray-500">Avg Humidity</div></div>
-                  <div className={`rounded p-2 text-center ${d.damp_risk === "HIGH" ? "bg-red-50" : "bg-gray-50"}`}><div className="text-lg font-bold">{d.damp_risk}</div><div className="text-[9px] text-gray-500">Damp Risk</div></div>
-                  <div className="bg-gray-50 rounded p-2 text-center"><div className="text-lg font-bold">{d.climate_zone?.replace(/_/g, " ")}</div><div className="text-[9px] text-gray-500">Zone</div></div>
+                <div key={i}>
+                  <div className="grid grid-cols-4 gap-2 mt-2">
+                    <div className="bg-gray-50 rounded p-2 text-center"><div className="text-lg font-bold">{d.annual_rainfall_mm}mm</div><div className="text-[9px] text-gray-500">Annual Rain</div></div>
+                    <div className="bg-gray-50 rounded p-2 text-center"><div className="text-lg font-bold">{d.avg_humidity}%</div><div className="text-[9px] text-gray-500">Avg Humidity</div></div>
+                    <div className={`rounded p-2 text-center ${d.damp_risk === "HIGH" ? "bg-red-50" : "bg-gray-50"}`}><div className="text-lg font-bold">{d.damp_risk}</div><div className="text-[9px] text-gray-500">Damp Risk</div></div>
+                    <div className="bg-gray-50 rounded p-2 text-center"><div className="text-lg font-bold">{d.climate_zone?.replace(/_/g, " ")}</div><div className="text-[9px] text-gray-500">Zone</div></div>
+                  </div>
+                  <div className="grid grid-cols-4 gap-2 mt-2">
+                    {d.max_wind_speed_kmh && <div className={`rounded p-2 text-center ${d.max_wind_speed_kmh > 80 ? "bg-orange-50" : "bg-gray-50"}`}><div className="text-lg font-bold">{d.max_wind_speed_kmh} km/h</div><div className="text-[9px] text-gray-500">Max Wind</div></div>}
+                    {d.avg_wind_speed_kmh && <div className="bg-gray-50 rounded p-2 text-center"><div className="text-lg font-bold">{d.avg_wind_speed_kmh} km/h</div><div className="text-[9px] text-gray-500">Avg Wind</div></div>}
+                    {d.frost_days_per_year != null && <div className={`rounded p-2 text-center ${d.frost_days_per_year > 10 ? "bg-blue-50" : "bg-gray-50"}`}><div className="text-lg font-bold">{d.frost_days_per_year}</div><div className="text-[9px] text-gray-500">Frost Days/yr</div></div>}
+                    {d.wind_risk && <div className={`rounded p-2 text-center ${d.wind_risk === "HIGH" ? "bg-orange-50" : "bg-gray-50"}`}><div className="text-lg font-bold">{d.wind_risk}</div><div className="text-[9px] text-gray-500">Wind Risk</div></div>}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">{
+                    d.damp_risk === "HIGH" ? "High damp risk — expect moisture issues. Check for mould, peeling paint, and damp patches on walls. Budget for damp-proofing treatment." :
+                    d.frost_days_per_year > 20 ? "Significant frost — exposed pipes at risk of freezing. Check geyser insulation and exterior plumbing." :
+                    d.max_wind_speed_kmh > 80 ? "Strong winds — check roof condition, boundary walls, and outdoor structures for wind damage resistance." :
+                    "Climate conditions are moderate for this area."
+                  }</p>
                 </div>
               );
             })}
@@ -1262,6 +1400,74 @@ export default function PropertyDetailPage() {
             })}
           </div>
         ) : <p className="text-xs text-gray-400">No sold price data yet. Click Get Sold Prices to find recent sales in this suburb.</p>}
+        </section>
+
+        {/* ── SUBURB MARKET TRENDS ── */}
+        <section className="bg-white border rounded-lg p-4">
+          <div className="flex justify-between items-center mb-2">
+            <h2 className="font-bold text-sm">Suburb Market Trends — {p.suburb}</h2>
+            <CollectBtn action="pricetrends" label="Get Trends" ready={data.area_risks?.some((r: A) => r.risk_type === "price_trends")} />
+          </div>
+        {data.area_risks?.some((r: A) => r.risk_type === "price_trends") ? (
+          <div>
+            {data.area_risks.filter((r: A) => r.risk_type === "price_trends").map((r: A, i: number) => {
+              const d = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
+              if (!d) return null;
+              const int = d.internal_data;
+              const reg = d.regional_trend;
+              const mkt = d.market_context;
+              return (
+                <div key={i}>
+                  {/* Key metrics */}
+                  <div className="flex gap-3 mb-3">
+                    {int?.avg_price && <div className="bg-gray-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">{formatZAR(int.avg_price)}</div><div className="text-[9px] text-gray-500">Avg Asking</div></div>}
+                    {int?.median_price && <div className="bg-gray-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">{formatZAR(int.median_price)}</div><div className="text-[9px] text-gray-500">Median</div></div>}
+                    {int?.price_per_sqm && <div className="bg-gray-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">{formatZAR(int.price_per_sqm)}</div><div className="text-[9px] text-gray-500">Per m&#178;</div></div>}
+                    {int?.total_listings && <div className="bg-gray-50 rounded p-2 text-center flex-1"><div className="text-lg font-bold">{int.total_listings}</div><div className="text-[9px] text-gray-500">Listings</div></div>}
+                    {reg?.yoy_pct != null && (
+                      <div className={`rounded p-2 text-center flex-1 ${reg.yoy_pct > 3 ? "bg-green-50" : reg.yoy_pct > 0 ? "bg-blue-50" : "bg-red-50"}`}>
+                        <div className="text-lg font-bold">{reg.yoy_pct > 0 ? "+" : ""}{reg.yoy_pct}%</div>
+                        <div className="text-[9px] text-gray-500">YoY Growth</div>
+                      </div>
+                    )}
+                  </div>
+                  {/* Regional trend */}
+                  {reg && (
+                    <div className={`rounded p-2 mb-2 text-xs ${reg.trend === "strong_growth" ? "bg-green-50 text-green-800" : reg.trend === "moderate_growth" ? "bg-blue-50 text-blue-800" : "bg-gray-50 text-gray-700"}`}>
+                      <span className="font-bold capitalize">{(reg.trend || "").replace(/_/g, " ")}</span>
+                      {reg.note && <span> — {reg.note}</span>}
+                    </div>
+                  )}
+                  {/* Price by bedrooms */}
+                  {int?.price_by_bedrooms && Object.keys(int.price_by_bedrooms).length > 0 && (
+                    <div className="mb-2">
+                      <div className="text-[10px] text-gray-500 mb-1 font-semibold">Price by bedrooms</div>
+                      <div className="flex gap-2">
+                        {Object.entries(int.price_by_bedrooms).sort(([a], [b]) => Number(a) - Number(b)).map(([beds, info]: [string, any]) => (
+                          <div key={beds} className="bg-gray-50 rounded p-1.5 text-center flex-1">
+                            <div className="text-xs font-bold">{formatZAR(info.median)}</div>
+                            <div className="text-[8px] text-gray-400">{beds === "unknown" ? "?" : beds} bed ({info.count})</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* Market context */}
+                  {mkt?.key_factors && (
+                    <div className="mt-2 border-t pt-2">
+                      <div className="text-[10px] text-gray-500 font-semibold mb-1">SA Market Context (Prime: {mkt.prime_rate}%, HPI: +{mkt.house_price_inflation}%)</div>
+                      <div className="grid grid-cols-2 gap-1">
+                        {mkt.key_factors.slice(0, 4).map((f: string, fi: number) => (
+                          <div key={fi} className="text-[10px] text-gray-500 bg-gray-50 rounded px-2 py-1">{f}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : <p className="text-xs text-gray-400">No market trend data yet. Click Get Trends to analyse suburb pricing and regional growth.</p>}
         </section>
 
         {/* ── ELECTRICITY & LOAD SHEDDING ── */}

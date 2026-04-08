@@ -3,7 +3,7 @@ import { query } from "@/lib/db";
 import { withAuth } from "@/lib/auth";
 
 export const GET = withAuth(async () => {
-  const [crimePending, crimeTotal, solarPending, solarTotal, ppTotal, ppLatest, suburbs, suburbsWithListings, securityPending, securityTotal, sapsTotal, assist247Suburbs, procompareCompanies, waterPending, waterTotal, gvrTotal, schoolsTotal, schoolsPending, climateTotal, climatePending, loadsheddingTotal, soldpricesTotal, fibreTotal, kbTotal, kbActive, electricityTotal] = await Promise.all([
+  const [crimePending, crimeTotal, solarPending, solarTotal, ppTotal, ppLatest, suburbs, suburbsWithListings, securityPending, securityTotal, sapsTotal, assist247Suburbs, procompareCompanies, waterPending, waterTotal, gvrTotal, schoolsTotal, schoolsPending, climateTotal, climatePending, loadsheddingTotal, soldpricesTotal, fibreTotal, kbTotal, kbActive, electricityTotal, ragChunksByLayer, ragLastSeeded, ragPending, pricetrendsTotal, pricetrendsPending, propertycostsTotal, propertycostsPending] = await Promise.all([
     query(`SELECT COUNT(DISTINCT (p.suburb || '|' || p.city)) as cnt FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'crime_detailed')`),
     query(`SELECT COUNT(*) as cnt FROM area_risk_data WHERE risk_type = 'crime_detailed'`),
@@ -32,7 +32,43 @@ export const GET = withAuth(async () => {
     query(`SELECT COUNT(*) as cnt FROM rag_knowledge_entries`).catch(() => [{ cnt: 0 }]),
     query(`SELECT COUNT(*) as cnt FROM rag_knowledge_entries WHERE status = 'active'`).catch(() => [{ cnt: 0 }]),
     query(`SELECT COUNT(DISTINCT city) as cnt FROM area_risk_data WHERE risk_type = 'electricity'`).catch(() => [{ cnt: 0 }]),
+    query(`SELECT layer, COUNT(*) as count FROM rag_chunks GROUP BY layer ORDER BY count DESC`).catch(() => []),
+    query(`SELECT MAX(updated_at) as last_seeded FROM rag_chunks`).catch(() => [{ last_seeded: null }]),
+    // RAG pending: count source rows NOT yet in rag_chunks per source table
+    Promise.all([
+      query(`SELECT COUNT(*) as cnt FROM properties p WHERE p.suburb IS NOT NULL AND NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'properties' AND rc.source_id = p.id)`).catch(() => [{ cnt: 0 }]),
+      query(`SELECT COUNT(*) as cnt FROM area_risk_data ard WHERE NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'area_risk_data' AND rc.source_id = ard.id)`).catch(() => [{ cnt: 0 }]),
+      query(`SELECT COUNT(*) as cnt FROM holly_evidence he WHERE NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'holly_evidence' AND rc.source_id = he.id)`).catch(() => [{ cnt: 0 }]),
+      query(`SELECT COUNT(*) as cnt FROM property_images pi WHERE pi.vision_analysis IS NOT NULL AND jsonb_typeof(pi.vision_analysis->'findings') = 'array' AND jsonb_array_length(pi.vision_analysis->'findings') > 0 AND NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'property_images' AND rc.source_id = pi.id)`).catch(() => [{ cnt: 0 }]),
+      query(`SELECT COUNT(*) as cnt FROM security_companies sc WHERE NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'security_companies' AND rc.source_id = sc.id)`).catch(() => [{ cnt: 0 }]),
+      query(`SELECT COUNT(*) as cnt FROM property_reports pr WHERE NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'property_reports' AND rc.source_id = pr.id)`).catch(() => [{ cnt: 0 }]),
+      query(`SELECT COUNT(*) as cnt FROM data_feedback df WHERE NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'data_feedback' AND rc.source_id = df.id)`).catch(() => [{ cnt: 0 }]),
+      query(`SELECT COUNT(*) as cnt FROM rag_knowledge_entries rke WHERE rke.status = 'active' AND NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = 'rag_knowledge_entries' AND rc.source_id = rke.id)`).catch(() => [{ cnt: 0 }]),
+    ]),
+    query(`SELECT COUNT(DISTINCT (suburb || '|' || city)) as cnt FROM area_risk_data WHERE risk_type = 'price_trends'`).catch(() => [{ cnt: 0 }]),
+    query(`SELECT COUNT(DISTINCT (p.suburb || '|' || p.city)) as cnt FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'price_trends')`).catch(() => [{ cnt: 0 }]),
+    query(`SELECT COUNT(*) as cnt FROM properties WHERE extra_costs_json IS NOT NULL`).catch(() => [{ cnt: 0 }]),
+    query(`SELECT COUNT(*) as cnt FROM properties WHERE asking_price > 0 AND suburb IS NOT NULL AND extra_costs_json IS NULL`).catch(() => [{ cnt: 0 }]),
   ]);
+
+  const chunks: Record<string, number> = {};
+  let totalChunks = 0;
+  for (const r of ragChunksByLayer) {
+    chunks[r.layer] = parseInt(r.count);
+    totalChunks += parseInt(r.count);
+  }
+
+  const ragPendingResults = ragPending as { cnt: number | string }[][];
+  const pendingBySource: Record<string, { pending: number; layer: string }> = {
+    properties:           { pending: parseInt(String(ragPendingResults[0][0].cnt)), layer: "property" },
+    area_risk_data:       { pending: parseInt(String(ragPendingResults[1][0].cnt)), layer: "live / crime" },
+    holly_evidence:       { pending: parseInt(String(ragPendingResults[2][0].cnt)), layer: "evidence" },
+    property_images:      { pending: parseInt(String(ragPendingResults[3][0].cnt)), layer: "vision" },
+    security_companies:   { pending: parseInt(String(ragPendingResults[4][0].cnt)), layer: "security_company" },
+    property_reports:     { pending: parseInt(String(ragPendingResults[5][0].cnt)), layer: "report" },
+    data_feedback:        { pending: parseInt(String(ragPendingResults[6][0].cnt)), layer: "feedback" },
+    rag_knowledge_entries: { pending: parseInt(String(ragPendingResults[7][0].cnt)), layer: "knowledge" },
+  };
 
   return NextResponse.json({
     crime_pending: parseInt(crimePending[0].cnt),
@@ -62,5 +98,13 @@ export const GET = withAuth(async () => {
     kb_total: parseInt(kbTotal[0].cnt),
     kb_active: parseInt(kbActive[0].cnt),
     electricity_total: parseInt(electricityTotal[0].cnt),
+    pricetrends_total: parseInt(pricetrendsTotal[0].cnt),
+    pricetrends_pending: parseInt(pricetrendsPending[0].cnt),
+    propertycosts_total: parseInt(propertycostsTotal[0].cnt),
+    propertycosts_pending: parseInt(propertycostsPending[0].cnt),
+    rag_chunks_by_layer: chunks,
+    rag_total_chunks: totalChunks,
+    rag_last_seeded: ragLastSeeded[0]?.last_seeded || null,
+    rag_pending_by_source: pendingBySource,
   });
 });

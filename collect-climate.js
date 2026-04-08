@@ -101,7 +101,7 @@ async function collectForProperty(propertyId) {
        Math.round((annualRain > 800 ? 3 : annualRain > 500 ? 2 : 1) + (maxWind > 80 ? 3 : maxWind > 50 ? 2 : 0) + (annualFrostDays > 10 ? 2 : 0)),
        JSON.stringify(result)]
     );
-  } catch {}
+  } catch (e) { console.error(`[climate] DB insert failed for ${suburb}:`, e.message); }
 
   console.log(`[climate] ${suburb}: ${annualRain}mm/yr rain, ${avgHumidity}% humidity, damp risk ${dampRisk}, wind risk ${windRisk}`);
   return result;

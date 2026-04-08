@@ -9,7 +9,7 @@ type A = Record<string, any>;
 function fZAR(n: number | null) { return n != null ? `R${Number(n).toFixed(2)}` : "R0.00"; }
 function fUSD(n: number | null) { if (!n || Number(n) === 0) return "$0.00"; const v = Number(n); if (v < 0.01) return `$${v.toFixed(4)}`; return `$${v.toFixed(2)}`; }
 function fBytes(n: number | null) { if (!n) return "0 B"; if (n > 1_000_000) return `${(n/1_000_000).toFixed(1)} MB`; if (n > 1000) return `${(n/1000).toFixed(0)} KB`; return `${n} B`; }
-const ZAR_RATE = 18.5;
+const ZAR_RATE_FALLBACK = 18.3;
 
 export default function BillingPage() {
   const [data, setData] = useState<A | null>(null);
@@ -21,7 +21,8 @@ export default function BillingPage() {
   }, []);
 
   if (!data) return <p className="text-gray-500">Loading...</p>;
-  const { totals, today, month, by_service, by_endpoint, daily, by_property, data_size, avg_cost, recent, whatsapp } = data;
+  const { totals, today, month, by_service, by_endpoint, daily, by_property, data_size, avg_cost, recent, whatsapp, exchange_rate } = data;
+  const ZAR_RATE = exchange_rate?.rate || ZAR_RATE_FALLBACK;
 
   return (
     <div>
@@ -32,9 +33,9 @@ export default function BillingPage() {
       <div className="grid grid-cols-6 gap-3 mb-6">
         {[
           { label: "Total Spent", zar: fZAR(totals.total_zar), usd: fUSD(totals.total_usd), sub: `${totals.total_calls} API calls` },
-          { label: "Today", zar: fZAR(today.total_zar), usd: fUSD(Number(today.total_zar) / ZAR_RATE), sub: `${today.calls} calls` },
-          { label: "This Month", zar: fZAR(month.total_zar), usd: fUSD(Number(month.total_zar) / ZAR_RATE), sub: `${month.calls} calls` },
-          { label: "Avg / Property", zar: fZAR(avg_cost.avg_cost_zar), usd: fUSD(Number(avg_cost.avg_cost_zar || 0) / ZAR_RATE), sub: `max ${fZAR(avg_cost.max_cost_zar)}` },
+          { label: "Today", zar: fZAR(today.total_zar), usd: fUSD(today.total_usd || Number(today.total_zar) / ZAR_RATE), sub: `${today.calls} calls` },
+          { label: "This Month", zar: fZAR(month.total_zar), usd: fUSD(month.total_usd || Number(month.total_zar) / ZAR_RATE), sub: `${month.calls} calls` },
+          { label: "Avg / Property", zar: fZAR(avg_cost.avg_cost_zar), usd: fUSD(avg_cost.avg_cost_usd || Number(avg_cost.avg_cost_zar || 0) / ZAR_RATE), sub: `max ${fZAR(avg_cost.max_cost_zar)}` },
           { label: "Tokens Used", zar: `${Math.round((Number(totals.total_input_tokens)+Number(totals.total_output_tokens))/1000)}K`, usd: "", sub: `${Math.round(Number(totals.total_input_tokens)/1000)}K in / ${Math.round(Number(totals.total_output_tokens)/1000)}K out` },
           { label: "DB Size", zar: fBytes(Number(data_size.properties_table_bytes)+Number(data_size.images_table_bytes)+Number(data_size.reports_table_bytes)), usd: "", sub: `${data_size.total_properties} properties · ${data_size.total_images} photos` },
         ].map(c => (
@@ -47,6 +48,84 @@ export default function BillingPage() {
         ))}
       </div>
 
+      {/* Monthly Running Costs — infrastructure + subscriptions + usage */}
+      {(() => {
+        const apiCostMonth = Number(month?.total_zar) || 0;
+        const whatsappCostMonth = Number(whatsapp?.month_cost_zar || (whatsapp?.month?.outbound || 0) * 0.005 * ZAR_RATE) || 0;
+
+        const fixedCosts = [
+          { name: "AWS Lightsail", cost_zar: Math.round(40 * ZAR_RATE), cost_usd: 40, desc: "2 vCPU, 4GB RAM, 80GB SSD, London (eu-west-2)", type: "infra" },
+          { name: "Claude Max Plan", cost_zar: Math.round(100 * ZAR_RATE), cost_usd: 100, desc: "Claude Code CLI — development, coding, analysis", type: "subscription" },
+          { name: "Anthropic API", cost_zar: apiCostMonth, cost_usd: apiCostMonth / ZAR_RATE, desc: `Vision + report synthesis — ${month?.calls || 0} calls this month`, type: "usage" },
+          { name: "Google Maps APIs", cost_zar: Number(by_service?.find((s: A) => s.service === "google")?.month_zar || 0) || Math.round(apiCostMonth * 0.1), cost_usd: 0, desc: "Geocoding, Street View, Static Maps, Places", type: "usage" },
+          { name: "Twilio WhatsApp", cost_zar: whatsappCostMonth, cost_usd: whatsappCostMonth / ZAR_RATE, desc: `${whatsapp?.month?.outbound || 0} messages sent this month`, type: "usage" },
+          { name: "Domain + DNS", cost_zar: 30, cost_usd: Math.round(30 / ZAR_RATE * 100) / 100, desc: "surepath.co.za domain renewal (annualised)", type: "infra" },
+          { name: "PostgreSQL (Lightsail)", cost_zar: 0, cost_usd: 0, desc: "Included in Lightsail instance — self-hosted", type: "infra" },
+        ];
+
+        const totalMonthly = fixedCosts.reduce((s, c) => s + c.cost_zar, 0);
+        const maxCost = Math.max(...fixedCosts.map(c => c.cost_zar), 1);
+
+        const typeColors: Record<string, string> = {
+          infra: "bg-blue-600",
+          subscription: "bg-purple-600",
+          usage: "bg-amber-500",
+        };
+        const typeBadge: Record<string, string> = {
+          infra: "bg-blue-100 text-blue-700",
+          subscription: "bg-purple-100 text-purple-700",
+          usage: "bg-amber-100 text-amber-700",
+        };
+
+        return (
+          <div className="bg-white border rounded-lg p-4 mb-6">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <h2 className="font-bold text-sm">Monthly Running Costs</h2>
+                <p className="text-[10px] text-gray-500">Infrastructure, subscriptions, and usage-based costs</p>
+              </div>
+              <div className="text-right">
+                <div className="text-2xl font-bold">{fZAR(totalMonthly)}</div>
+                <div className="text-xs text-gray-500">{fUSD(totalMonthly / ZAR_RATE)} /month</div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {fixedCosts.filter(c => c.cost_zar > 0 || c.type === "infra").map(c => {
+                const pct = maxCost > 0 ? (c.cost_zar / maxCost) * 100 : 0;
+                return (
+                  <div key={c.name} className="flex items-center gap-3">
+                    <div className="w-36 shrink-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-semibold text-xs">{c.name}</span>
+                      </div>
+                      <span className={"text-[8px] px-1 py-0.5 rounded font-bold " + (typeBadge[c.type] || "")}>{c.type}</span>
+                    </div>
+                    <div className="flex-1">
+                      <div className="h-5 bg-gray-100 rounded-full overflow-hidden relative">
+                        <div className={"h-full rounded-full transition-all duration-500 " + (typeColors[c.type] || "bg-gray-400")} style={{ width: `${Math.max(pct, c.cost_zar > 0 ? 2 : 0)}%` }} />
+                        {c.cost_zar > 0 && (
+                          <span className="absolute right-2 top-0.5 text-[10px] font-mono font-bold text-gray-700">{fZAR(c.cost_zar)}</span>
+                        )}
+                      </div>
+                      <div className="text-[9px] text-gray-400 mt-0.5">{c.desc}</div>
+                    </div>
+                    <div className="w-16 text-right text-[10px] font-mono text-gray-500">{c.cost_usd > 0 ? fUSD(c.cost_usd) : "incl."}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex gap-4 mt-3 pt-3 border-t text-[9px] text-gray-400">
+              <span><span className="inline-block w-2 h-2 bg-blue-600 rounded mr-0.5" /> Infrastructure</span>
+              <span><span className="inline-block w-2 h-2 bg-purple-600 rounded mr-0.5" /> Subscription</span>
+              <span><span className="inline-block w-2 h-2 bg-amber-500 rounded mr-0.5" /> Usage-based</span>
+              <span className="ml-auto">Projected annual: <strong>{fZAR(totalMonthly * 12)}</strong> ({fUSD(totalMonthly * 12 / ZAR_RATE)})</span>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* API Status */}
       {apiStatus && (
         <div className="bg-white border rounded-lg p-4 mb-6">
@@ -56,13 +135,48 @@ export default function BillingPage() {
               const v = val as A;
               const color = v.status === "ok" ? "border-green-300 bg-green-50" : v.status === "down" ? "border-red-300 bg-red-50" : v.status === "configured" ? "border-blue-200 bg-blue-50" : "border-gray-200 bg-gray-50";
               const dot = v.status === "ok" ? "bg-green-500" : v.status === "down" ? "bg-red-500" : v.status === "configured" ? "bg-blue-400" : "bg-gray-300";
+
+              // Cost bar data per service — match by endpoint for Google sub-services
+              const serviceMap: Record<string, string[]> = {
+                anthropic: ["anthropic"],
+                google_geocoding: ["google_geocoding"],
+                google_streetview: ["google_streetview"],
+                google_satellite: ["google_static_map"],
+                twilio: ["twilio"],
+              };
+              const matchEndpoints = serviceMap[key] || [];
+              let svcCost = 0;
+              let svcCalls = 0;
+              let svcUsd = 0;
+              if (matchEndpoints.length > 0 && by_endpoint) {
+                for (const ep of by_endpoint) {
+                  if (matchEndpoints.some((m: string) => ep.endpoint?.includes(m) || ep.service?.includes(m))) {
+                    svcCost += Number(ep.total_zar || 0);
+                    svcCalls += Number(ep.calls || 0);
+                    svcUsd += Number(ep.total_usd || 0);
+                  }
+                }
+              }
+              // Fallback to service-level match for non-Google
+              if (svcCost === 0 && !key.startsWith("google_")) {
+                const svc = by_service?.find((s: A) => key === s.service) || null;
+                if (svc) { svcCost = Number(svc.total_zar); svcCalls = Number(svc.calls); svcUsd = Number(svc.total_usd); }
+              }
+
               return (
                 <div key={key} className={`border rounded p-3 ${color}`}>
                   <div className="flex items-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${dot}`} />
                     <span className="font-bold text-sm capitalize">{key.replace(/_/g, " ")}</span>
+                    {svcCost > 0 && <span className="ml-auto text-[10px] font-mono font-bold text-gray-600">{fZAR(svcCost)}</span>}
                   </div>
                   <div className="text-xs text-gray-600 mt-1">{v.message}</div>
+                  {svcCost > 0 && (
+                    <div className="h-1.5 bg-gray-200 rounded-full mt-1.5 overflow-hidden">
+                      <div className="h-full bg-green-500 rounded-full" style={{ width: `${Math.min(100, (svcCost / Math.max(Number(totals.total_zar), 1)) * 100)}%` }} />
+                    </div>
+                  )}
+                  {svcCalls > 0 && <div className="text-[9px] text-gray-400 mt-0.5">{svcCalls} calls &middot; {fUSD(svcUsd)}</div>}
                   {v.action && <a href={v.action} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline mt-1 block">Fix this &rarr;</a>}
                 </div>
               );
@@ -290,7 +404,10 @@ export default function BillingPage() {
             <div className="text-gray-400">WhatsApp cost per report: ~$0.02 (R0.37)</div>
           </div>
         </div>
-        <div className="text-[9px] text-gray-500 mt-2">Exchange rate: $1 = R{ZAR_RATE}. Prices as of April 2026. Actual costs depend on token usage.</div>
+        <div className="text-[9px] text-gray-500 mt-2">
+          Exchange rate: $1 = R{ZAR_RATE.toFixed(2)} ({exchange_rate?.source || "fallback"}{exchange_rate?.fetched_at ? `, fetched ${new Date(exchange_rate.fetched_at).toLocaleDateString()}` : ""}{exchange_rate?.cached ? " — cached" : ""}).
+          Updated weekly. Claude Max Plan: $100/month.
+        </div>
       </div>
 
       {/* Recent calls */}

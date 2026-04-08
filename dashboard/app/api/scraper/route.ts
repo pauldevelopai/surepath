@@ -222,6 +222,48 @@ export const POST = withAuth(async (req: NextRequest) => {
     }
   }
 
+  // ─── RAG re-seed ──────────────────────────────────────────────────
+  if (action === "rag_reseed") {
+    const existPid = readPid("rag-reseed");
+    if (existPid && isProcessAlive(existPid.pid)) {
+      return NextResponse.json({ ok: false, message: `RAG re-seed already running (PID ${existPid.pid})` });
+    }
+
+    const logLines: string[] = ["[rag-reseed] Starting full RAG re-seed..."];
+    scraperLog.push(...logLines);
+
+    const proc = spawn("node", ["-e", `
+      require('dotenv').config();
+      const { seedRAG } = require('./seed-rag');
+      const seedLive = require('./seed-live-data');
+      // seed-live-data runs on require and calls pool.end — so we just let it run
+    `], {
+      cwd: getProjectDir(),
+      env: { ...process.env, FORCE_COLOR: "0" },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+    });
+
+    scraperProcesses.set("rag-reseed", { proc, log: logLines, startedAt: new Date() });
+    writePid("rag-reseed", proc.pid);
+
+    proc.stdout?.on("data", (data: Buffer) => {
+      const lines = data.toString().split("\n").filter(Boolean).map(l => `[rag-reseed] ${l}`);
+      const entry = scraperProcesses.get("rag-reseed");
+      if (entry) { entry.log.push(...lines); if (entry.log.length > 500) entry.log = entry.log.slice(-500); }
+      scraperLog.push(...lines);
+    });
+    proc.stderr?.on("data", (data: Buffer) => {
+      const lines = data.toString().split("\n").filter(Boolean).map(l => `[rag-reseed] [ERROR] ${l}`);
+      const entry = scraperProcesses.get("rag-reseed");
+      if (entry) entry.log.push(...lines);
+    });
+    proc.on("close", () => { clearPid("rag-reseed"); scraperProcesses.delete("rag-reseed"); });
+    proc.unref();
+
+    return NextResponse.json({ ok: true, message: "RAG re-seed started" });
+  }
+
   if (action === "start") {
     // Determine scraper name and command based on source
     let scraperName: string;
@@ -444,6 +486,43 @@ export const POST = withAuth(async (req: NextRequest) => {
             try { await collectForProperty(prop.id); } catch (e) { console.log('ERROR: ' + prop.city + ' — ' + e.message); }
           }
           console.log('=== Electricity complete ===');
+          await pool.end();
+        })();
+      `];
+    } else if (source === "pricetrends") {
+      scraperName = "pricetrends";
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const { collectForProperty } = require('./collect-price-trends');
+        (async () => {
+          const { rows } = await pool.query(
+            "SELECT DISTINCT ON (p.suburb, p.city) p.id, p.suburb, p.city FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'price_trends') ORDER BY p.suburb, p.city, p.created_at DESC LIMIT 20"
+          );
+          console.log('Price Trends: ' + rows.length + ' suburbs to process');
+          for (const prop of rows) {
+            try { await collectForProperty(prop.id); } catch (e) { console.log('ERROR: ' + prop.suburb + ' — ' + e.message); }
+            await new Promise(r => setTimeout(r, 3000));
+          }
+          console.log('=== Price Trends complete ===');
+          await pool.end();
+        })();
+      `];
+    } else if (source === "propertycosts") {
+      scraperName = "propertycosts";
+      args = ["-e", `
+        require('dotenv').config();
+        const pool = require('./db');
+        const { collectForProperty } = require('./collect-property-costs');
+        (async () => {
+          const { rows } = await pool.query(
+            "SELECT id, suburb FROM properties WHERE asking_price > 0 AND suburb IS NOT NULL AND extra_costs_json IS NULL ORDER BY created_at DESC LIMIT 50"
+          );
+          console.log('Property Costs: ' + rows.length + ' properties to calculate');
+          for (const prop of rows) {
+            try { await collectForProperty(prop.id); } catch (e) { console.log('ERROR: ' + prop.suburb + ' — ' + e.message); }
+          }
+          console.log('=== Property Costs complete ===');
           await pool.end();
         })();
       `];

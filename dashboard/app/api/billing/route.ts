@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { withAuth } from "@/lib/auth";
+import path from "path";
 
 export const GET = withAuth(async () => {
   // Total costs by service
@@ -175,6 +176,17 @@ export const GET = withAuth(async () => {
   const wa = whatsapp[0] || {};
   const waOutbound = Number(wa.outbound || 0);
 
+  // Fetch live exchange rate (cached weekly)
+  let exchangeRate = { rate: 18.3, source: "fallback", cached: false, fetched_at: null as string | null };
+  try {
+    const erPath = path.resolve(process.cwd(), "..", "exchange-rate.js");
+    const er = await import(/* webpackIgnore: true */ erPath);
+    const getRate = er.getRate || er.default?.getRate;
+    if (getRate) exchangeRate = await getRate();
+  } catch {}
+
+  const zarRate = exchangeRate.rate;
+
   return NextResponse.json({
     totals: totals[0],
     today: today[0],
@@ -186,11 +198,13 @@ export const GET = withAuth(async () => {
     data_size: dataSize[0],
     avg_cost: avgCost[0] || { avg_cost_zar: 0, max_cost_zar: 0, min_cost_zar: 0 },
     recent,
+    exchange_rate: exchangeRate,
     whatsapp: {
       ...wa,
       cost_per_msg_usd: TWILIO_COST_PER_MSG_USD,
       total_cost_usd: waOutbound * TWILIO_COST_PER_MSG_USD,
-      total_cost_zar: waOutbound * TWILIO_COST_PER_MSG_USD * 18.5,
+      total_cost_zar: Math.round(waOutbound * TWILIO_COST_PER_MSG_USD * zarRate * 100) / 100,
+      month_cost_zar: Math.round(Number((whatsappMonth[0] || { outbound: 0 }).outbound) * TWILIO_COST_PER_MSG_USD * zarRate * 100) / 100,
       today: whatsappToday[0] || { outbound: 0, inbound: 0 },
       month: whatsappMonth[0] || { outbound: 0, inbound: 0 },
       daily: whatsappDaily,

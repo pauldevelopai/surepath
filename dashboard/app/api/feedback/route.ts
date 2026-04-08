@@ -39,10 +39,10 @@ export const GET = withAuth(async (req: NextRequest) => {
 
   if (all) {
     const rows = await query(`
-      SELECT df.*, p.address_raw, p.suburb
+      SELECT df.*, p.address_raw, p.suburb,
+        CASE WHEN df.finding_hash IS NOT NULL AND df.rating IN ('good', 'bad', 'correct', 'incorrect', 'unsure') THEN 'finding_rating' ELSE 'feedback' END AS feedback_type
       FROM data_feedback df
       LEFT JOIN properties p ON p.id = df.property_id
-      WHERE NOT (df.rating IN ('good', 'bad', 'correct', 'incorrect', 'unsure') AND (df.finding_hash IS NOT NULL OR df.section LIKE 'daily_check%'))
       ORDER BY df.created_at DESC
       LIMIT 200
     `);

@@ -20,6 +20,10 @@ export default function IntelligenceHubPage() {
 
   const [qRunning, setQRunning] = useState(false);
   const [qResult, setQResult] = useState<A | null>(null);
+  const [sampleImages, setSampleImages] = useState<A[] | null>(null);
+  const [sampleLoading, setSampleLoading] = useState(false);
+  const [recipe, setRecipe] = useState<A | null>(null);
+  const [showRecipe, setShowRecipe] = useState(false);
   const [verdicts, setVerdicts] = useState<Record<number, string>>({});
   const [expandedSource, setExpandedSource] = useState<string | null>(null);
   const [sourceDetail, setSourceDetail] = useState<A | null>(null);
@@ -357,10 +361,34 @@ export default function IntelligenceHubPage() {
       {/* ─── Test Nico ──────────────────────────────────────────────── */}
       <div className="bg-white border rounded-lg p-4 shadow-sm mb-6">
         <h2 className="font-bold text-sm mb-1">Test Nico</h2>
-        <p className="text-xs text-gray-400 mb-2">Paste an image URL to compare Base Nico vs Nico + RAG. The server downloads the image — no upload needed.</p>
+        <p className="text-xs text-gray-400 mb-2">Pick a property image from the database or paste a URL. Compares Base Nico vs Nico + RAG.</p>
+
+        {/* Image picker from DB */}
+        <div className="mb-3">
+          <button
+            onClick={async () => { setSampleLoading(true); const d = await (await fetch("/api/intelligence?section=sample_images")).json(); setSampleImages(d.images || []); setSampleLoading(false); }}
+            className="text-xs text-blue-600 hover:underline mb-2"
+          >{sampleLoading ? "Loading..." : sampleImages ? "Refresh images" : "Pick from database"}</button>
+          {sampleImages && sampleImages.length > 0 && (
+            <div className="grid grid-cols-6 gap-2 mb-2">
+              {sampleImages.map((img: A) => (
+                <button key={img.id} onClick={() => { if (!qRunning) handleUrlTest(img.image_url); }}
+                  disabled={qRunning}
+                  className="relative group rounded overflow-hidden border hover:border-blue-500 disabled:opacity-50"
+                  title={`${img.address_raw || img.suburb} — ${img.photo_type || img.image_type || "photo"}`}
+                >
+                  <img src={img.image_url} alt="" className="w-full h-16 object-cover" loading="lazy" />
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5 text-[8px] text-white truncate">
+                    {img.suburb}{img.construction_era ? ` · ${img.construction_era}` : ""}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="flex gap-2 mb-2">
-          <input type="text" placeholder="Paste image URL (e.g. https://images.prop24.com/...)" className="flex-1 border rounded px-3 py-2 text-sm"
+          <input type="text" placeholder="Or paste image URL..." className="flex-1 border rounded px-3 py-2 text-sm"
             onKeyDown={e => { if (e.key === "Enter") { const url = (e.target as HTMLInputElement).value.trim(); if (url && !qRunning) handleUrlTest(url); } }}
             id="test-nico-url" disabled={qRunning} />
           <button onClick={() => { const el = document.getElementById("test-nico-url") as HTMLInputElement; if (el?.value.trim() && !qRunning) handleUrlTest(el.value.trim()); }}
@@ -436,6 +464,90 @@ export default function IntelligenceHubPage() {
                 </div>
               )}
             </>)}
+          </div>
+        )}
+      </div>
+
+      {/* ─── Nico's Recipe ────────────────────────────────────────── */}
+      <div className="bg-[#0D1B2A] text-white rounded-lg p-4 shadow-sm mb-6">
+        <div className="flex justify-between items-center">
+          <div>
+            <h2 className="font-bold text-sm">Nico&apos;s Recipe</h2>
+            <p className="text-[10px] text-gray-400">What prompts, models, RAG layers, and data Nico uses for each activity</p>
+          </div>
+          <button onClick={() => { if (!recipe) fetch("/api/intelligence?section=nico_recipe").then(r => r.json()).then(d => setRecipe(d.recipe)); setShowRecipe(!showRecipe); }}
+            className="text-[10px] text-blue-400 hover:underline">{showRecipe ? "Hide" : "Show recipe"}</button>
+        </div>
+
+        {showRecipe && recipe && (
+          <div className="mt-4 space-y-4">
+            {/* Activities */}
+            <div>
+              <h3 className="text-xs font-bold text-gray-300 mb-2">Activities</h3>
+              <div className="space-y-2">
+                {recipe.activities?.map((a: A, i: number) => (
+                  <div key={i} className="bg-white/5 rounded p-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-bold text-sm">{a.name}</span>
+                      <span className="text-[9px] px-1.5 py-0.5 bg-blue-900 rounded font-mono">{a.model}</span>
+                      <span className="text-[9px] text-gray-400 ml-auto">{a.cost}</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3 text-[10px]">
+                      <div>
+                        <div className="text-gray-500 font-bold mb-0.5">Inputs</div>
+                        {a.inputs?.map((inp: string, ii: number) => <div key={ii} className="text-gray-300">{inp}</div>)}
+                      </div>
+                      <div>
+                        <div className="text-gray-500 font-bold mb-0.5">RAG</div>
+                        {a.rag?.enabled ? (
+                          <>
+                            <div className="text-green-400">Enabled — {a.rag.budget}</div>
+                            <div className="text-gray-400">Layers: {a.rag.layers?.join(", ")}</div>
+                            <div className="text-gray-500 truncate" title={a.rag.query}>Query: {a.rag.query}</div>
+                          </>
+                        ) : <div className="text-gray-600">Not used</div>}
+                      </div>
+                      <div>
+                        <div className="text-gray-500 font-bold mb-0.5">Output</div>
+                        <div className="text-gray-300">{a.output}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* RAG Layers */}
+            <div>
+              <h3 className="text-xs font-bold text-gray-300 mb-2">RAG Layers</h3>
+              <div className="grid grid-cols-2 gap-2">
+                {recipe.rag_layers?.map((l: A) => (
+                  <div key={l.layer} className="bg-white/5 rounded p-2 text-[10px]">
+                    <div className="flex justify-between">
+                      <span className="font-bold text-amber-400">{l.layer}</span>
+                      <span className="text-gray-500 font-mono">{l.source}</span>
+                    </div>
+                    <div className="text-gray-400">{l.desc}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Embedding & Reseed */}
+            <div className="grid grid-cols-2 gap-4 text-[10px]">
+              <div className="bg-white/5 rounded p-2">
+                <div className="text-gray-500 font-bold mb-0.5">Embedding Model</div>
+                <div className="text-gray-300">{recipe.embedding?.model} ({recipe.embedding?.dims} dims)</div>
+                <div className="text-gray-500">{recipe.embedding?.library}</div>
+                <div className="text-gray-500">Index: {recipe.embedding?.index}</div>
+              </div>
+              <div className="bg-white/5 rounded p-2">
+                <div className="text-gray-500 font-bold mb-0.5">RAG Re-seed Schedule</div>
+                <div className="text-gray-300">{recipe.reseed?.schedule}</div>
+                <div className="text-gray-300">{recipe.reseed?.manual}</div>
+                <div className="text-amber-400">{recipe.reseed?.auto}</div>
+              </div>
+            </div>
           </div>
         )}
       </div>

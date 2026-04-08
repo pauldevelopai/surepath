@@ -65,6 +65,15 @@ function formatAreaRisk(row) {
     case 'electricity':
       return `${loc}. Electricity: ${row.risk_level || '?'}${d.tariff ? ', tariff R' + d.tariff + '/kWh' : ''}${d.solar_potential ? ', solar potential: ' + d.solar_potential : ''}.`;
 
+    case 'price_trends': {
+      const parts = [`${loc}. Property price trends: ${row.risk_level || 'unknown'} market.`];
+      if (d.internal_data?.avg_price) parts.push(`Avg asking R${d.internal_data.avg_price.toLocaleString()}, ${d.internal_data.total_listings} listings.`);
+      if (d.internal_data?.price_per_sqm) parts.push(`R${d.internal_data.price_per_sqm.toLocaleString()}/m².`);
+      if (d.regional_trend) parts.push(`Regional: ${d.regional_trend.yoy_pct}% YoY (${d.regional_trend.note || ''}).`);
+      if (d.market_context?.key_factors) parts.push(`Market factors: ${d.market_context.key_factors.slice(0, 3).join('; ')}.`);
+      return parts.join(' ');
+    }
+
     default:
       return `${loc}. ${row.risk_type}: ${row.risk_level || row.risk_score || '?'}.`;
   }
