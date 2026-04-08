@@ -7,6 +7,7 @@ import { formatDate } from "@/lib/format";
 const STATUS_COLORS: Record<string, string> = {
   approved: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
+  pending: "bg-amber-100 text-amber-800",
   pending_review: "bg-yellow-100 text-yellow-800",
 };
 
@@ -73,8 +74,8 @@ export default function RAGReviewPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-1">RAG Data Review</h1>
-      <p className="text-sm text-gray-500 mb-4">Review scraped data before it enters the knowledge base. Click any item to read the full content.</p>
+      <h1 className="text-2xl font-bold mb-1">Knowledge Base</h1>
+      <p className="text-sm text-gray-500 mb-4">Review scraped data before it gets seeded. Pending items need your approval. Only approved items enter RAG.</p>
 
       {/* Source summary cards */}
       <div className="grid grid-cols-4 gap-3 mb-6">
@@ -86,13 +87,11 @@ export default function RAGReviewPage() {
               <span className="font-bold text-xs">{s.label}</span>
             </div>
             <div className="text-[9px] text-gray-400 mb-2">{s.layer} layer</div>
-            <div className="grid grid-cols-3 gap-1 text-center">
-              <div className="bg-gray-50 rounded p-1"><div className="text-sm font-bold">{Number(s.total).toLocaleString()}</div><div className="text-[8px] text-gray-400">total</div></div>
-              <div className="bg-green-50 rounded p-1"><div className="text-sm font-bold text-green-700">{Number(s.in_rag).toLocaleString()}</div><div className="text-[8px] text-gray-400">in RAG</div></div>
-              <div className={Number(s.rejected) > 0 ? "bg-red-50 rounded p-1" : "bg-gray-50 rounded p-1"}>
-                <div className={"text-sm font-bold " + (Number(s.rejected) > 0 ? "text-red-600" : "")}>{Number(s.rejected)}</div>
-                <div className="text-[8px] text-gray-400">rejected</div>
-              </div>
+            <div className="flex gap-1 text-center flex-wrap">
+              <div className="bg-gray-50 rounded p-1 flex-1"><div className="text-sm font-bold">{Number(s.total).toLocaleString()}</div><div className="text-[8px] text-gray-400">total</div></div>
+              {Number(s.pending) > 0 && <div className="bg-amber-50 rounded p-1 flex-1"><div className="text-sm font-bold text-amber-600">{Number(s.pending).toLocaleString()}</div><div className="text-[8px] text-amber-500">pending</div></div>}
+              <div className="bg-green-50 rounded p-1 flex-1"><div className="text-sm font-bold text-green-700">{Number(s.approved).toLocaleString()}</div><div className="text-[8px] text-gray-400">approved</div></div>
+              {Number(s.rejected) > 0 && <div className="bg-red-50 rounded p-1 flex-1"><div className="text-sm font-bold text-red-600">{Number(s.rejected)}</div><div className="text-[8px] text-gray-400">rejected</div></div>}
             </div>
           </button>
         ))}
@@ -121,10 +120,10 @@ export default function RAGReviewPage() {
 
           {/* Filters */}
           <div className="flex gap-1 mb-3">
-            {["all", "approved", "rejected", "pending_review", "not_in_rag"].map(f => (
+            {["all", "pending", "approved", "rejected", "not_in_rag"].map(f => (
               <button key={f} onClick={() => changeFilter(f)}
                 className={`px-2 py-1 rounded text-[10px] font-bold ${filter === f ? "bg-[#0D1B2A] text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}>
-                {f === "not_in_rag" ? "Not in RAG" : f === "pending_review" ? "Flagged" : f.charAt(0).toUpperCase() + f.slice(1)}
+                {f === "not_in_rag" ? "Not in RAG" : f.charAt(0).toUpperCase() + f.slice(1)}
               </button>
             ))}
           </div>

@@ -88,7 +88,7 @@ async function seedLiveData() {
   // ─── 1. Area risk data ──────────────────────────────────────────────
   console.log('\n[seed-live] Seeding area_risk_data...');
   const { rows: areaRows } = await pool.query(
-    "SELECT id, suburb, city, risk_type, risk_level, risk_score, details FROM area_risk_data WHERE COALESCE(rag_status, 'approved') != 'rejected' ORDER BY id"
+    "SELECT id, suburb, city, risk_type, risk_level, risk_score, details FROM area_risk_data WHERE COALESCE(rag_status, 'approved') = 'approved' ORDER BY id"
   );
 
   for (const row of areaRows) {
@@ -181,7 +181,7 @@ async function seedLiveData() {
               bedrooms, bathrooms, asking_price, stand_size_sqm, floor_area_sqm,
               suburb_crime_score, LEFT(description, 1000) AS description
        FROM properties
-       WHERE suburb IS NOT NULL AND COALESCE(rag_status, 'approved') != 'rejected'
+       WHERE suburb IS NOT NULL AND COALESCE(rag_status, 'approved') = 'approved'
        ORDER BY id
        LIMIT $1 OFFSET $2`,
       [PROP_BATCH, propOffset]
