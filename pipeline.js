@@ -646,9 +646,9 @@ async function generateReport(input, askingPrice, phoneNumber) {
       log(1, `Using address directly: "${address}"`);
     }
 
-    // Geocode
+    // Geocode — pass listing URL for location context (prevents "Albany" → Albany NY)
     log(1, 'Geocoding address...');
-    const geo = await maps.geocode(address);
+    const geo = await maps.geocode(address, input);
     if (geo) {
       log(1, `Geocoded: ${geo.lat}, ${geo.lng} — ${geo.suburb}, ${geo.city}, ${geo.province}`);
     } else {

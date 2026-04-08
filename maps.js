@@ -35,10 +35,58 @@ function httpGet(url, binary = false) {
  * Geocode an address string using Google Maps Geocoding API.
  * Returns { lat, lng, suburb, city, province, formatted_address } or null.
  */
-async function geocode(address) {
+/**
+ * Extract location context from a SA property listing URL.
+ * e.g. "privateproperty.co.za/for-sale/kwazulu-natal/durban-metro/hillcrest/albany/T123"
+ *   → { province: "kwazulu-natal", city: "durban-metro", area: "hillcrest", suburb: "albany" }
+ */
+function extractLocationFromURL(url) {
+  if (!url) return null;
+  // PrivateProperty: /for-sale/{province}/{city}/{area}/{suburb}/T{id}
+  const ppMatch = url.match(/privateproperty\.co\.za\/for-sale\/([^/]+)\/([^/]+)\/([^/]+)\/([^/]+)\//i);
+  if (ppMatch) {
+    return {
+      province: ppMatch[1].replace(/-/g, ' '),
+      city: ppMatch[2].replace(/-/g, ' '),
+      area: ppMatch[3].replace(/-/g, ' '),
+      suburb: ppMatch[4].replace(/-/g, ' '),
+    };
+  }
+  // Property24: /for-sale/{suburb}/{city}/{province}/{code}/{id}
+  const p24Match = url.match(/property24\.com\/for-sale\/([^/]+)\/([^/]+)\/([^/]+)\/(\d+)\//i);
+  if (p24Match) {
+    return {
+      suburb: p24Match[1].replace(/-/g, ' '),
+      city: p24Match[2].replace(/-/g, ' '),
+      province: p24Match[3].replace(/-/g, ' '),
+    };
+  }
+  return null;
+}
+
+async function geocode(address, listingUrl) {
   if (!API_KEY) throw new Error('GOOGLE_MAPS_API_KEY not set');
 
-  const encoded = encodeURIComponent(address);
+  // Enrich the address with location context from the listing URL
+  // This prevents "Albany" (SA) from geocoding to "Albany, NY, USA"
+  let geocodeAddress = address;
+  const urlLocation = extractLocationFromURL(listingUrl);
+  if (urlLocation) {
+    // Check if the address already contains meaningful location info
+    const hasLocation = /south africa|cape town|johannesburg|durban|pretoria|bloemfontein/i.test(address);
+    if (!hasLocation) {
+      // Build a location string from the URL: "Albany, Hillcrest, Durban Metro, KwaZulu-Natal, South Africa"
+      const parts = [address.replace(/^\d+\s*bedroom\s+(house|apartment|townhouse|flat|cluster|farm|land)\s+in\s+/i, '')];
+      if (urlLocation.area && urlLocation.area !== urlLocation.suburb) parts.push(urlLocation.area);
+      if (urlLocation.city) parts.push(urlLocation.city);
+      if (urlLocation.province) parts.push(urlLocation.province);
+      parts.push('South Africa');
+      geocodeAddress = parts.join(', ');
+      console.log(`[geocode] Enriched address: "${address}" → "${geocodeAddress}"`);
+    }
+  }
+
+  const encoded = encodeURIComponent(geocodeAddress);
   const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encoded}&region=za&key=${API_KEY}`;
 
   try {
@@ -170,8 +218,8 @@ async function getSatelliteView(lat, lng) {
  * @param {number} propertyId - Property ID to link images to
  * @returns {{ geocode, streetview_base64, satellite_base64, streetview_image_id, satellite_image_id } | null}
  */
-async function lookupAddress(address, propertyId) {
-  const geo = await geocode(address);
+async function lookupAddress(address, propertyId, listingUrl) {
+  const geo = await geocode(address, listingUrl);
   if (!geo) return null;
 
   // Update property with geocoded data

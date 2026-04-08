@@ -37,7 +37,7 @@ export const POST = withAuth(async (req: NextRequest, { params }: { params: Prom
     if (action === "geocode") {
       if (!process.env.GOOGLE_MAPS_API_KEY) return NextResponse.json({ ok: false, message: "GOOGLE_MAPS_API_KEY not set" });
       const maps = await loadModule("maps");
-      const geo = await maps.geocode(prop.address_raw + ", South Africa");
+      const geo = await maps.geocode(prop.address_raw, prop.listing_url);
       if (!geo) return NextResponse.json({ ok: false, message: "Geocoding returned no results" });
       await query(`UPDATE properties SET lat=$1, lng=$2, address_normalised=$3, suburb=COALESCE($4,suburb), city=COALESCE($5,city), province=COALESCE($6,province) WHERE id=$7`,
         [geo.lat, geo.lng, geo.formatted_address, geo.suburb, geo.city, geo.province, id]);
