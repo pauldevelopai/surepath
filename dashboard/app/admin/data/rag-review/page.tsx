@@ -105,7 +105,13 @@ export default function RAGReviewPage() {
               <h2 className="font-bold text-sm">{detail.label}</h2>
               <span className="text-[10px] text-gray-400">{detail.total.toLocaleString()} items — layer: {detail.layer}</span>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
+              <button onClick={() => {
+                const allIds = (detail?.rows || []).map((r: any) => r.id);
+                setSelected(prev => prev.size === allIds.length ? new Set() : new Set(allIds));
+              }} className="px-3 py-1 bg-gray-100 text-gray-600 rounded text-xs hover:bg-gray-200">
+                {selected.size === (detail?.rows || []).length ? "Deselect All" : "Select All"}
+              </button>
               {selected.size > 0 && (<>
                 <button onClick={() => post({ action: "update_status", source: selectedSource, ids: [...selected], status: "approved" })} className="px-3 py-1 bg-green-600 text-white rounded text-xs font-semibold hover:bg-green-700">Approve ({selected.size})</button>
                 <button onClick={() => post({ action: "update_status", source: selectedSource, ids: [...selected], status: "rejected" })} className="px-3 py-1 bg-red-600 text-white rounded text-xs font-semibold hover:bg-red-700">Reject ({selected.size})</button>
