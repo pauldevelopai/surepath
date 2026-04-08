@@ -8,8 +8,8 @@ const SOURCES = [
     key: "area_risk_data",
     label: "Area Risk Data",
     layer: "live / crime",
-    query: `SELECT id, suburb, city, risk_type, risk_level, risk_score, source_name, data_date, rag_status, created_at,
-              LEFT(details::text, 300) AS details_preview
+    query: `SELECT id, suburb, city, risk_type, risk_level, risk_score, source_name, source_url, data_date, rag_status, created_at,
+              details::text AS details_json
             FROM area_risk_data ORDER BY created_at DESC`,
     countQuery: `SELECT COUNT(*) as total,
       COUNT(*) FILTER (WHERE rag_status = 'approved') as approved,
@@ -93,7 +93,8 @@ const SOURCES = [
     key: "rag_knowledge_entries",
     label: "Knowledge Base",
     layer: "knowledge",
-    query: `SELECT id, name, category, severity, status, description, rag_status, created_at
+    query: `SELECT id, name, category, severity, status, description, visual_indicators, sa_context,
+              cost_min_zar, cost_max_zar, source_url, rag_status, created_at
             FROM rag_knowledge_entries ORDER BY created_at DESC`,
     countQuery: `SELECT COUNT(*) as total,
       COUNT(*) FILTER (WHERE rag_status = 'approved') as approved,
@@ -198,6 +199,19 @@ export const POST = withAuth(async (req: NextRequest) => {
   if (action === "bulk_reject_all") {
     if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
     await query(`UPDATE ${source} SET rag_status = 'rejected' WHERE rag_status != 'approved'`);
+    return NextResponse.json({ ok: true });
+  }
+
+  // Activate/deactivate knowledge entries (changes status field, not rag_status)
+  if (action === "activate_knowledge") {
+    if (!ids || !Array.isArray(ids)) return NextResponse.json({ error: "ids required" }, { status: 400 });
+    await query("UPDATE rag_knowledge_entries SET status = 'active' WHERE id = ANY($1::int[])", [ids]);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "deactivate_knowledge") {
+    if (!ids || !Array.isArray(ids)) return NextResponse.json({ error: "ids required" }, { status: 400 });
+    await query("UPDATE rag_knowledge_entries SET status = 'draft' WHERE id = ANY($1::int[])", [ids]);
     return NextResponse.json({ ok: true });
   }
 
