@@ -936,7 +936,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
 
     // ── Global commands — work in any state ──────────────────────────
     // Feedback: "feedback: <message>" or just "feedback <message>"
-    const feedbackMatch = body.match(/^feedback[:\s]+(.+)/i);
+    const feedbackMatch = body.match(/^feedback[\s]+(.+)/i);
     if (feedbackMatch) {
       const feedbackText = feedbackMatch[1].trim();
       await pool.query(
@@ -955,7 +955,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
         "*Surepath*\n\n" +
         "Send a *Property24* or *PrivateProperty* listing link to get a property checked.\n\n" +
         "*1* — Get the full report\n" +
-        "*feedback:* your message — Tell us what you think\n" +
+        "*feedback* your message — Tell us what you think\n" +
         "*help* — Show this menu"
       );
       res.type('text/xml').send('<Response></Response>');
@@ -1398,7 +1398,7 @@ async function runPipelineAsync(order, conv) {
     const reportMsg = `*Your Surepath Report is Ready*\n\n` +
       `We've checked the listing photos, Street View, satellite imagery, deeds history, crime stats, infrastructure risks, and compliance requirements.\n\n` +
       `To check another property, send a new listing link.\n\n` +
-      `We'd love to hear what you think — type *feedback:* followed by your thoughts.`;
+      `We'd love to hear what you think — type *feedback* followed by your thoughts.`;
 
     if (publicPdfUrl) {
       console.log(`[pipeline] Sending PDF: ${publicPdfUrl}`);
