@@ -60,7 +60,17 @@ function containsURL(text) {
 
 function extractURL(text) {
   const match = text.match(/(https?:\/\/[^\s]+)/i);
-  return match ? match[1] : null;
+  if (!match) return null;
+  // Strip tracking params (utm_source, fbclid, etc.) — they can cause 503s on P24
+  try {
+    const u = new URL(match[1]);
+    [...u.searchParams.keys()].forEach(k => {
+      if (/^(utm_|fbclid|gclid|ref|si$|_ga$)/i.test(k)) u.searchParams.delete(k);
+    });
+    return u.toString().replace(/\?$/, '');
+  } catch {
+    return match[1];
+  }
 }
 
 function parsePrice(text) {

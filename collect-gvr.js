@@ -40,6 +40,7 @@ function fetchPage(url) {
       path: parsed.pathname + parsed.search,
       headers: { 'User-Agent': USER_AGENT },
       timeout: 30000,
+      rejectUnauthorized: false, // SA municipal sites often have expired/invalid SSL certs
     }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         const loc = res.headers.location.startsWith('http') ? res.headers.location : `${parsed.protocol}//${parsed.hostname}${res.headers.location}`;
@@ -99,7 +100,7 @@ const METROS = {
     prefix: 'EKU',
     province: 'Gauteng',
     city: 'Ekurhuleni',
-    bulkUrl: 'https://www.ekurhuleni.gov.za/residents/rates-and-taxes',
+    bulkUrl: 'https://www.ekurhuleni.gov.za/valuation-roll',
     type: 'portal',
   },
   nelson_mandela_bay: {
