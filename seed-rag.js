@@ -20,7 +20,7 @@ async function seedRAG() {
     const { rows: kbRows } = await pool.query(
       `SELECT id, name, description, visual_indicators, sa_context, severity,
               cost_min_zar, cost_max_zar, category
-       FROM rag_knowledge_entries WHERE status = 'active'`
+       FROM rag_knowledge_entries WHERE status = 'active' AND COALESCE(rag_status, 'approved') != 'rejected'`
     );
     let count = 0;
     for (const row of kbRows) {

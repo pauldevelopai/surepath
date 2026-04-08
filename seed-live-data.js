@@ -88,7 +88,7 @@ async function seedLiveData() {
   // ─── 1. Area risk data ──────────────────────────────────────────────
   console.log('\n[seed-live] Seeding area_risk_data...');
   const { rows: areaRows } = await pool.query(
-    'SELECT id, suburb, city, risk_type, risk_level, risk_score, details FROM area_risk_data ORDER BY id'
+    "SELECT id, suburb, city, risk_type, risk_level, risk_score, details FROM area_risk_data WHERE COALESCE(rag_status, 'approved') != 'rejected' ORDER BY id"
   );
 
   for (const row of areaRows) {
@@ -181,7 +181,7 @@ async function seedLiveData() {
               bedrooms, bathrooms, asking_price, stand_size_sqm, floor_area_sqm,
               suburb_crime_score, LEFT(description, 1000) AS description
        FROM properties
-       WHERE suburb IS NOT NULL
+       WHERE suburb IS NOT NULL AND COALESCE(rag_status, 'approved') != 'rejected'
        ORDER BY id
        LIMIT $1 OFFSET $2`,
       [PROP_BATCH, propOffset]
@@ -230,6 +230,7 @@ async function seedLiveData() {
             p.suburb, p.city, p.construction_era, p.roof_material
      FROM holly_evidence he
      JOIN properties p ON p.id = he.property_id
+     WHERE COALESCE(he.rag_status, 'approved') != 'rejected'
      ORDER BY he.id`
   );
 
@@ -269,7 +270,7 @@ async function seedLiveData() {
             p.suburb, p.city, p.construction_era, p.roof_material
      FROM property_images pi
      JOIN properties p ON p.id = pi.property_id
-     WHERE pi.vision_analysis IS NOT NULL
+     WHERE pi.vision_analysis IS NOT NULL AND COALESCE(pi.rag_status, 'approved') != 'rejected'
        AND jsonb_typeof(pi.vision_analysis->'findings') = 'array'
        AND jsonb_array_length(pi.vision_analysis->'findings') > 0
      ORDER BY pi.id`
@@ -320,6 +321,7 @@ async function seedLiveData() {
              FROM suburb_security_coverage ssc WHERE ssc.security_company_id = sc.id
              LIMIT 1) AS coverage_areas
      FROM security_companies sc
+     WHERE COALESCE(sc.rag_status, 'approved') != 'rejected'
      ORDER BY sc.id`
   );
 
@@ -357,6 +359,7 @@ async function seedLiveData() {
             p.suburb, p.city, p.construction_era, p.roof_material, p.property_type
      FROM property_reports pr
      JOIN properties p ON p.id = pr.property_id
+     WHERE COALESCE(pr.rag_status, 'approved') != 'rejected'
      ORDER BY pr.id`
   );
 
@@ -397,6 +400,7 @@ async function seedLiveData() {
             df.context, p.suburb, p.city
      FROM data_feedback df
      LEFT JOIN properties p ON p.id = df.property_id
+     WHERE COALESCE(df.rag_status, 'approved') != 'rejected'
      ORDER BY df.id`
   );
 

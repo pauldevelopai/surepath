@@ -16,6 +16,7 @@ const sections = [
     items: [
       { href: "/admin/data/properties", label: "Properties" },
       { href: "/admin/data/scraper", label: "Scraper" },
+      { href: "/admin/data/rag-review", label: "RAG Review" },
       { href: "/admin/services", label: "Service Providers" },
     ],
   },
