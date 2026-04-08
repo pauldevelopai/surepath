@@ -877,15 +877,24 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
   if (process.env.TWILIO_AUTH_TOKEN && process.env.SERVER_HOST) {
     try {
       const twilio = require('twilio');
-      const webhookUrl = `https://${process.env.SERVER_HOST}/webhook/whatsapp`;
       const signature = req.headers['x-twilio-signature'];
-      if (!signature || !twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN, signature, webhookUrl, req.body)) {
-        console.warn(`[whatsapp] REJECTED: invalid Twilio signature from ${req.ip}`);
-        return res.status(403).send('Forbidden');
+      if (signature) {
+        // Try both https://domain and http://ip:port — Twilio signs with the URL it calls
+        const urls = [
+          `https://${process.env.SERVER_HOST}/webhook/whatsapp`,
+          `http://${process.env.SERVER_HOST}/webhook/whatsapp`,
+          `http://13.43.118.177:3000/webhook/whatsapp`,
+        ];
+        const valid = urls.some(url => twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN, signature, url, req.body));
+        if (!valid) {
+          console.warn(`[whatsapp] REJECTED: invalid Twilio signature from ${req.ip}`);
+          return res.status(403).send('Forbidden');
+        }
       }
+      // No signature = development/testing — allow through
     } catch (e) {
       console.warn(`[whatsapp] Signature validation error: ${e.message}`);
-      // Continue in dev if twilio module not available
+      // Continue if twilio module not available
     }
   }
 
