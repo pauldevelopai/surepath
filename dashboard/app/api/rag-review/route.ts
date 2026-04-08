@@ -133,7 +133,7 @@ export const GET = withAuth(async (req: NextRequest) => {
 });
 
 export const POST = withAuth(async (req: NextRequest) => {
-  const { action, source, ids, status } = await req.json();
+  const { action, source, ids, status, filter: bodyFilter } = await req.json();
 
   if (action === "update_status") {
     if (!source || !ids || !Array.isArray(ids) || !status) {
@@ -147,6 +147,34 @@ export const POST = withAuth(async (req: NextRequest) => {
       return NextResponse.json({ error: "Invalid source" }, { status: 400 });
     }
     await query(`UPDATE ${source} SET rag_status = $1 WHERE id = ANY($2::int[])`, [status, ids]);
+    return NextResponse.json({ ok: true });
+  }
+
+  // Bulk update all rows matching the current filter
+  if (action === "bulk_update_filtered") {
+    if (!source || !status) return NextResponse.json({ error: "source and status required" }, { status: 400 });
+    const validSources = SOURCES.map(s => s.key);
+    if (!validSources.includes(source)) return NextResponse.json({ error: "Invalid source" }, { status: 400 });
+    if (!["approved", "rejected", "pending", "pending_review"].includes(status)) return NextResponse.json({ error: "Invalid status" }, { status: 400 });
+
+    const f = bodyFilter || "all";
+    let where = "WHERE true";
+    if (f === "pending") where = "WHERE rag_status = 'pending'";
+    else if (f === "approved") where = "WHERE rag_status = 'approved'";
+    else if (f === "rejected") where = "WHERE rag_status = 'rejected'";
+    else if (f === "pending_review") where = "WHERE rag_status = 'pending_review'";
+
+    await query(`UPDATE ${source} SET rag_status = $1 ${where}`, [status]);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "bulk_activate_filtered") {
+    const f = bodyFilter || "all";
+    let where = "WHERE true";
+    if (f === "pending") where = "WHERE rag_status = 'pending'";
+    else if (f === "approved") where = "WHERE rag_status = 'approved'";
+
+    await query(`UPDATE rag_knowledge_entries SET status = 'active' ${where}`);
     return NextResponse.json({ ok: true });
   }
 

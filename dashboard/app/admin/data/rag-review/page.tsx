@@ -30,6 +30,7 @@ export default function RAGReviewPage() {
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [allSelected, setAllSelected] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
@@ -42,6 +43,7 @@ export default function RAGReviewPage() {
   async function loadDetail(source: string, pg = 1, f = "all") {
     setDetail(null);
     setExpanded(null);
+    setAllSelected(false);
     const d = await (await fetch(`/api/rag-review?source=${source}&page=${pg}&filter=${f}`)).json();
     setDetail(d);
     setSelected(new Set());
@@ -105,19 +107,33 @@ export default function RAGReviewPage() {
               <h2 className="font-bold text-sm">{detail.label}</h2>
               <span className="text-[10px] text-gray-400">{detail.total.toLocaleString()} items — layer: {detail.layer}</span>
             </div>
-            <div className="flex gap-2 items-center">
+            <div className="flex gap-2 items-center flex-wrap">
               <button onClick={() => {
-                const allIds = (detail?.rows || []).map((r: any) => r.id);
-                setSelected(prev => prev.size === allIds.length ? new Set() : new Set(allIds));
+                if (allSelected) { setAllSelected(false); setSelected(new Set()); }
+                else { setAllSelected(true); setSelected(new Set((detail?.rows || []).map((r: any) => r.id))); }
               }} className="px-3 py-1 bg-gray-100 text-gray-600 rounded text-xs hover:bg-gray-200">
-                {selected.size === (detail?.rows || []).length ? "Deselect All" : "Select All"}
+                {allSelected ? "Deselect All" : `Select All (${detail.total.toLocaleString()})`}
               </button>
-              {selected.size > 0 && (<>
-                <button onClick={() => post({ action: "update_status", source: selectedSource, ids: [...selected], status: "approved" })} className="px-3 py-1 bg-green-600 text-white rounded text-xs font-semibold hover:bg-green-700">Approve ({selected.size})</button>
-                <button onClick={() => post({ action: "update_status", source: selectedSource, ids: [...selected], status: "rejected" })} className="px-3 py-1 bg-red-600 text-white rounded text-xs font-semibold hover:bg-red-700">Reject ({selected.size})</button>
+              {(selected.size > 0 || allSelected) && (<>
+                <button onClick={() => {
+                  if (allSelected) post({ action: "bulk_update_filtered", source: selectedSource, status: "approved", filter });
+                  else post({ action: "update_status", source: selectedSource, ids: [...selected], status: "approved" });
+                }} className="px-3 py-1 bg-green-600 text-white rounded text-xs font-semibold hover:bg-green-700">
+                  Approve {allSelected ? `All (${detail.total.toLocaleString()})` : `(${selected.size})`}
+                </button>
+                <button onClick={() => {
+                  if (allSelected) post({ action: "bulk_update_filtered", source: selectedSource, status: "rejected", filter });
+                  else post({ action: "update_status", source: selectedSource, ids: [...selected], status: "rejected" });
+                }} className="px-3 py-1 bg-red-600 text-white rounded text-xs font-semibold hover:bg-red-700">
+                  Reject {allSelected ? `All (${detail.total.toLocaleString()})` : `(${selected.size})`}
+                </button>
                 {selectedSource === "rag_knowledge_entries" && (<>
-                  <button onClick={() => post({ action: "activate_knowledge", ids: [...selected] })} className="px-3 py-1 bg-blue-600 text-white rounded text-xs font-semibold hover:bg-blue-700">Activate ({selected.size})</button>
-                  <button onClick={() => post({ action: "deactivate_knowledge", ids: [...selected] })} className="px-3 py-1 bg-gray-500 text-white rounded text-xs font-semibold hover:bg-gray-600">Deactivate ({selected.size})</button>
+                  <button onClick={() => {
+                    if (allSelected) post({ action: "bulk_activate_filtered", filter });
+                    else post({ action: "activate_knowledge", ids: [...selected] });
+                  }} className="px-3 py-1 bg-blue-600 text-white rounded text-xs font-semibold hover:bg-blue-700">
+                    Activate {allSelected ? `All (${detail.total.toLocaleString()})` : `(${selected.size})`}
+                  </button>
                 </>)}
               </>)}
               {actionMsg && <span className="text-xs text-blue-600 self-center">{actionMsg}</span>}
