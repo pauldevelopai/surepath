@@ -943,8 +943,17 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
       return;
     }
 
-    // ── If generating/scraping, don't reset — give progress update instead ──
+    // ── If generating/scraping, check for stuck state (pipeline crash) ──
     if (state === 'generating' || state === 'scraping') {
+      const stuckMinutes = Math.round((Date.now() - new Date(conv.updated_at).getTime()) / 60000);
+      if (stuckMinutes > 10) {
+        console.log(`[whatsapp] Conversation stuck in "${state}" for ${stuckMinutes}m — auto-resetting`);
+        await upsertConversation(phoneNumber, { state: 'awaiting_property' });
+        await sendWhatsApp(from, "Something went wrong with your last report — sorry about that. Send the listing link again and I'll start fresh.");
+        res.type('text/xml').send('<Response></Response>');
+        return;
+      }
+
       let progressMsg = '';
 
       if (state === 'scraping') {
@@ -1378,6 +1387,9 @@ async function runPipelineAsync(order, conv) {
 
   } catch (err) {
     console.error(`[pipeline] Failed for ${phoneNumber}:`, err);
+
+    // Reset conversation state so user isn't stuck in "generating" forever
+    await upsertConversation(phoneNumber, { state: 'awaiting_property' }).catch(() => {});
 
     // Check if the report was actually generated despite the error
     const cleanUrl = (conv?.input_data || '').replace(/[?#].*$/, '').replace(/\/+$/, '');
