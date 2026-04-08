@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const LAYER_COLORS: Record<string, string> = {
-  knowledge: "bg-amber-600", evidence: "bg-red-600", vision: "bg-purple-600",
+  articles: "bg-amber-600", knowledge: "bg-amber-600", evidence: "bg-red-600", vision: "bg-purple-600",
   live: "bg-sky-600", crime: "bg-red-800", security: "bg-teal-600",
   report: "bg-green-600", feedback: "bg-orange-600", property: "bg-blue-600",
   security_company: "bg-cyan-700",
@@ -96,7 +96,7 @@ export default function KnowledgeBasePage() {
                 <div key={layer} className="flex items-center gap-3">
                   <div className="w-32 shrink-0 flex items-center gap-2">
                     <span className={"w-2.5 h-2.5 rounded-full " + (LAYER_COLORS[layer] || "bg-gray-400")} />
-                    <span className="text-xs font-semibold">{layer}</span>
+                    <span className="text-xs font-semibold">{layer === "knowledge" ? "articles" : layer}</span>
                   </div>
                   <div className="flex-1">
                     <div className="h-5 bg-gray-100 rounded-full overflow-hidden relative">
