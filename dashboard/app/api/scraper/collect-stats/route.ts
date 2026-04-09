@@ -67,7 +67,7 @@ export const GET = withAuth(async () => {
     security_companies:   { pending: parseInt(String(ragPendingResults[4][0].cnt)), layer: "security_company" },
     property_reports:     { pending: parseInt(String(ragPendingResults[5][0].cnt)), layer: "report" },
     data_feedback:        { pending: parseInt(String(ragPendingResults[6][0].cnt)), layer: "feedback" },
-    rag_knowledge_entries: { pending: parseInt(String(ragPendingResults[7][0].cnt)), layer: "knowledge" },
+    articles: { pending: parseInt(String(ragPendingResults[7][0].cnt)), layer: "articles" },
   };
 
   return NextResponse.json({

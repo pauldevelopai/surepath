@@ -12,7 +12,7 @@
  *
  * Usage: node seed-live-data.js
  */
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
 const pool = require('./db');
 const { upsertChunk, warmup } = require('./rag');
 

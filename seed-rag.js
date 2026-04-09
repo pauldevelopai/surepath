@@ -4,7 +4,7 @@
  *
  * Safe to re-run: uses upsert (ON CONFLICT DO UPDATE).
  */
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
 const pool = require('./db');
 
 async function seedRAG() {
