@@ -179,14 +179,14 @@ export default function IntelligenceHubPage() {
     });
   }
 
-  async function handleUrlTest(url: string) {
+  async function handleUrlTest(url: string, propertyId?: number) {
     setQRunning(true); setQResult(null);
     try {
-      // Submit URL — server downloads the image
+      // Submit URL — server downloads the image, pass property_id for RAG context
       const submitResp = await fetch("/api/intelligence", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "run_comparison_url", image_url: url, rag_enabled: true }),
+        body: JSON.stringify({ action: "run_comparison_url", image_url: url, rag_enabled: true, property_id: propertyId || undefined }),
       });
       if (!submitResp.ok) { setQResult({ error: `Submit failed: ${submitResp.status}` }); setQRunning(false); return; }
       const { job_id } = await submitResp.json();
@@ -460,7 +460,7 @@ export default function IntelligenceHubPage() {
           {sampleImages && sampleImages.length > 0 && (
             <div className="grid grid-cols-6 gap-2 mb-2">
               {sampleImages.map((img: A) => (
-                <button key={img.id} onClick={() => { if (!qRunning) handleUrlTest(img.image_url); }}
+                <button key={img.id} onClick={() => { if (!qRunning) handleUrlTest(img.image_url, img.property_id); }}
                   disabled={qRunning}
                   className="relative group rounded overflow-hidden border hover:border-blue-500 disabled:opacity-50"
                   title={`${img.address_raw || img.suburb} — ${img.photo_type || img.image_type || "photo"}`}
@@ -491,67 +491,102 @@ export default function IntelligenceHubPage() {
           <div className="mt-3">
             {qResult.error ? (
               <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700">{qResult.error}</div>
-            ) : (<>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="text-[9px] font-bold text-gray-400 uppercase mb-1">Base Nico ({qResult.baseline_prompt_length ? Math.round(qResult.baseline_prompt_length / 1000) + 'k' : '?'} chars)</div>
-                  <div className="bg-gray-50 rounded p-2 text-[10px] whitespace-pre-wrap max-h-64 overflow-y-auto border">{qResult.response_without_rag}</div>
-                </div>
-                <div>
-                  <div className="text-[9px] font-bold text-green-700 uppercase mb-1">Nico + RAG ({qResult.rag_retrieval?.chunks_returned || qResult.kb_entries_used || 0} chunks, {qResult.rag_prompt_length ? Math.round(qResult.rag_prompt_length / 1000) + 'k' : '?'} chars context)</div>
-                  <div className="bg-green-50 rounded p-2 text-[10px] whitespace-pre-wrap max-h-64 overflow-y-auto border border-green-200">{qResult.response_with_rag}</div>
-                </div>
-              </div>
+            ) : (() => {
+              // Parse findings from JSON responses
+              const parseFindings = (raw: string) => {
+                try {
+                  const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+                  const parsed = JSON.parse(cleaned);
+                  return parsed.findings || [];
+                } catch { return []; }
+              };
+              const baseFindings = parseFindings(qResult.response_without_rag);
+              const ragFindings = parseFindings(qResult.response_with_rag);
+              const ctx = qResult.property_context || {};
+              const hasContext = Object.values(ctx).some(Boolean);
 
-              {/* RAG retrieval details */}
-              {qResult.rag_retrieval && (
-                <div className="mt-3 bg-blue-50 border border-blue-200 rounded p-3">
-                  <div className="text-[9px] font-bold text-blue-700 uppercase mb-2">RAG Retrieval Details</div>
-                  <div className="grid grid-cols-5 gap-2 text-center mb-2">
-                    <div className="bg-white rounded p-1">
-                      <div className="text-sm font-bold">{qResult.rag_retrieval.chunks_returned}</div>
-                      <div className="text-[8px] text-gray-500">chunks</div>
-                    </div>
-                    <div className="bg-white rounded p-1">
-                      <div className="text-sm font-bold">{(qResult.rag_retrieval.layers_hit || []).length}</div>
-                      <div className="text-[8px] text-gray-500">layers</div>
-                    </div>
-                    <div className="bg-white rounded p-1">
-                      <div className="text-sm font-bold">{Number(qResult.rag_retrieval.top_score).toFixed(3)}</div>
-                      <div className="text-[8px] text-gray-500">top score</div>
-                    </div>
-                    <div className="bg-white rounded p-1">
-                      <div className="text-sm font-bold">{Number(qResult.rag_retrieval.avg_score).toFixed(3)}</div>
-                      <div className="text-[8px] text-gray-500">avg score</div>
-                    </div>
-                    <div className="bg-white rounded p-1">
-                      <div className="text-sm font-bold">{qResult.rag_retrieval.duration_ms}ms</div>
-                      <div className="text-[8px] text-gray-500">latency</div>
-                    </div>
+              return (<>
+                {/* Context banner */}
+                {hasContext && (
+                  <div className="bg-blue-50 border border-blue-200 rounded p-2 mb-3 text-[10px] text-blue-700">
+                    Property context passed to RAG: {[ctx.suburb, ctx.city, ctx.construction_era && `era: ${ctx.construction_era}`, ctx.roof_material && `roof: ${ctx.roof_material}`, ctx.asking_price && `R${Number(ctx.asking_price).toLocaleString()}`].filter(Boolean).join(" · ")}
                   </div>
-                  <div className="text-[8px] text-blue-600 mb-1">Layers: {(qResult.rag_retrieval.layers_hit || []).map((l: string) => l === "knowledge" ? "articles" : l).join(", ")}</div>
-                  <div className="text-[8px] text-gray-500 mb-2 truncate" title={qResult.rag_retrieval.query_text}>Query: {qResult.rag_retrieval.query_text}</div>
-                  {(qResult.rag_retrieval.chunks || []).length > 0 && (
-                    <div className="max-h-32 overflow-y-auto">
-                      {qResult.rag_retrieval.chunks.map((c: A, i: number) => (
-                        <div key={i} className="flex items-start gap-1.5 text-[8px] py-0.5 border-b border-blue-100">
-                          <span className={`px-1 rounded shrink-0 ${
-                            c.layer === 'knowledge' ? 'bg-yellow-100 text-yellow-700' :
-                            c.layer === 'evidence' ? 'bg-purple-100 text-purple-700' :
-                            c.layer === 'live' ? 'bg-green-100 text-green-700' :
-                            c.layer === 'crime' ? 'bg-red-100 text-red-700' :
-                            c.layer === 'security' ? 'bg-orange-100 text-orange-700' :
-                            c.layer === 'property' ? 'bg-indigo-100 text-indigo-700' :
-                            'bg-gray-100 text-gray-600'
-                          }`}>{c.layer === "knowledge" ? "articles" : c.layer}</span>
-                          <span className="text-gray-600">{c.name || c.suburb || c.text_preview?.substring(0, 80)}</span>
+                )}
+                {!hasContext && (
+                  <div className="bg-yellow-50 border border-yellow-200 rounded p-2 mb-3 text-[10px] text-yellow-700">
+                    No property context — RAG used generic query. Pick an image from the DB above for location-specific RAG retrieval.
+                  </div>
+                )}
+
+                {/* Summary stats */}
+                <div className="grid grid-cols-4 gap-2 mb-3 text-center">
+                  <div className="bg-gray-50 rounded p-2"><div className="text-lg font-bold">{baseFindings.length}</div><div className="text-[8px] text-gray-500">Base findings</div></div>
+                  <div className="bg-green-50 rounded p-2"><div className="text-lg font-bold text-green-700">{ragFindings.length}</div><div className="text-[8px] text-green-600">RAG findings</div></div>
+                  <div className="bg-blue-50 rounded p-2"><div className="text-lg font-bold">{qResult.rag_retrieval?.chunks_returned || 0}</div><div className="text-[8px] text-blue-600">chunks retrieved</div></div>
+                  <div className="bg-blue-50 rounded p-2"><div className="text-lg font-bold">{qResult.rag_retrieval?.duration_ms || 0}ms</div><div className="text-[8px] text-blue-600">RAG latency</div></div>
+                </div>
+
+                {/* Side-by-side findings comparison */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-[9px] font-bold text-gray-400 uppercase mb-2">Base Nico — {baseFindings.length} findings</div>
+                    <div className="space-y-2 max-h-[500px] overflow-y-auto">
+                      {baseFindings.map((f: A, i: number) => (
+                        <div key={i} className="bg-gray-50 rounded p-2 text-xs border">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${f.severity === "HIGH" || f.severity === "CRITICAL" ? "bg-red-100 text-red-700" : f.severity === "MEDIUM" ? "bg-orange-100 text-orange-700" : "bg-gray-200 text-gray-600"}`}>{f.severity}</span>
+                            <span className="text-[8px] text-gray-400">{f.category}</span>
+                            {f.kb_entry_matched && <span className="text-[8px] text-amber-600 font-bold">KB: {f.kb_entry_matched}</span>}
+                          </div>
+                          <div className="text-gray-700 text-[11px]">{f.what_it_means?.substring(0, 200) || f.defect_or_risk}</div>
+                          {f.estimated_repair_cost_zar && <div className="text-[9px] text-gray-500 mt-1">Cost: R{f.estimated_repair_cost_zar.min?.toLocaleString()}–R{f.estimated_repair_cost_zar.max?.toLocaleString()}</div>}
                         </div>
                       ))}
+                      {baseFindings.length === 0 && <p className="text-xs text-gray-400">No findings parsed</p>}
                     </div>
-                  )}
+                  </div>
+                  <div>
+                    <div className="text-[9px] font-bold text-green-700 uppercase mb-2">Nico + RAG — {ragFindings.length} findings</div>
+                    <div className="space-y-2 max-h-[500px] overflow-y-auto">
+                      {ragFindings.map((f: A, i: number) => (
+                        <div key={i} className="bg-green-50 rounded p-2 text-xs border border-green-200">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${f.severity === "HIGH" || f.severity === "CRITICAL" ? "bg-red-100 text-red-700" : f.severity === "MEDIUM" ? "bg-orange-100 text-orange-700" : "bg-gray-200 text-gray-600"}`}>{f.severity}</span>
+                            <span className="text-[8px] text-gray-400">{f.category}</span>
+                            {f.kb_entry_matched && <span className="text-[8px] text-amber-600 font-bold">KB: {f.kb_entry_matched}</span>}
+                          </div>
+                          <div className="text-gray-700 text-[11px]">{f.what_it_means?.substring(0, 200) || f.defect_or_risk}</div>
+                          {f.estimated_repair_cost_zar && <div className="text-[9px] text-gray-500 mt-1">Cost: R{f.estimated_repair_cost_zar.min?.toLocaleString()}–R{f.estimated_repair_cost_zar.max?.toLocaleString()}</div>}
+                          {f.corroboration?.data_used?.length > 0 && <div className="text-[8px] text-green-600 mt-1">Data used: {f.corroboration.data_used.join(", ")}</div>}
+                        </div>
+                      ))}
+                      {ragFindings.length === 0 && <p className="text-xs text-gray-400">No findings parsed</p>}
+                    </div>
+                  </div>
                 </div>
-              )}
-            </>)}
+
+                {/* RAG chunks used */}
+                {qResult.rag_retrieval && (
+                  <div className="mt-3 bg-blue-50 border border-blue-200 rounded p-3">
+                    <div className="text-[9px] font-bold text-blue-700 uppercase mb-1">RAG Context Injected ({qResult.rag_retrieval.chunks_returned} chunks from {(qResult.rag_retrieval.layers_hit || []).length} layers, avg score {Number(qResult.rag_retrieval.avg_score).toFixed(3)})</div>
+                    <div className="text-[8px] text-gray-500 mb-2 truncate">Query: {qResult.rag_retrieval.query_text}</div>
+                    {(qResult.rag_retrieval.chunks || []).length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {qResult.rag_retrieval.chunks.map((c: A, i: number) => (
+                          <span key={i} className={`px-1.5 py-0.5 rounded text-[8px] ${
+                            c.layer === "knowledge" ? "bg-yellow-100 text-yellow-700" :
+                            c.layer === "live" ? "bg-green-100 text-green-700" :
+                            c.layer === "crime" ? "bg-red-100 text-red-700" :
+                            c.layer === "evidence" ? "bg-purple-100 text-purple-700" :
+                            "bg-gray-100 text-gray-600"
+                          }`}>{c.layer === "knowledge" ? "articles" : c.layer}: {c.name || c.suburb || c.text_preview?.substring(0, 40)}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>);
+            })()}
           </div>
         )}
       </div>
