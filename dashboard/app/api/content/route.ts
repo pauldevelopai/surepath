@@ -13,7 +13,7 @@ export const GET = withAuth(async (req: NextRequest) => {
     const insights: A[] = [];
 
     // From conversations (tease_data has Nico's analysis)
-    const { rows: convs } = await query(
+    const convs = await query(
       "SELECT tease_data, listing_url FROM conversations WHERE tease_data IS NOT NULL ORDER BY updated_at DESC LIMIT 20"
     );
     for (const c of convs) {
@@ -34,7 +34,7 @@ export const GET = withAuth(async (req: NextRequest) => {
 
     // From properties with vision findings (not already in conversations)
     const seenAddresses = new Set(insights.map(i => i.address));
-    const { rows: props } = await query(`
+    const props = await query(`
       SELECT p.id, p.address_raw, p.address_normalised, p.asking_price, p.bedrooms, p.bathrooms, p.listing_url
       FROM properties p
       WHERE EXISTS (
@@ -49,7 +49,7 @@ export const GET = withAuth(async (req: NextRequest) => {
       if (seenAddresses.has(addr)) continue;
 
       // Get top risk flags from vision findings
-      const { rows: imgs } = await query(
+      const imgs = await query(
         "SELECT vision_analysis FROM property_images WHERE property_id = $1 AND vision_analysis IS NOT NULL LIMIT 6",
         [p.id]
       );
