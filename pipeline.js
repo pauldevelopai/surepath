@@ -873,6 +873,11 @@ async function generateReport(input, askingPrice, phoneNumber) {
           add('description', descMatch ? descMatch[1].replace(/<[^>]+>/g, '').trim().substring(0, 2000) : null);
         } catch (e) { log('3B', `PP detail extraction error (non-fatal): ${e.message}`); }
       } else if (isProperty24URL(input)) {
+        // Skip re-fetching P24 if property already has beds/baths (set by tease)
+        const { rows: existCheck } = await pool.query('SELECT bedrooms, bathrooms, description FROM properties WHERE id = $1', [propertyId]);
+        if (existCheck[0]?.bedrooms && existCheck[0]?.description) {
+          log('3B', 'P24 data already stored by tease — skipping re-fetch');
+        } else {
         try {
           const html = await fetchHTML(input);
           const bodyText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
@@ -885,6 +890,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
           add('floor_area_sqm', areaMatch ? parseInt(areaMatch[1]) : null);
           add('description', descMatch ? descMatch[1].replace(/<[^>]+>/g, '').trim().substring(0, 2000) : null);
         } catch (e) { log('3B', `P24 detail extraction error (non-fatal): ${e.message}`); }
+        } // close else (skip re-fetch)
       }
 
       // Extract suburb from listing URL if geocoder didn't provide one
