@@ -760,9 +760,13 @@ export default function IntelligenceHubPage() {
                 </button>
               </div>
               {ragTestResult?.results && (
-                <div className="mt-2 max-h-48 overflow-y-auto">
+                <div className="mt-2">
+                  {ragTestResult.results[0]?.score < 0.3 && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded p-2 mb-2 text-[10px] text-yellow-700">Low relevance — top score {Number(ragTestResult.results[0]?.score).toFixed(3)}. Nico uses minScore 0.35, so most of these would be filtered out in a real analysis.</div>
+                  )}
+                  <div className="max-h-48 overflow-y-auto">
                   {ragTestResult.results.map((r: A, i: number) => (
-                    <div key={i} className="flex items-start gap-2 text-[9px] py-1 border-b border-gray-50">
+                    <div key={i} className={`flex items-start gap-2 text-[9px] py-1 border-b border-gray-50 ${Number(r.score) < 0.35 ? "opacity-40" : ""}`}>
                       <span className={`px-1 rounded font-mono ${
                         r.layer === 'knowledge' ? 'bg-yellow-100 text-yellow-700' :
                         r.layer === 'evidence' ? 'bg-blue-100 text-blue-700' :
@@ -774,6 +778,7 @@ export default function IntelligenceHubPage() {
                       <span className="flex-1">{r.text}</span>
                     </div>
                   ))}
+                </div>
                 </div>
               )}
             </div>

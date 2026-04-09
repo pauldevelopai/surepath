@@ -48,9 +48,8 @@ function formatAreaRisk(row) {
       return `${loc}. Load shedding: ${row.risk_level || '?'} impact${d.group ? ', Group ' + d.group : ''}${d.area ? ' (' + d.area + ')' : ''}.`;
 
     case 'social_concerns': {
-      const concerns = Array.isArray(d.concerns) ? d.concerns.slice(0, 3).join(', ') : (d.concerns || '');
-      const positives = Array.isArray(d.positives) ? d.positives.slice(0, 3).join(', ') : (d.positives || '');
-      return `${loc}. Area sentiment: ${row.risk_level || '?'}${concerns ? '. Concerns: ' + concerns : ''}${positives ? '. Positives: ' + positives : ''}.`;
+      const fmt = (arr) => Array.isArray(arr) ? arr.slice(0, 3).map(x => typeof x === 'string' ? x : (x?.text || x?.concern || x?.name || JSON.stringify(x))).join(', ') : (arr || '');
+      return `${loc}. Area sentiment: ${row.risk_level || '?'}${d.concerns ? '. Concerns: ' + fmt(d.concerns) : ''}${d.positives ? '. Positives: ' + fmt(d.positives) : ''}.`;
     }
 
     case 'dolomite':
