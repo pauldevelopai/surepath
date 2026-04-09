@@ -1206,27 +1206,6 @@ export default function PropertyDetailPage() {
                 </div>
               </div>
 
-              {/* Monthly Costs */}
-              <div>
-                <h3 className="text-xs font-semibold text-gray-600 mb-2">Monthly Costs</h3>
-                <div className="bg-blue-50 rounded p-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-700">Bond Payment <span className="text-[10px] text-gray-400">(at {aff.interest_rate}% over {aff.term_years} years)</span></span>
-                    <span className="text-lg font-bold text-blue-800">{formatZAR(aff.monthly_bond_payment)}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* True Cost */}
-              <div>
-                <h3 className="text-xs font-semibold text-gray-600 mb-2">True Cost Over {aff.term_years} Years</h3>
-                <div className="bg-orange-50 rounded p-3 space-y-1">
-                  <div className="flex justify-between text-xs"><span className="text-gray-600">Purchase Price</span><span className="font-medium">{formatZAR(aff.purchase_price)}</span></div>
-                  <div className="flex justify-between text-xs"><span className="text-gray-600">Total Interest Paid</span><span className="font-medium text-orange-700">{formatZAR(aff.total_interest_over_term)}</span></div>
-                  <div className="flex justify-between text-xs"><span className="text-gray-600">Once-off Costs</span><span className="font-medium">{formatZAR(aff.total_once_off)}</span></div>
-                  <div className="flex justify-between text-sm font-bold border-t border-orange-200 pt-2 mt-1"><span>True Cost</span><span className="text-orange-800">{formatZAR(aff.true_cost)}</span></div>
-                </div>
-              </div>
             </div>
           )}
         </section>
