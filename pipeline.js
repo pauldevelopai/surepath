@@ -414,7 +414,44 @@ async function generateReport(input, askingPrice, phoneNumber) {
 
     if (isProperty24URL(input)) {
       log(1, `Property24 URL — extracting OG metadata: ${input}`);
-      const html = await fetchHTML(input);
+      let html = null;
+      try {
+        html = await fetchHTML(input);
+      } catch (fetchErr) {
+        log(1, `P24 fetch failed (${fetchErr.message}) — matching via URL path`);
+        // Extract suburb/city from URL and find PP match
+        const p24UrlParts = input.match(/property24\.com\/for-sale\/([^/]+)\/([^/]+)\/([^/]+)/);
+        if (p24UrlParts) {
+          const p24Sub = p24UrlParts[1].replace(/-/g, ' ');
+          const p24City = p24UrlParts[2].replace(/-/g, ' ');
+          log(1, `Searching local DB for PP match: suburb="${p24Sub}", city="${p24City}"`);
+          const { rows: ppMatch } = await pool.query(
+            `SELECT id, listing_url, address_raw, bedrooms FROM properties
+             WHERE erf_number LIKE 'PP_%'
+             AND (suburb ILIKE $1 OR listing_url ILIKE $2)
+             ORDER BY id DESC LIMIT 1`,
+            [p24Sub, `%/${p24UrlParts[1]}/%`]
+          );
+          if (ppMatch.length > 0) {
+            log(1, `PP MATCH from URL: ${ppMatch[0].listing_url} → "${ppMatch[0].address_raw}"`);
+            input = ppMatch[0].listing_url;
+            // Now re-enter the PP path
+            const ppData = await extractPrivatePropertyData(input);
+            if (ppData) {
+              address = ppData.address;
+              photoUrls = ppData.photoUrls || [];
+              if (!askingPrice && ppData.askingPrice) askingPrice = ppData.askingPrice;
+            }
+          } else {
+            throw new Error(`No PP match found for ${p24Sub}, ${p24City} — and P24 returned ${fetchErr.message}`);
+          }
+        } else {
+          throw fetchErr;
+        }
+      }
+      if (!html) {
+        // Already handled via PP match above — skip P24 OG extraction
+      } else {
 
       // Extract OG meta tags (reliable from static HTML, unlike photos which need JS)
       const ogImage = (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
@@ -629,6 +666,8 @@ async function generateReport(input, askingPrice, phoneNumber) {
           photoUrls = ogImage ? [ogImage] : [];
         }
       }
+
+      } // close else { html } block
 
       if (!address) {
         throw new Error('Could not extract address from Property24 listing');
