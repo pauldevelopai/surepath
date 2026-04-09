@@ -517,7 +517,6 @@ async function runTeaseAsync(from, phoneNumber, url) {
           `We get the best results from PrivateProperty listings.`
         );
         await upsertConversation(phoneNumber, { state: 'awaiting_property' });
-        res.type('text/xml').send('<Response></Response>');
         return;
       }
 
