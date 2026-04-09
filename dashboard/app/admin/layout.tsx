@@ -8,7 +8,7 @@ const sections = [
     label: "SALES",
     items: [
       { href: "/admin/sales/orders", label: "Orders" },
-      { href: "/admin/sales/analytics", label: "Money" },
+      { href: "/admin/sales/analytics", label: "Revenue" },
     ],
   },
   {

@@ -7,9 +7,11 @@ type A = Record<string, any>;
 
 export default function MoneyPage() {
   const [data, setData] = useState<A | null>(null);
+  const [billing, setBilling] = useState<A | null>(null);
 
   useEffect(() => {
     fetch("/api/analytics").then(r => r.json()).then(setData);
+    fetch("/api/billing").then(r => r.json()).then(setBilling).catch(() => {});
   }, []);
 
   if (!data) return <p className="text-gray-500">Loading...</p>;
@@ -20,7 +22,7 @@ export default function MoneyPage() {
     <div>
       <div className="flex justify-between items-start mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Money</h1>
+          <h1 className="text-2xl font-bold">Revenue</h1>
           <p className="text-sm text-gray-500">Revenue, payments, and costs</p>
         </div>
         <a href="https://payf.st/zcg1y" target="_blank" rel="noreferrer"
@@ -97,14 +99,14 @@ export default function MoneyPage() {
             <div className="text-[10px] text-gray-400 mt-1">Per property report. Includes vision analysis, risk scoring, negotiation intel.</div>
           </div>
           <div className="bg-gray-50 rounded p-3">
-            <div className="text-gray-500 font-bold mb-1">Resale</div>
-            <div className="text-2xl font-bold">R99</div>
-            <div className="text-[10px] text-gray-400 mt-1">Discounted price for previously generated reports.</div>
+            <div className="text-gray-500 font-bold mb-1">Avg Generation Cost</div>
+            <div className="text-2xl font-bold">{billing?.avg_cost?.avg_cost_zar ? `R${Number(billing.avg_cost.avg_cost_zar).toFixed(2)}` : "—"}</div>
+            <div className="text-[10px] text-gray-400 mt-1">Actual API cost per report (Claude + Google). <a href="/admin/billing" className="text-blue-600 hover:underline">See Billing</a></div>
           </div>
           <div className="bg-gray-50 rounded p-3">
-            <div className="text-gray-500 font-bold mb-1">Generation Cost</div>
-            <div className="text-2xl font-bold">~R5–R15</div>
-            <div className="text-[10px] text-gray-400 mt-1">API costs per report (Claude + Google). See <a href="/admin/billing" className="text-blue-600 hover:underline">Billing</a> for details.</div>
+            <div className="text-gray-500 font-bold mb-1">Margin per Report</div>
+            <div className="text-2xl font-bold text-green-700">{billing?.avg_cost?.avg_cost_zar ? `R${(169 - Number(billing.avg_cost.avg_cost_zar)).toFixed(2)}` : "—"}</div>
+            <div className="text-[10px] text-gray-400 mt-1">{billing?.avg_cost?.avg_cost_zar ? `${Math.round((1 - Number(billing.avg_cost.avg_cost_zar) / 169) * 100)}% margin` : ""} · Max cost: {billing?.avg_cost?.max_cost_zar ? `R${Number(billing.avg_cost.max_cost_zar).toFixed(2)}` : "—"}</div>
           </div>
         </div>
       </div>
