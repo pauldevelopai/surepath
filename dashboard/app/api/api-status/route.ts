@@ -76,6 +76,26 @@ export const GET = withAuth(async () => {
     results.lightsail = { status: "ok", message: "Lightsail eu-west-2 · $40/mo" };
   }
 
+  // ScraperAPI
+  const scraperKey = process.env.SCRAPER_API_KEY;
+  if (scraperKey) {
+    try {
+      const https = await import("https");
+      const apiData: string = await new Promise((resolve, reject) => {
+        https.default.get(`https://api.scraperapi.com/account?api_key=${scraperKey}`, { timeout: 5000 }, (res: import("http").IncomingMessage) => {
+          let d = ""; res.on("data", (c: string) => d += c); res.on("end", () => resolve(d));
+        }).on("error", reject);
+      });
+      const parsed = JSON.parse(apiData);
+      const remaining = (parsed.requestLimit || 0) - (parsed.requestCount || 0);
+      results.scraper_api = { status: remaining > 50 ? "ok" : remaining > 0 ? "configured" : "down", message: `${remaining} of ${parsed.requestLimit} requests remaining · Property24 proxy` };
+    } catch {
+      results.scraper_api = { status: "configured", message: "Key set — cannot check usage" };
+    }
+  } else {
+    results.scraper_api = { status: "not_configured", message: "No key — Property24 links will fail" };
+  }
+
   // Other services — check if keys are configured
   results.windeed = { status: process.env.WINDEED_API_KEY ? "configured" : "not_configured", message: process.env.WINDEED_API_KEY ? "Key set" : "No key — optional" };
   results.elevenlabs = { status: process.env.ELEVENLABS_API_KEY ? "configured" : "not_configured", message: process.env.ELEVENLABS_API_KEY ? "Key set" : "No key — optional" };

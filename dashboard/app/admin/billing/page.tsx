@@ -21,7 +21,7 @@ export default function BillingPage() {
   }, []);
 
   if (!data) return <p className="text-gray-500">Loading...</p>;
-  const { totals, today, month, by_service, by_endpoint, daily, by_property, data_size, avg_cost, recent, whatsapp, exchange_rate } = data;
+  const { totals, today, month, by_service, by_endpoint, daily, by_property, data_size, avg_cost, recent, whatsapp, exchange_rate, scraper_api } = data;
   const ZAR_RATE = exchange_rate?.rate || ZAR_RATE_FALLBACK;
 
   return (
@@ -48,6 +48,30 @@ export default function BillingPage() {
         ))}
       </div>
 
+      {/* ScraperAPI Usage */}
+      {scraper_api && scraper_api.requestLimit > 0 && (
+        <div className="bg-white border rounded-lg p-4 mb-6">
+          <div className="flex justify-between items-center mb-2">
+            <div>
+              <h2 className="font-bold text-sm">ScraperAPI — Property24 Proxy</h2>
+              <p className="text-[10px] text-gray-400">Routes Property24 requests through residential proxies. 1 call per P24 property.</p>
+            </div>
+            <div className="text-right">
+              <div className="text-2xl font-bold">{scraper_api.remaining.toLocaleString()}</div>
+              <div className="text-[10px] text-gray-500">requests remaining</div>
+            </div>
+          </div>
+          <div className="h-3 bg-gray-100 rounded-full overflow-hidden mb-2">
+            <div className={`h-full rounded-full transition-all ${scraper_api.remaining < 100 ? "bg-red-500" : scraper_api.remaining < 300 ? "bg-amber-500" : "bg-green-500"}`}
+              style={{ width: `${Math.round((scraper_api.remaining / scraper_api.requestLimit) * 100)}%` }} />
+          </div>
+          <div className="flex justify-between text-[10px] text-gray-400">
+            <span>{scraper_api.used} used of {scraper_api.requestLimit.toLocaleString()}</span>
+            <span>Free tier · Resets monthly</span>
+          </div>
+        </div>
+      )}
+
       {/* Monthly Running Costs — infrastructure + subscriptions + usage */}
       {(() => {
         const apiCostMonth = Number(month?.total_zar) || 0;
@@ -59,6 +83,7 @@ export default function BillingPage() {
           { name: "Anthropic API", cost_zar: apiCostMonth, cost_usd: apiCostMonth / ZAR_RATE, desc: `Vision + report synthesis — ${month?.calls || 0} calls this month`, type: "usage" },
           { name: "Google Maps APIs", cost_zar: Number(by_service?.find((s: A) => s.service === "google")?.month_zar || 0) || Math.round(apiCostMonth * 0.1), cost_usd: 0, desc: "Geocoding, Street View, Static Maps, Places", type: "usage" },
           { name: "Twilio WhatsApp", cost_zar: whatsappCostMonth, cost_usd: whatsappCostMonth / ZAR_RATE, desc: `${whatsapp?.month?.outbound || 0} messages sent this month`, type: "usage" },
+          { name: "ScraperAPI", cost_zar: 0, cost_usd: 0, desc: `Property24 proxy — ${scraper_api?.used || 0}/${scraper_api?.requestLimit || 0} requests used (free tier)`, type: "usage" },
           { name: "Domain + DNS", cost_zar: 30, cost_usd: Math.round(30 / ZAR_RATE * 100) / 100, desc: "surepath.co.za domain renewal (annualised)", type: "infra" },
           { name: "PostgreSQL (Lightsail)", cost_zar: 0, cost_usd: 0, desc: "Included in Lightsail instance — self-hosted", type: "infra" },
         ];

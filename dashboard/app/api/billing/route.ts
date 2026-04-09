@@ -187,6 +187,22 @@ export const GET = withAuth(async () => {
 
   const zarRate = exchangeRate.rate;
 
+  // Fetch ScraperAPI usage
+  let scraperApi = { requestCount: 0, requestLimit: 0, used: 0, remaining: 0 };
+  try {
+    const key = process.env.SCRAPER_API_KEY;
+    if (key) {
+      const https = await import("https");
+      const apiData: string = await new Promise((resolve, reject) => {
+        https.default.get(`https://api.scraperapi.com/account?api_key=${key}`, (res: import("http").IncomingMessage) => {
+          let d = ""; res.on("data", (c: string) => d += c); res.on("end", () => resolve(d));
+        }).on("error", reject);
+      });
+      const parsed = JSON.parse(apiData);
+      scraperApi = { requestCount: parsed.requestCount || 0, requestLimit: parsed.requestLimit || 0, used: parsed.requestCount || 0, remaining: (parsed.requestLimit || 0) - (parsed.requestCount || 0) };
+    }
+  } catch {}
+
   return NextResponse.json({
     totals: totals[0],
     today: today[0],
@@ -199,6 +215,7 @@ export const GET = withAuth(async () => {
     avg_cost: avgCost[0] || { avg_cost_zar: 0, max_cost_zar: 0, min_cost_zar: 0 },
     recent,
     exchange_rate: exchangeRate,
+    scraper_api: scraperApi,
     whatsapp: {
       ...wa,
       cost_per_msg_usd: TWILIO_COST_PER_MSG_USD,
