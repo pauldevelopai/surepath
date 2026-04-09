@@ -17,7 +17,7 @@ const sections = [
       { href: "/admin/data/properties", label: "Properties" },
       { href: "/admin/data/scraper", label: "Scraper" },
       { href: "/admin/data/rag-review", label: "RAG Review" },
-      { href: "/admin/data/knowledge-base", label: "Knowledge Base" },
+      { href: "/admin/data/knowledge-base", label: "RAG Seeding" },
       { href: "/admin/services", label: "Service Providers" },
     ],
   },

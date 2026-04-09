@@ -243,7 +243,7 @@ export default function ScraperPage() {
       {/* RAG summary link */}
       <div className="mb-4 bg-[#0D1B2A] rounded-lg p-3 border border-gray-800 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-bold text-gray-200">Knowledge Base</span>
+          <span className="text-sm font-bold text-gray-200">RAG Seeding</span>
           <span className="text-xs text-gray-500 font-mono">{ragTotal.toLocaleString()} chunks</span>
           {totalRagPending > 0 && <span className="text-xs text-amber-400 font-mono">{totalRagPending.toLocaleString()} pending</span>}
           {ragLastSeeded && <span className="text-[10px] text-gray-600">seeded {new Date(ragLastSeeded).toLocaleString()}</span>}

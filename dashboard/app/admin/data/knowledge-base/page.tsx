@@ -51,8 +51,8 @@ export default function KnowledgeBasePage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-1">Knowledge Base</h1>
-      <p className="text-sm text-gray-500 mb-4">RAG vector store — chunks embedded from approved data. Re-seed to update.</p>
+      <h1 className="text-2xl font-bold mb-1">RAG Seeding</h1>
+      <p className="text-sm text-gray-500 mb-4">Vector store — chunks embedded from approved data. Re-seed to update.</p>
 
       {/* Summary stats */}
       <div className="grid grid-cols-4 gap-4 mb-6">
