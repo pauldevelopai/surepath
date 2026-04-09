@@ -26,6 +26,8 @@ function fetchHTML(url) {
   if (url.includes('property24.com') && SCRAPER_API_KEY) {
     const proxyUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(url)}`;
     console.log(`[fetch] Routing P24 through ScraperAPI proxy`);
+    // Log the ScraperAPI usage
+    try { const { logCost } = require('./costs'); logCost('scraperapi', 'property24_fetch', 0.001, null, { url }); } catch {}
     return new Promise((resolve, reject) => {
       https.get(proxyUrl, { headers: { 'Accept': 'text/html' }, timeout: 30000 }, (res) => {
         if (res.statusCode !== 200) return reject(new Error(`ScraperAPI returned ${res.statusCode} for ${url}`));
@@ -430,6 +432,29 @@ async function generateReport(input, askingPrice, phoneNumber) {
     log(1, 'Property resolution');
 
     if (isProperty24URL(input)) {
+      // Check if we already have this property (created by tease) — skip re-fetching P24
+      const cleanP24 = input.replace(/[?#].*$/, '').replace(/\/+$/, '');
+      const { rows: existingP24 } = await pool.query(
+        "SELECT id, address_raw, suburb, city, province, asking_price, bedrooms, bathrooms FROM properties WHERE listing_url ILIKE $1 ORDER BY id DESC LIMIT 1",
+        [`%${cleanP24.split('/').pop()}%`]
+      );
+      if (existingP24.length > 0) {
+        const ep = existingP24[0];
+        propertyId = ep.id;
+        address = ep.address_raw;
+        if (!askingPrice && ep.asking_price) askingPrice = ep.asking_price;
+        log(1, `Found existing P24 property ${propertyId} — skipping P24 re-fetch (saves ScraperAPI call)`);
+        // Check if it has photos already
+        const { rows: photoCheck } = await pool.query(
+          "SELECT COUNT(*) as c FROM property_images WHERE property_id = $1 AND source IN ('property24','privateproperty') AND image_url LIKE 'http%'",
+          [propertyId]
+        );
+        if (parseInt(photoCheck[0].c) > 0) {
+          log(1, `Already have ${photoCheck[0].c} photos — using existing`);
+        }
+      }
+
+      if (!propertyId) {
       log(1, `Property24 URL — extracting OG metadata: ${input}`);
       let html = null;
       try {
@@ -671,6 +696,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
       if (!address) {
         throw new Error('Could not extract address from Property24 listing');
       }
+      } // close if (!propertyId)
     } else if (isPrivatePropertyURL(input)) {
       log(1, `Fetching PrivateProperty listing: ${input}`);
       const extracted = await extractPrivatePropertyData(input);
