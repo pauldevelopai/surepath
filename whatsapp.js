@@ -512,11 +512,9 @@ async function runTeaseAsync(from, phoneNumber, url) {
       if (!matchedPropertyId) {
         console.log(`[tease] No exact PP match for P24 URL: ${p24Suburb}/${p24City} ${p24Data.bedrooms || '?'}bed R${p24Data.price || '?'} street="${streetRaw || 'none'}"`);
         await sendWhatsApp(from,
-          `I can't verify this Property24 listing — Property24 blocked our access and I couldn't find an exact match on PrivateProperty.\n\n` +
-          `To check this property, try one of these:\n` +
-          `1. Send the *PrivateProperty* link for the same property (search on privateproperty.co.za)\n` +
-          `2. Try again later — Property24 may be temporarily blocking requests\n\n` +
-          `I only analyse properties I can verify — I'd rather tell you I can't help than give you wrong information.`
+          `I couldn't find this property in our system. Property24 links sometimes don't have enough detail for us to work with.\n\n` +
+          `Try sending the *PrivateProperty* link instead — search for the same property on privateproperty.co.za and send that link here.\n\n` +
+          `We get the best results from PrivateProperty listings.`
         );
         await upsertConversation(phoneNumber, { state: 'awaiting_property' });
         res.type('text/xml').send('<Response></Response>');
