@@ -529,7 +529,7 @@ export default function IntelligenceHubPage() {
                       <div className="text-[8px] text-gray-500">latency</div>
                     </div>
                   </div>
-                  <div className="text-[8px] text-blue-600 mb-1">Layers: {(qResult.rag_retrieval.layers_hit || []).join(", ")}</div>
+                  <div className="text-[8px] text-blue-600 mb-1">Layers: {(qResult.rag_retrieval.layers_hit || []).map((l: string) => l === "knowledge" ? "articles" : l).join(", ")}</div>
                   <div className="text-[8px] text-gray-500 mb-2 truncate" title={qResult.rag_retrieval.query_text}>Query: {qResult.rag_retrieval.query_text}</div>
                   {(qResult.rag_retrieval.chunks || []).length > 0 && (
                     <div className="max-h-32 overflow-y-auto">
@@ -543,7 +543,7 @@ export default function IntelligenceHubPage() {
                             c.layer === 'security' ? 'bg-orange-100 text-orange-700' :
                             c.layer === 'property' ? 'bg-indigo-100 text-indigo-700' :
                             'bg-gray-100 text-gray-600'
-                          }`}>{c.layer}</span>
+                          }`}>{c.layer === "knowledge" ? "articles" : c.layer}</span>
                           <span className="text-gray-600">{c.name || c.suburb || c.text_preview?.substring(0, 80)}</span>
                         </div>
                       ))}
@@ -656,7 +656,7 @@ export default function IntelligenceHubPage() {
                 {(rag.chunks?.by_layer || []).map((l: A) => (
                   <div key={l.layer} className="bg-gray-50 rounded p-2 text-center">
                     <div className="text-lg font-bold">{Number(l.count).toLocaleString()}</div>
-                    <div className="text-[9px] text-gray-500">{l.layer}</div>
+                    <div className="text-[9px] text-gray-500">{l.layer === "knowledge" ? "articles" : l.layer}</div>
                   </div>
                 ))}
               </div>
@@ -769,7 +769,7 @@ export default function IntelligenceHubPage() {
                         r.layer === 'live' ? 'bg-green-100 text-green-700' :
                         r.layer === 'property' ? 'bg-purple-100 text-purple-700' :
                         'bg-gray-100 text-gray-600'
-                      }`}>{r.layer}</span>
+                      }`}>{r.layer === "knowledge" ? "articles" : r.layer}</span>
                       <span className="font-mono text-gray-400 w-10 text-right shrink-0">{r.score.toFixed(3)}</span>
                       <span className="flex-1">{r.text}</span>
                     </div>
