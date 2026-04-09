@@ -68,6 +68,8 @@ export const GET = withAuth(async (req: NextRequest) => {
   const source = req.nextUrl.searchParams.get("source");
   const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
   const filter = req.nextUrl.searchParams.get("filter") || "all";
+  const category = req.nextUrl.searchParams.get("category") || "";
+  const search = req.nextUrl.searchParams.get("search") || "";
   const limit = 50;
   const offset = (page - 1) * limit;
 
@@ -98,9 +100,21 @@ export const GET = withAuth(async (req: NextRequest) => {
     else if (filter === "pending_review") filterClause = ` AND ${cfg.alias}.rag_status = 'pending_review'`;
     else if (filter === "not_in_rag") filterClause = ` AND NOT EXISTS (SELECT 1 FROM rag_chunks rc WHERE rc.source_table = '${cfg.table}' AND rc.source_id = ${cfg.alias}.id)`;
 
+    // Category filter (for knowledge entries and area_risk_data)
+    if (category && source === "rag_knowledge_entries") filterClause += ` AND ${cfg.alias}.category = '${category.replace(/'/g, "''")}'`;
+    if (category && source === "area_risk_data") filterClause += ` AND ${cfg.alias}.risk_type = '${category.replace(/'/g, "''")}'`;
+
+    // Text search
+    if (search) {
+      const s = search.replace(/'/g, "''");
+      if (source === "rag_knowledge_entries") filterClause += ` AND (${cfg.alias}.name ILIKE '%${s}%' OR ${cfg.alias}.description ILIKE '%${s}%' OR ${cfg.alias}.visual_indicators ILIKE '%${s}%')`;
+      else if (source === "area_risk_data") filterClause += ` AND (${cfg.alias}.suburb ILIKE '%${s}%' OR ${cfg.alias}.city ILIKE '%${s}%')`;
+      else if (source === "properties") filterClause += ` AND (${cfg.alias}.address_raw ILIKE '%${s}%' OR ${cfg.alias}.suburb ILIKE '%${s}%')`;
+    }
+
     // For grouped queries (crime), filters don't apply the same way
     const isGrouped = cfg.listQuery.includes("GROUP BY");
-    const havingClause = isGrouped && filter !== "all" ? "" : ""; // crime doesn't have rag_status per row
+    const havingClause = isGrouped && filter !== "all" ? "" : "";
 
     // Build the full query
     const hasWhere = cfg.listQuery.includes(" WHERE ");
@@ -123,9 +137,19 @@ export const GET = withAuth(async (req: NextRequest) => {
       total = parseInt(String(countRows[0].cnt));
     }
 
+      // Get categories for filter dropdown
+    let categories: string[] = [];
+    if (source === "rag_knowledge_entries") {
+      const catRows = await query("SELECT DISTINCT category FROM rag_knowledge_entries WHERE category IS NOT NULL ORDER BY category");
+      categories = catRows.map((r: Record<string, unknown>) => r.category as string);
+    } else if (source === "area_risk_data") {
+      const catRows = await query("SELECT DISTINCT risk_type FROM area_risk_data ORDER BY risk_type");
+      categories = catRows.map((r: Record<string, unknown>) => r.risk_type as string);
+    }
+
     return NextResponse.json({
       source: cfg.key, label: cfg.label, layer: cfg.layer,
-      rows, total, page, pages: Math.ceil(total / limit), filter,
+      rows, total, page, pages: Math.ceil(total / limit), filter, categories, category, search,
     });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message, source: cfg.key }, { status: 500 });

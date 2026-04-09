@@ -33,6 +33,9 @@ export default function RAGReviewPage() {
   const [allSelected, setAllSelected] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [category, setCategory] = useState("");
+  const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
 
   const loadSummary = useCallback(() => {
     fetch("/api/rag-review").then(r => r.json()).then(d => setSummary(d.sources));
@@ -40,11 +43,14 @@ export default function RAGReviewPage() {
 
   useEffect(() => { loadSummary(); }, [loadSummary]);
 
-  async function loadDetail(source: string, pg = 1, f = "all") {
+  async function loadDetail(source: string, pg = 1, f = "all", cat = "", srch = "") {
     setDetail(null);
     setExpanded(null);
     setAllSelected(false);
-    const d = await (await fetch(`/api/rag-review?source=${source}&page=${pg}&filter=${f}`)).json();
+    const params = new URLSearchParams({ source, page: String(pg), filter: f });
+    if (cat) params.set("category", cat);
+    if (srch) params.set("search", srch);
+    const d = await (await fetch(`/api/rag-review?${params}`)).json();
     setDetail(d);
     setSelected(new Set());
   }
@@ -53,11 +59,16 @@ export default function RAGReviewPage() {
     setSelectedSource(key);
     setFilter("all");
     setPage(1);
-    loadDetail(key, 1, "all");
+    setCategory("");
+    setSearch("");
+    setSearchInput("");
+    loadDetail(key, 1, "all", "", "");
   }
 
-  function changePage(pg: number) { setPage(pg); if (selectedSource) loadDetail(selectedSource, pg, filter); }
-  function changeFilter(f: string) { setFilter(f); setPage(1); if (selectedSource) loadDetail(selectedSource, 1, f); }
+  function changePage(pg: number) { setPage(pg); if (selectedSource) loadDetail(selectedSource, pg, filter, category, search); }
+  function changeFilter(f: string) { setFilter(f); setPage(1); if (selectedSource) loadDetail(selectedSource, 1, f, category, search); }
+  function changeCategory(c: string) { setCategory(c); setPage(1); if (selectedSource) loadDetail(selectedSource, 1, filter, c, search); }
+  function doSearch() { setSearch(searchInput); setPage(1); if (selectedSource) loadDetail(selectedSource, 1, filter, category, searchInput); }
 
   function toggleSelect(id: number) {
     setSelected(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -141,13 +152,32 @@ export default function RAGReviewPage() {
           </div>
 
           {/* Filters */}
-          <div className="flex gap-1 mb-3">
-            {["all", "pending", "approved", "rejected", "not_in_rag"].map(f => (
-              <button key={f} onClick={() => changeFilter(f)}
-                className={`px-2 py-1 rounded text-[10px] font-bold ${filter === f ? "bg-[#0D1B2A] text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}>
-                {f === "not_in_rag" ? "Not in RAG" : f.charAt(0).toUpperCase() + f.slice(1)}
-              </button>
-            ))}
+          <div className="flex gap-2 mb-3 flex-wrap items-center">
+            <div className="flex gap-1">
+              {["all", "pending", "approved", "rejected", "not_in_rag"].map(f => (
+                <button key={f} onClick={() => changeFilter(f)}
+                  className={`px-2 py-1 rounded text-[10px] font-bold ${filter === f ? "bg-[#0D1B2A] text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}>
+                  {f === "not_in_rag" ? "Not in RAG" : f.charAt(0).toUpperCase() + f.slice(1)}
+                </button>
+              ))}
+            </div>
+            {/* Category filter */}
+            {detail.categories?.length > 0 && (
+              <select value={category} onChange={e => changeCategory(e.target.value)} className="border rounded px-2 py-1 text-[10px]">
+                <option value="">All categories</option>
+                {detail.categories.map((c: string) => (
+                  <option key={c} value={c}>{c.replace(/_/g, " ")}</option>
+                ))}
+              </select>
+            )}
+            {/* Search */}
+            <div className="flex gap-1">
+              <input type="text" value={searchInput} onChange={e => setSearchInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") doSearch(); }}
+                placeholder="Search..." className="border rounded px-2 py-1 text-[10px] w-40" />
+              {searchInput && <button onClick={doSearch} className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-[10px] hover:bg-blue-200">Go</button>}
+              {search && <button onClick={() => { setSearch(""); setSearchInput(""); if (selectedSource) loadDetail(selectedSource, 1, filter, category, ""); }} className="px-2 py-1 bg-gray-100 text-gray-500 rounded text-[10px]">Clear</button>}
+            </div>
           </div>
 
           {/* Items */}
