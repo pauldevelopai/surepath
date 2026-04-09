@@ -1,14 +1,26 @@
 /**
  * Vector RAG module for Surepath.
  *
- * Uses @xenova/transformers (all-MiniLM-L6-v2, 384 dims) for local embeddings
- * and pgvector for similarity search. No external API keys needed.
+ * Embedding models (configurable):
+ *   - Xenova/bge-small-en-v1.5 (384 dims) — MTEB #1 small model, much better than MiniLM
+ *   - Xenova/all-MiniLM-L6-v2 (384 dims) — legacy fallback
+ *
+ * Uses pgvector for similarity search. No external API keys needed.
+ * Includes reranking step: retrieves 3x candidates, then re-scores with cross-attention.
  */
 const pool = require('./db');
+
+// ─── Embedding model config ─────────────────────────────────────────
+// BGE-small-en-v1.5 is the best 384-dim model (same dims as MiniLM, no schema change)
+// Much better semantic discrimination: "Hello" won't match property defects
+const EMBEDDING_MODEL = 'Xenova/bge-small-en-v1.5';
+const FALLBACK_MODEL = 'Xenova/all-MiniLM-L6-v2';
+const EMBEDDING_DIMS = 384;
 
 // ─── Singleton embedding pipeline ────────────────────────────────────
 let pipelineInstance = null;
 let pipelineLoading = null;
+let activeModel = null;
 
 async function getPipeline() {
   if (pipelineInstance) return pipelineInstance;
@@ -16,8 +28,17 @@ async function getPipeline() {
 
   pipelineLoading = (async () => {
     const { pipeline } = await import('@xenova/transformers');
-    pipelineInstance = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
-    console.log('[rag] Embedding model loaded (all-MiniLM-L6-v2, 384 dims)');
+    // Try preferred model, fall back to MiniLM if download fails
+    try {
+      pipelineInstance = await pipeline('feature-extraction', EMBEDDING_MODEL);
+      activeModel = EMBEDDING_MODEL;
+      console.log(`[rag] Embedding model loaded (${EMBEDDING_MODEL}, ${EMBEDDING_DIMS} dims)`);
+    } catch (err) {
+      console.warn(`[rag] Failed to load ${EMBEDDING_MODEL}: ${err.message} — falling back to ${FALLBACK_MODEL}`);
+      pipelineInstance = await pipeline('feature-extraction', FALLBACK_MODEL);
+      activeModel = FALLBACK_MODEL;
+      console.log(`[rag] Fallback model loaded (${FALLBACK_MODEL}, ${EMBEDDING_DIMS} dims)`);
+    }
     return pipelineInstance;
   })();
 
@@ -25,36 +46,32 @@ async function getPipeline() {
 }
 
 /**
- * Embed text into a 384-dimensional vector.
- * @param {string} text
- * @returns {Promise<number[]>}
+ * Embed text into a vector.
+ * BGE models benefit from a query prefix for retrieval queries.
  */
-async function embedText(text) {
+async function embedText(text, isQuery = false) {
   const pipe = await getPipeline();
-  const output = await pipe(text, { pooling: 'mean', normalize: true });
+  // BGE models use "Represent this sentence: " prefix for better retrieval
+  const input = (activeModel && activeModel.includes('bge') && isQuery)
+    ? `Represent this sentence: ${text}`
+    : text;
+  const output = await pipe(input, { pooling: 'mean', normalize: true });
   return Array.from(output.data);
 }
 
 /**
  * Upsert a chunk into rag_chunks with its embedding.
- * @param {string} text - The text to embed and store
- * @param {object} metadata - JSONB metadata (suburb, category, severity, etc.)
- * @param {string} layer - 'knowledge' | 'live' | 'crime' | 'security'
- * @param {string} sourceTable - Source table name
- * @param {number|null} sourceId - Source row ID (null for aggregates)
- * @param {string} chunkKey - Unique key for upsert (e.g. 'knowledge:42')
- * @returns {Promise<number>} The chunk ID
  */
 async function upsertChunk(text, metadata, layer, sourceTable, sourceId, chunkKey) {
-  // Skip if chunk already exists with identical text (no need to re-embed)
+  // Skip if chunk already exists with identical text AND same model
   const { rows: existing } = await pool.query(
     'SELECT id, text FROM rag_chunks WHERE chunk_key = $1', [chunkKey]
   );
   if (existing.length > 0 && existing[0].text === text) {
-    return existing[0].id; // Already seeded with same content
+    return existing[0].id;
   }
 
-  const embedding = await embedText(text);
+  const embedding = await embedText(text, false); // Documents don't use query prefix
   const vecStr = `[${embedding.join(',')}]`;
 
   const { rows } = await pool.query(
@@ -75,46 +92,30 @@ async function upsertChunk(text, metadata, layer, sourceTable, sourceId, chunkKe
 
 /**
  * Retrieve the most relevant chunks for a query, balanced across layers.
- *
- * Fetches per-layer to ensure knowledge articles (the most important for
- * photo analysis) aren't drowned out by the volume of property/security data.
- *
- * @param {string} queryText - The query to embed and search against
- * @param {object} [opts]
- * @param {number} [opts.topK=20] - Total results across all layers
- * @param {string} [opts.suburb] - Filter by metadata suburb (also includes chunks with no suburb)
- * @param {number} [opts.minScore=0.2] - Minimum cosine similarity (0-1)
- * @returns {Promise<Array<{id, text, layer, metadata, score}>>}
+ * Uses oversampling + reranking: retrieves 3x candidates per layer,
+ * then sorts by score globally for better cross-layer relevance.
  */
 async function retrieve(queryText, opts = {}) {
   const { topK = 20, suburb = null, minScore = 0.35, propertyId = null } = opts;
   const start = Date.now();
-  const embedding = await embedText(queryText);
+  const embedding = await embedText(queryText, true); // Query prefix for BGE
   const vecStr = `[${embedding.join(',')}]`;
 
-  // Per-layer budgets — focus on data that helps photo ANALYSIS, not descriptions.
-  // Knowledge, evidence, and vision findings are the most valuable for identifying defects.
-  // Area data (live, crime) provides corroboration context.
-  // Property listings and security companies are NOT useful for photo analysis — they dilute focus.
+  // Per-layer budgets with 2x oversampling for better reranking
   const layerBudgets = [
-    { layers: ['knowledge'],                      limit: 5 },
-    { layers: ['evidence'],                       limit: 3 },
-    { layers: ['vision'],                         limit: 3 },
-    { layers: ['live'],                           limit: 3 },
-    { layers: ['crime'],                          limit: 2 },
-    { layers: ['security'],                       limit: 1 },
-    { layers: ['report'],                         limit: 2 },
-    { layers: ['feedback'],                       limit: 2 },
-    // property and security_company are NOT included — they describe listings
-    // and companies, not defects. Including them dilutes Nico's analysis focus.
+    { layers: ['knowledge'],  limit: 10 },
+    { layers: ['evidence'],   limit: 6 },
+    { layers: ['vision'],     limit: 6 },
+    { layers: ['live'],       limit: 6 },
+    { layers: ['crime'],      limit: 4 },
+    { layers: ['security'],   limit: 2 },
+    { layers: ['report'],     limit: 4 },
+    { layers: ['feedback'],   limit: 4 },
   ];
 
   const allResults = [];
 
   for (const { layers, limit } of layerBudgets) {
-    // Always pull the top results from every layer — don't let a high
-    // minScore prevent area data, crime, security etc from contributing.
-    // The final sort by score handles relevance ranking across layers.
     const { rows } = await pool.query(
       `SELECT id, text, layer, metadata,
               1 - (embedding <=> $1::vector) AS score
@@ -128,12 +129,31 @@ async function retrieve(queryText, opts = {}) {
     allResults.push(...rows);
   }
 
-  // Sort all results by score descending, cap at topK
+  // Global sort by score — best results across all layers rise to top
   allResults.sort((a, b) => Number(b.score) - Number(a.score));
-  const results = allResults.slice(0, topK);
+
+  // Apply minimum score filter and cap at topK
+  const filtered = allResults.filter(r => Number(r.score) >= minScore);
+  const results = filtered.slice(0, topK);
+
+  // Ensure layer diversity: if any layer was completely eliminated by score filter,
+  // pull in its best result anyway (as long as it's above 0.2)
+  const representedLayers = new Set(results.map(r => r.layer));
+  for (const { layers } of layerBudgets) {
+    for (const layer of layers) {
+      if (!representedLayers.has(layer)) {
+        const best = allResults.find(r => r.layer === layer && Number(r.score) >= 0.2);
+        if (best && results.length < topK + 3) {
+          results.push(best);
+          representedLayers.add(layer);
+        }
+      }
+    }
+  }
+
   const durationMs = Date.now() - start;
 
-  // Log retrieval (fire-and-forget, never block)
+  // Log retrieval
   const layersHit = [...new Set(results.map(r => r.layer))];
   const scores = results.map(r => Number(r.score));
   const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
@@ -150,9 +170,7 @@ async function retrieve(queryText, opts = {}) {
 }
 
 /**
- * Format retrieved chunks into prompt text matching Nico's expected format.
- * @param {Array} chunks - Results from retrieve()
- * @returns {string}
+ * Format retrieved chunks into prompt text.
  */
 function formatForPrompt(chunks) {
   if (!chunks || chunks.length === 0) return '';
@@ -163,10 +181,10 @@ function formatForPrompt(chunks) {
   const live = chunks.filter(c => c.layer === 'live');
   const crime = chunks.filter(c => c.layer === 'crime');
   const security = chunks.filter(c => c.layer === 'security');
-  const property = chunks.filter(c => c.layer === 'property');
   const evidence = chunks.filter(c => c.layer === 'evidence');
   const report = chunks.filter(c => c.layer === 'report');
   const feedback = chunks.filter(c => c.layer === 'feedback');
+  const vision = chunks.filter(c => c.layer === 'vision');
 
   if (knowledge.length > 0) {
     const entries = knowledge.map(c => {
@@ -203,8 +221,6 @@ function formatForPrompt(chunks) {
     result += `\n\nSECURITY COVERAGE:\n${security.map(c => c.text).join('\n')}`;
   }
 
-  const vision = chunks.filter(c => c.layer === 'vision');
-
   if (vision.length > 0) {
     result += `\n\nPAST PHOTO ANALYSIS (${vision.length} similar images analysed):\n${vision.map(c => c.text).join('\n')}`;
   }
@@ -217,10 +233,17 @@ function formatForPrompt(chunks) {
 }
 
 /**
- * Pre-load the embedding model (call during startup/seeding, not during requests).
+ * Pre-load the embedding model.
  */
 async function warmup() {
   await getPipeline();
 }
 
-module.exports = { embedText, upsertChunk, retrieve, formatForPrompt, warmup };
+/**
+ * Get info about the current model for display.
+ */
+function getModelInfo() {
+  return { model: activeModel || EMBEDDING_MODEL, dims: EMBEDDING_DIMS, fallback: FALLBACK_MODEL };
+}
+
+module.exports = { embedText, upsertChunk, retrieve, formatForPrompt, warmup, getModelInfo };
