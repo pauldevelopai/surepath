@@ -378,6 +378,35 @@ async function runTeaseAsync(from, phoneNumber, url) {
           }
         }
 
+        // Extract ALL photos from the full HTML (not just OG image)
+        const photoIds = new Set();
+        const imgMatches = html.match(/images\.prop24\.com\/(\d+)/g) || [];
+        for (const m of imgMatches) {
+          const id = m.match(/(\d+)$/)?.[1];
+          if (id && parseInt(id) > 300000000) photoIds.add(id);
+        }
+        const allPhotos = [...photoIds].slice(0, 16).map(id => `https://images.prop24.com/${id}/Ensure1280x720`);
+
+        // Try price from page body (more reliable than OG)
+        if (!price) {
+          const bodyPriceM = html.match(/R\s*([\d\s,]+\d{3})/);
+          if (bodyPriceM) {
+            const p = parseInt(bodyPriceM[1].replace(/[\s,]/g, ''));
+            if (p >= 100000 && p <= 500000000) price = p;
+          }
+        }
+
+        // Try beds/baths from page body
+        if (!bedrooms) { const m = html.match(/(\d+)\s*Bed/i); if (m) bedrooms = parseInt(m[1]); }
+        if (!bathrooms) { const m = html.match(/(\d+)\s*Bath/i); if (m) bathrooms = parseInt(m[1]); }
+
+        // Description from page
+        let description = ogDesc;
+        if (!description || description.length < 50) {
+          const descM = html.match(/class="[^"]*(?:description|listing-body)[^"]*"[^>]*>([\s\S]*?)<\//i);
+          if (descM) description = descM[1].replace(/<[^>]+>/g, '').trim().substring(0, 2000);
+        }
+
         p24Data = {
           title: ogTitle || title,
           price,
@@ -386,9 +415,9 @@ async function runTeaseAsync(from, phoneNumber, url) {
           propertyType,
           streetAddress,
           listingName,
-          ogImage,            // the thumbnail from the link preview
-          photos: ogImage ? [ogImage] : [],
-          description: ogDesc,
+          ogImage,
+          photos: allPhotos.length > 0 ? allPhotos : (ogImage ? [ogImage] : []),
+          description,
         };
 
         console.log(`[tease] P24 OG extracted: "${p24Data.title}", R${p24Data.price}, ${p24Data.bedrooms}bed, ogImage: ${ogImage ? 'yes' : 'no'}`);
@@ -508,13 +537,32 @@ async function runTeaseAsync(from, phoneNumber, url) {
         }
       }
 
-      // NO guessing — if we can't match exactly, tell the user
-      if (!matchedPropertyId) {
-        console.log(`[tease] No exact PP match for P24 URL: ${p24Suburb}/${p24City} ${p24Data.bedrooms || '?'}bed R${p24Data.price || '?'} street="${streetRaw || 'none'}"`);
+      // No PP match — use P24 data directly (ScraperAPI lets us scrape P24 now)
+      if (!matchedPropertyId && p24Data?.title) {
+        console.log(`[tease] No PP match — using P24 data directly for ${p24Suburb}`);
+
+        // Build address from P24 data
+        const p24Address = p24Data.streetAddress
+          ? `${p24Data.streetAddress}, ${p24Suburb || ''}, ${p24City || ''}`
+          : p24Data.title
+            ? p24Data.title.replace(/\s+for\s+sale\s*/i, ' in ').replace(/\s*-\s*Property24.*$/i, '').replace(/\s+in\s+in\s+/i, ' in ')
+            : `Property in ${p24Suburb || 'unknown'}`;
+
+        extractedData = {
+          address: p24Address.replace(/, $/, ''),
+          askingPrice: p24Data.price,
+          bedrooms: p24Data.bedrooms,
+          bathrooms: p24Data.bathrooms,
+          photoUrls: p24Data.photos || [],
+          description: p24Data.description,
+          propertyType: p24Data.propertyType,
+        };
+      } else if (!matchedPropertyId) {
+        // P24 fetch also failed — can't do anything
+        console.log(`[tease] P24 fetch failed and no PP match — cannot process`);
         await sendWhatsApp(from,
-          `I couldn't find this property in our system. Property24 links sometimes don't have enough detail for us to work with.\n\n` +
-          `Try sending the *PrivateProperty* link instead — search for the same property on privateproperty.co.za and send that link here.\n\n` +
-          `We get the best results from PrivateProperty listings.`
+          `I couldn't pull that listing — it may have been removed or the link is broken.\n\n` +
+          `Try sending the *PrivateProperty* link for the same property, or check the link and try again.`
         );
         await upsertConversation(phoneNumber, { state: 'awaiting_property' });
         return;

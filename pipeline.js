@@ -441,9 +441,9 @@ async function generateReport(input, askingPrice, phoneNumber) {
         if (p24UrlParts) {
           const p24Sub = p24UrlParts[1].replace(/-/g, ' ');
           const p24City = p24UrlParts[2].replace(/-/g, ' ');
-          // Don't guess — only use exact matches (street address + suburb + beds)
-          // The tease flow should have already matched or rejected this P24 URL
-          throw new Error(`Property24 returned ${fetchErr.message} and no verified PP match exists for ${p24Sub}, ${p24City}. Ask the user to send a PrivateProperty link instead.`);
+          // No PP match — continue with P24 URL, will try ScraperAPI on retry
+          log(1, `No PP match for ${p24Sub}, ${p24City} — P24 also failed: ${fetchErr.message}`);
+          throw new Error(`Could not fetch Property24 listing (${fetchErr.message}). The property may have been removed.`);
         } else {
           throw fetchErr;
         }
