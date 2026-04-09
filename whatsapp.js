@@ -508,40 +508,19 @@ async function runTeaseAsync(from, phoneNumber, url) {
         }
       }
 
-      // Strategy 5: Suburb only from URL (always available even when P24 returns 503)
-      // Match the most recent PP property in the same suburb
-      if (!matchedPropertyId && p24Suburb) {
-        console.log(`[tease] Trying suburb-only match for "${p24Suburb}" from URL path`);
-        const { rows: suburbMatches } = await pool.query(
-          `SELECT id, address_raw, asking_price, bedrooms, listing_url FROM properties
-           WHERE erf_number LIKE 'PP_%'
-           AND (suburb ILIKE $1 OR listing_url ILIKE $2)
-           ORDER BY id DESC LIMIT 5`,
-          [p24Suburb, `%/${p24Suburb.toLowerCase().replace(/\s+/g, '-')}/%`]
+      // NO guessing — if we can't match exactly, tell the user
+      if (!matchedPropertyId) {
+        console.log(`[tease] No exact PP match for P24 URL: ${p24Suburb}/${p24City} ${p24Data.bedrooms || '?'}bed R${p24Data.price || '?'} street="${streetRaw || 'none'}"`);
+        await sendWhatsApp(from,
+          `I can't verify this Property24 listing — Property24 blocked our access and I couldn't find an exact match on PrivateProperty.\n\n` +
+          `To check this property, try one of these:\n` +
+          `1. Send the *PrivateProperty* link for the same property (search on privateproperty.co.za)\n` +
+          `2. Try again later — Property24 may be temporarily blocking requests\n\n` +
+          `I only analyse properties I can verify — I'd rather tell you I can't help than give you wrong information.`
         );
-        // Only use if there's a single property or we can narrow by city
-        if (suburbMatches.length === 1) {
-          matchedPropertyId = suburbMatches[0].id;
-          resolvedUrl = suburbMatches[0].listing_url || url;
-          console.log(`[tease] MATCH (suburb only, unique): property ${matchedPropertyId} "${suburbMatches[0].address_raw}"`);
-        } else if (suburbMatches.length > 1 && p24City) {
-          // Try narrowing by city too
-          const cityMatch = suburbMatches.find(r => r.listing_url?.toLowerCase().includes(p24City.toLowerCase().replace(/\s+/g, '-')));
-          if (cityMatch) {
-            matchedPropertyId = cityMatch.id;
-            resolvedUrl = cityMatch.listing_url || url;
-            console.log(`[tease] MATCH (suburb+city from URL): property ${matchedPropertyId} "${cityMatch.address_raw}"`);
-          } else {
-            // Use the most recent one and let the user verify
-            matchedPropertyId = suburbMatches[0].id;
-            resolvedUrl = suburbMatches[0].listing_url || url;
-            console.log(`[tease] WEAK MATCH (newest in suburb, ${suburbMatches.length} candidates): property ${matchedPropertyId} "${suburbMatches[0].address_raw}"`);
-          }
-        }
-      }
-
-      if (!matchedPropertyId && p24Suburb) {
-        console.log(`[tease] No PP match in local DB for ${p24Suburb}/${p24City} ${p24Data.bedrooms || '?'}bed R${p24Data.price || '?'} street="${streetRaw || 'none'}"`);
+        await upsertConversation(phoneNumber, { state: 'awaiting_property' });
+        res.type('text/xml').send('<Response></Response>');
+        return;
       }
 
       if (matchedPropertyId) {

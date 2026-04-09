@@ -424,27 +424,9 @@ async function generateReport(input, askingPrice, phoneNumber) {
         if (p24UrlParts) {
           const p24Sub = p24UrlParts[1].replace(/-/g, ' ');
           const p24City = p24UrlParts[2].replace(/-/g, ' ');
-          log(1, `Searching local DB for PP match: suburb="${p24Sub}", city="${p24City}"`);
-          const { rows: ppMatch } = await pool.query(
-            `SELECT id, listing_url, address_raw, bedrooms FROM properties
-             WHERE erf_number LIKE 'PP_%'
-             AND (suburb ILIKE $1 OR listing_url ILIKE $2)
-             ORDER BY id DESC LIMIT 1`,
-            [p24Sub, `%/${p24UrlParts[1]}/%`]
-          );
-          if (ppMatch.length > 0) {
-            log(1, `PP MATCH from URL: ${ppMatch[0].listing_url} → "${ppMatch[0].address_raw}"`);
-            input = ppMatch[0].listing_url;
-            // Now re-enter the PP path
-            const ppData = await extractPrivatePropertyData(input);
-            if (ppData) {
-              address = ppData.address;
-              photoUrls = ppData.photoUrls || [];
-              if (!askingPrice && ppData.askingPrice) askingPrice = ppData.askingPrice;
-            }
-          } else {
-            throw new Error(`No PP match found for ${p24Sub}, ${p24City} — and P24 returned ${fetchErr.message}`);
-          }
+          // Don't guess — only use exact matches (street address + suburb + beds)
+          // The tease flow should have already matched or rejected this P24 URL
+          throw new Error(`Property24 returned ${fetchErr.message} and no verified PP match exists for ${p24Sub}, ${p24City}. Ask the user to send a PrivateProperty link instead.`);
         } else {
           throw fetchErr;
         }
