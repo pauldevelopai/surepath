@@ -481,128 +481,6 @@ export default function PropertyDetailPage() {
           ) : <p className="text-sm text-gray-400">Not geocoded.</p>}
         </section>
 
-        {/* ── STREET VIEW ── */}
-        <section className="bg-white border rounded-lg p-4">
-          <div className="flex justify-between items-start mb-2">
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="font-bold text-sm">Street View</h2>
-                <FeedbackBtn propertyId={p.id} section="streetview" />
-              </div>
-              <div className="text-[10px] text-gray-400"><a href="https://developers.google.com/maps/documentation/streetview" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Google Street View Static API</a></div>
-            </div>
-            <div className="flex gap-1">
-              <CollectBtn action="streetview" label="Capture" ready={!!streetviewImg} />
-              {streetviewImg && <CollectBtn action="analyse_streetview" label="Analyse" ready={!!streetviewImg?.vision_analysis} />}
-            </div>
-          </div>
-          {streetviewImg ? (
-            <div>
-              <a href={streetviewImg.image_url} target="_blank" rel="noreferrer">
-                <img src={streetviewImg.image_url} alt="Street View" className="w-48 h-32 rounded object-cover cursor-pointer hover:opacity-80 transition border" />
-              </a>
-              <div className="text-[9px] text-gray-400 mt-1">Click image to view full size</div>
-              {streetviewImg.vision_analysis?.findings?.map((f: A, i: number) => (
-                <div key={i} className="flex gap-1 items-start text-xs mt-1">
-                  <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
-                  <span className="flex-1">{humanize(f.what_it_means || f.observation)}</span>
-                  <RateBtn section="streetview" hash={`sv-${i}`} context={{ observation: f.observation, severity: f.severity }} />
-                </div>
-              ))}
-              {streetviewImg.vision_analysis?.security_observations?.length > 0 && (
-                <div className="mt-2 flex gap-1 flex-wrap">
-                  {streetviewImg.vision_analysis.security_observations.map((s: string, i: number) => (
-                    <span key={i} className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded">{s}</span>
-                  ))}
-                </div>
-              )}
-              {streetviewImg.vision_analysis?.nearby_negatives?.map((n: string, i: number) => (
-                <div key={`svneg-${i}`} className="flex items-center gap-1 mt-1"><span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold">⚠ {n}</span><RateBtn section="streetview" hash={`svneg-${i}`} context={{ type: "nearby_negative", value: n }} /></div>
-              ))}
-              {streetviewImg.vision_analysis?.nearby_positives?.map((n: string, i: number) => (
-                <div key={`svpos-${i}`} className="flex items-center gap-1 mt-1"><span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded font-bold">✓ {n}</span><RateBtn section="streetview" hash={`svpos-${i}`} context={{ type: "nearby_positive", value: n }} /></div>
-              ))}
-            </div>
-          ) : <p className="text-sm text-gray-400">{hasCoords ? "Not captured." : "Geocode first."}</p>}
-        </section>
-
-        {/* ── SATELLITE ── */}
-        <section className="bg-white border rounded-lg p-4">
-          <div className="flex justify-between items-start mb-2">
-            <div>
-              <h2 className="font-bold text-sm">Satellite / Aerial</h2>
-              <div className="text-[10px] text-gray-400"><a href="https://developers.google.com/maps/documentation/maps-static" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Google Maps Static API</a></div>
-            </div>
-            <div className="flex gap-1">
-              <CollectBtn action="satellite" label="Capture" ready={!!satelliteImg} />
-              {satelliteImg && <CollectBtn action="analyse_satellite" label="Analyse" ready={!!satelliteImg?.vision_analysis} />}
-            </div>
-          </div>
-          {satelliteImg ? (
-            <div>
-              <a href={satelliteImg.image_url} target="_blank" rel="noreferrer">
-                <img src={satelliteImg.image_url} alt="Satellite View" className="w-48 h-32 rounded object-cover cursor-pointer hover:opacity-80 transition border" />
-              </a>
-              <div className="text-[9px] text-gray-400 mt-1">Click image to view full size</div>
-              {satelliteImg.vision_analysis && (() => {
-                const satVA = satelliteImg.vision_analysis;
-                const satFindings = satVA.findings || [];
-                return (
-                <div className="mt-2 space-y-2">
-                  {/* Key metrics row */}
-                  <div className="flex gap-3 flex-wrap">
-                    <div className="bg-gray-50 rounded px-3 py-1.5 text-xs">
-                      <span className="text-gray-500">Roof: </span><span className="font-bold capitalize">{satVA.roof_material?.replace(/_/g, ' ') || 'unknown'}</span>
-                      <RateBtn section="satellite" hash="roof_material" context={{ field: "roof_material", value: satVA.roof_material }} />
-                    </div>
-                    <div className="bg-gray-50 rounded px-3 py-1.5 text-xs">
-                      <span className="text-gray-500">Orientation: </span><span className="font-bold capitalize">{satVA.roof_orientation_estimate || 'unclear'}</span>
-                      <RateBtn section="satellite" hash="roof_orientation" context={{ field: "roof_orientation", value: satVA.roof_orientation_estimate }} />
-                    </div>
-                    <div className="bg-gray-50 rounded px-3 py-1.5 text-xs">
-                      <span className="text-gray-500">Solar: </span><span className={`font-bold ${satVA.solar_installed ? 'text-green-600' : 'text-gray-500'}`}>{satVA.solar_installed ? 'Visible' : 'None'}</span>
-                      <RateBtn section="satellite" hash="solar_installed" context={{ field: "solar_installed", value: satVA.solar_installed }} />
-                    </div>
-                    {satVA.asbestos_indicators && (
-                      <div className="bg-red-50 rounded px-3 py-1.5 text-xs">
-                        <span className="text-red-700 font-bold">⚠ Asbestos indicators</span>
-                      </div>
-                    )}
-                    {satVA.security_visible && (
-                      <div className="bg-green-50 rounded px-3 py-1.5 text-xs">
-                        <span className="text-green-700 font-bold">Security visible</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Satellite findings */}
-                  {satFindings.length > 0 && (
-                    <div>
-                      <div className="text-[10px] text-gray-400 font-bold mb-1">Aerial Analysis ({satFindings.length} findings)</div>
-                      {satFindings.map((f: A, i: number) => (
-                        <div key={i} className="flex gap-1 items-start text-xs mt-1">
-                          <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
-                          <span className="flex-1">{humanize(f.what_it_means || f.observation)}</span>
-                          <RateBtn section="satellite" hash={`finding-${i}`} context={{ observation: f.observation, severity: f.severity }} />
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Nearby positives/negatives */}
-                  {satVA.nearby_negatives?.map((n: string, i: number) => (
-                    <div key={`neg-${i}`} className="flex items-center gap-1"><span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold">⚠ {n}</span><RateBtn section="satellite" hash={`neg-${i}`} context={{ type: "nearby_negative", value: n }} /></div>
-                  ))}
-                  {satVA.nearby_positives?.map((n: string, i: number) => (
-                    <div key={`pos-${i}`} className="flex items-center gap-1"><span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded font-bold">✓ {n}</span><RateBtn section="satellite" hash={`pos-${i}`} context={{ type: "nearby_positive", value: n }} /></div>
-                  ))}
-                </div>
-                );
-              })()}
-            </div>
-          ) : <p className="text-sm text-gray-400">{hasCoords ? "Not captured." : "Geocode first."}</p>}
-        </section>
-
         {/* ── LISTING PHOTOS ── */}
         <section className="bg-white border rounded-lg p-4">
           <div className="flex justify-between items-start mb-2">
@@ -665,6 +543,92 @@ export default function PropertyDetailPage() {
               </div>
             </>
           ) : <p className="text-sm text-gray-400">{(images?.length || 0) > 0 ? "Select photos above then click Analyse." : "No photos to analyse."}</p>}
+        </section>
+
+        {/* ── STREET VIEW ── */}
+        <section className="bg-white border rounded-lg p-4">
+          <div className="flex justify-between items-start mb-2">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="font-bold text-sm">Street View</h2>
+                <FeedbackBtn propertyId={p.id} section="streetview" />
+              </div>
+              <div className="text-[10px] text-gray-400"><a href="https://developers.google.com/maps/documentation/streetview" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Google Street View Static API</a></div>
+            </div>
+            <div className="flex gap-1">
+              <CollectBtn action="streetview" label="Capture" ready={!!streetviewImg} />
+              {streetviewImg && <CollectBtn action="analyse_streetview" label="Analyse" ready={!!streetviewImg?.vision_analysis} />}
+            </div>
+          </div>
+          {streetviewImg ? (
+            <div>
+              <a href={streetviewImg.image_url} target="_blank" rel="noreferrer">
+                <img src={streetviewImg.image_url} alt="Street View" className="w-48 h-32 rounded object-cover cursor-pointer hover:opacity-80 transition border" />
+              </a>
+              <div className="text-[9px] text-gray-400 mt-1">Click image to view full size</div>
+              {streetviewImg.vision_analysis?.findings?.map((f: A, i: number) => (
+                <div key={i} className="flex gap-1 items-start text-xs mt-1">
+                  <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
+                  <span className="flex-1">{humanize(f.what_it_means || f.observation)}</span>
+                  <RateBtn section="streetview" hash={`sv-${i}`} context={{ observation: f.observation, severity: f.severity }} />
+                </div>
+              ))}
+              {streetviewImg.vision_analysis?.security_observations?.length > 0 && (
+                <div className="mt-2 flex gap-1 flex-wrap">
+                  {streetviewImg.vision_analysis.security_observations.map((s: string, i: number) => (
+                    <span key={i} className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded">{s}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : <p className="text-sm text-gray-400">{hasCoords ? "Not captured." : "Geocode first."}</p>}
+        </section>
+
+        {/* ── SATELLITE ── */}
+        <section className="bg-white border rounded-lg p-4">
+          <div className="flex justify-between items-start mb-2">
+            <div>
+              <h2 className="font-bold text-sm">Satellite / Aerial</h2>
+              <div className="text-[10px] text-gray-400"><a href="https://developers.google.com/maps/documentation/maps-static" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Google Maps Static API</a></div>
+            </div>
+            <div className="flex gap-1">
+              <CollectBtn action="satellite" label="Capture" ready={!!satelliteImg} />
+              {satelliteImg && <CollectBtn action="analyse_satellite" label="Analyse" ready={!!satelliteImg?.vision_analysis} />}
+            </div>
+          </div>
+          {satelliteImg ? (
+            <div>
+              <a href={satelliteImg.image_url} target="_blank" rel="noreferrer">
+                <img src={satelliteImg.image_url} alt="Satellite View" className="w-48 h-32 rounded object-cover cursor-pointer hover:opacity-80 transition border" />
+              </a>
+              <div className="text-[9px] text-gray-400 mt-1">Click image to view full size</div>
+              {satelliteImg.vision_analysis && (() => {
+                const satVA = satelliteImg.vision_analysis;
+                const satFindings = satVA.findings || [];
+                return (
+                <div className="mt-2 space-y-2">
+                  <div className="flex gap-3 flex-wrap">
+                    <div className="bg-gray-50 rounded px-3 py-1.5 text-xs"><span className="text-gray-500">Roof: </span><span className="font-bold capitalize">{satVA.roof_material?.replace(/_/g, ' ') || 'unknown'}</span></div>
+                    <div className="bg-gray-50 rounded px-3 py-1.5 text-xs"><span className="text-gray-500">Orientation: </span><span className="font-bold capitalize">{satVA.roof_orientation_estimate || 'unclear'}</span></div>
+                    <div className="bg-gray-50 rounded px-3 py-1.5 text-xs"><span className="text-gray-500">Solar: </span><span className={`font-bold ${satVA.solar_installed ? 'text-green-600' : 'text-gray-500'}`}>{satVA.solar_installed ? 'Visible' : 'None'}</span></div>
+                    {satVA.asbestos_indicators && <div className="bg-red-50 rounded px-3 py-1.5 text-xs"><span className="text-red-700 font-bold">Asbestos indicators</span></div>}
+                  </div>
+                  {satFindings.length > 0 && (
+                    <div>
+                      <div className="text-[10px] text-gray-400 font-bold mb-1">Aerial Analysis ({satFindings.length} findings)</div>
+                      {satFindings.map((f: A, i: number) => (
+                        <div key={i} className="flex gap-1 items-start text-xs mt-1">
+                          <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${severityColor[f.severity] || "bg-gray-200"}`}>{f.severity}</span>
+                          <span className="flex-1">{humanize(f.what_it_means || f.observation)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                );
+              })()}
+            </div>
+          ) : <p className="text-sm text-gray-400">{hasCoords ? "Not captured." : "Geocode first."}</p>}
         </section>
 
         {/* ── DEEDS & OWNERSHIP ── */}

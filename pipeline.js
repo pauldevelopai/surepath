@@ -1406,6 +1406,34 @@ async function generateReport(input, askingPrice, phoneNumber) {
       log(11, `B2B propagation error (non-fatal): ${err.message}`);
     }
 
+    // ── STEP 11B: Collect area data for report sections ──────────────
+    // These fill the sold prices, market trends, electricity, fibre, climate, schools sections
+    log('11B', 'Collecting area data (sold prices, trends, electricity, fibre, climate, schools, costs)');
+    const collectors = [
+      { name: 'schools', mod: './collect-schools' },
+      { name: 'climate', mod: './collect-climate' },
+      { name: 'soldprices', mod: './collect-sold-prices' },
+      { name: 'electricity', mod: './collect-electricity' },
+      { name: 'fibre', mod: './collect-fibre' },
+      { name: 'pricetrends', mod: './collect-price-trends' },
+      { name: 'propertycosts', mod: './collect-property-costs' },
+    ];
+    for (const c of collectors) {
+      try {
+        const mod = require(c.mod);
+        const fn = mod.collectForProperty || mod.default?.collectForProperty;
+        if (fn) {
+          await Promise.race([
+            fn(propertyId),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 30000)),
+          ]);
+          log('11B', `${c.name}: done`);
+        }
+      } catch (err) {
+        log('11B', `${c.name}: ${err.message} (non-fatal)`);
+      }
+    }
+
     // ── STEP 12: Create report record ─────────────────────────────
     log(12, 'Creating report record (PDF exported on-demand from property page)');
 
