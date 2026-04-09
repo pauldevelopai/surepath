@@ -20,17 +20,34 @@ function log(step, message) {
 // ─── Property24 scraping ───────────────────────────────────────────────
 
 function fetchHTML(url) {
+  // Route Property24 requests through ScraperAPI proxy (free: 5K requests/month)
+  // P24 blocks our server IP directly with 503
+  const SCRAPER_API_KEY = process.env.SCRAPER_API_KEY;
+  if (url.includes('property24.com') && SCRAPER_API_KEY) {
+    const proxyUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(url)}`;
+    console.log(`[fetch] Routing P24 through ScraperAPI proxy`);
+    return new Promise((resolve, reject) => {
+      https.get(proxyUrl, { headers: { 'Accept': 'text/html' }, timeout: 30000 }, (res) => {
+        if (res.statusCode !== 200) return reject(new Error(`ScraperAPI returned ${res.statusCode} for ${url}`));
+        let body = '';
+        res.on('data', chunk => body += chunk);
+        res.on('end', () => resolve(body));
+        res.on('error', reject);
+      }).on('error', reject).on('timeout', function() { this.destroy(); reject(new Error('ScraperAPI timeout')); });
+    });
+  }
+
   const mod = url.startsWith('https') ? https : http;
   const parsed = new (require('url').URL)(url);
   const options = {
     hostname: parsed.hostname,
     path: parsed.pathname + parsed.search,
-    headers: { 'User-Agent': 'SurePath/1.0 PropertyIntelligence' },
+    headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' },
+    timeout: 20000,
   };
   return new Promise((resolve, reject) => {
     mod.get(options, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        // Resolve relative redirects against the original URL
         const redirectUrl = new (require('url').URL)(res.headers.location, url).href;
         return fetchHTML(redirectUrl).then(resolve).catch(reject);
       }
@@ -41,7 +58,7 @@ function fetchHTML(url) {
       res.on('data', (chunk) => body += chunk);
       res.on('end', () => resolve(body));
       res.on('error', reject);
-    }).on('error', reject);
+    }).on('error', reject).on('timeout', function() { this.destroy(); reject(new Error(`Timeout fetching ${url}`)); });
   });
 }
 
