@@ -383,29 +383,55 @@ export default function PropertyDetailPage() {
             )}
           </div>
         )}
-        <div className="flex gap-3 mt-2 text-xs flex-wrap">
-          {p.listing_status && p.listing_status !== "active" && (
-            <div className={`border rounded px-2 py-1 font-bold ${p.listing_status === "sold" ? "bg-red-50 border-red-200 text-red-700" : p.listing_status === "under_offer" ? "bg-orange-50 border-orange-200 text-orange-700" : "bg-blue-50 border-blue-200 text-blue-700"}`}>
-              {p.listing_status === "sold" ? "SOLD" : p.listing_status === "under_offer" ? "UNDER OFFER" : p.listing_status === "price_reduced" ? "PRICE REDUCED" : p.listing_status.toUpperCase()}
-              {p.status_changed_at && <span className="font-normal ml-1">({formatDate(p.status_changed_at)})</span>}
+        {/* Listing Status & Timeline */}
+        <div className={`mt-3 border rounded-lg p-3 ${p.listing_status === "sold" ? "bg-red-50 border-red-200" : p.listing_status === "under_offer" ? "bg-orange-50 border-orange-200" : p.listing_status === "price_reduced" ? "bg-amber-50 border-amber-200" : "bg-gray-50 border-gray-200"}`}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className={`px-2 py-1 rounded text-xs font-bold ${p.listing_status === "sold" ? "bg-red-200 text-red-800" : p.listing_status === "under_offer" ? "bg-orange-200 text-orange-800" : p.listing_status === "price_reduced" ? "bg-amber-200 text-amber-800" : "bg-green-200 text-green-800"}`}>
+                {p.listing_status === "sold" ? "SOLD" : p.listing_status === "under_offer" ? "UNDER OFFER" : p.listing_status === "price_reduced" ? "PRICE REDUCED" : "ON MARKET"}
+              </span>
+              {p.listing_date && (() => {
+                const days = Math.floor((Date.now() - new Date(p.listing_date).getTime()) / 86400000);
+                return days > 0 ? <span className="text-xs text-gray-500">{days} days on market</span> : null;
+              })()}
             </div>
-          )}
-          {p.listing_date && (
-            <div className="bg-blue-50 border border-blue-200 rounded px-2 py-1">
-              <span className="text-blue-500">Listed:</span> <span className="font-medium">{formatDate(p.listing_date)}</span>
-              {(() => { const days = Math.floor((Date.now() - new Date(p.listing_date).getTime()) / 86400000); return days > 0 ? <span className="text-blue-400 ml-1">({days} days on market)</span> : null; })()}
-            </div>
-          )}
-          <div className="bg-gray-50 border border-gray-200 rounded px-2 py-1">
-            <span className="text-gray-500">First scraped:</span> <span className="font-medium">{formatDate(p.first_scraped_at || p.created_at)}</span>
+            {p.status_changed_at && <span className="text-[10px] text-gray-400">Status changed: {formatDate(p.status_changed_at)}</span>}
           </div>
-          {p.last_checked_at && (
-            <div className="bg-gray-50 border border-gray-200 rounded px-2 py-1">
-              <span className="text-gray-500">Last checked:</span> <span className="font-medium">{formatDate(p.last_checked_at)}</span>
+          <div className="grid grid-cols-3 gap-3 text-xs">
+            <div>
+              <div className="text-[9px] text-gray-400 uppercase">Listed</div>
+              <div className="font-medium">{p.listing_date ? formatDate(p.listing_date) : "Unknown"}</div>
+            </div>
+            <div>
+              <div className="text-[9px] text-gray-400 uppercase">First Scraped</div>
+              <div className="font-medium">{formatDate(p.first_scraped_at || p.created_at)}</div>
+            </div>
+            <div>
+              <div className="text-[9px] text-gray-400 uppercase">Last Checked</div>
+              <div className="font-medium">{p.last_checked_at ? formatDate(p.last_checked_at) : formatDate(p.last_scraped_at || p.created_at)}</div>
+            </div>
+          </div>
+          {p.price_history && Array.isArray(p.price_history) && p.price_history.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-gray-200">
+              <div className="text-[9px] text-gray-400 uppercase mb-1">Price Changes</div>
+              <div className="flex gap-2 flex-wrap">
+                {p.price_history.map((ph: any, i: number) => (
+                  <div key={i} className="text-xs bg-white rounded px-2 py-1 border">
+                    <span className="text-gray-400">{ph.date}</span> <span className="font-bold">{formatZAR(ph.price)}</span>
+                  </div>
+                ))}
+                <div className="text-xs bg-white rounded px-2 py-1 border border-blue-200">
+                  <span className="text-gray-400">Current</span> <span className="font-bold text-blue-700">{formatZAR(p.asking_price)}</span>
+                </div>
+              </div>
+              {(() => {
+                const original = p.price_history[0].price;
+                const diff = p.asking_price - original;
+                return diff !== 0 ? <p className="text-[10px] text-gray-500 mt-1">{diff < 0 ? `Price dropped ${formatZAR(Math.abs(diff))} since first listed — seller may be motivated.` : `Price increased ${formatZAR(diff)} since first listed.`}</p> : null;
+              })()}
             </div>
           )}
         </div>
-
         {/* Key metrics bar */}
         {(p.suburb_crime_score || p.solar_ghi_kwh_year || p.water_quality_score) && (
           <div className="flex gap-3 mt-3">
