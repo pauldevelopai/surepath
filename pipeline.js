@@ -965,7 +965,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
           const localUrl = saveImageFile(streetviewBase64, propertyId, 'streetview', 'jpg');
           await pool.query(
             `INSERT INTO property_images (property_id, source, image_url, image_type)
-             VALUES ($1, 'streetview', $2, 'exterior') ON CONFLICT (property_id, image_url) DO UPDATE SET source = EXCLUDED.source`,
+             VALUES ($1, 'streetview', $2, 'streetview') ON CONFLICT (property_id, image_url) DO UPDATE SET source = EXCLUDED.source, image_type = 'streetview'`,
             [propertyId, localUrl]
           );
           log(4, `Street View saved: ${localUrl}`);
@@ -981,7 +981,7 @@ async function generateReport(input, askingPrice, phoneNumber) {
           const localUrl = saveImageFile(satelliteBase64, propertyId, 'satellite', 'png');
           await pool.query(
             `INSERT INTO property_images (property_id, source, image_url, image_type)
-             VALUES ($1, 'satellite', $2, 'exterior') ON CONFLICT (property_id, image_url) DO UPDATE SET source = EXCLUDED.source`,
+             VALUES ($1, 'satellite', $2, 'satellite') ON CONFLICT (property_id, image_url) DO UPDATE SET source = EXCLUDED.source, image_type = 'satellite'`,
             [propertyId, localUrl]
           );
           log(4, `Satellite saved: ${localUrl}`);
