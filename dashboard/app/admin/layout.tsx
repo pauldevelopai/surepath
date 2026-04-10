@@ -41,14 +41,9 @@ const sections = [
     ],
   },
   {
-    label: "COMMS",
-    items: [
-      { href: "/admin/phone-numbers", label: "Phone Numbers" },
-    ],
-  },
-  {
     label: "SYSTEM",
     items: [
+      { href: "/admin/phone-numbers", label: "Phone Numbers" },
       { href: "/admin/feedback", label: "Feedback" },
     ],
   },

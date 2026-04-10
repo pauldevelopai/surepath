@@ -7,8 +7,8 @@ const NUMBERS_FILE = "/tmp/surepath-active-number.json";
 
 // All available WhatsApp numbers
 const AVAILABLE_NUMBERS = [
-  { number: "+27792198649", label: "Surepath — Twilio production" },
-  { number: "+27625792969", label: "Develop AI — WhatsApp Business" },
+  { number: "+27792198649", label: "Develop Audio" },
+  { number: "+27625792969", label: "Develop AI" },
 ];
 
 function getActiveNumber(): string {
