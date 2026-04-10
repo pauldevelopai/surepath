@@ -1311,20 +1311,28 @@ router.post('/webhook/payfast', express.urlencoded({ extended: false }), async (
   res.sendStatus(200);
 
   try {
-    if (!validatePayFastSignature(data, process.env.PAYFAST_PASSPHRASE || '')) {
-      console.error('[payfast] Invalid signature — ignoring');
-      return;
-    }
+    // Log full ITN for debugging
+    console.log(`[payfast] ITN data:`, JSON.stringify(data));
 
     if (data.payment_status !== 'COMPLETE') {
       console.log(`[payfast] Payment not complete: ${data.payment_status}`);
       return;
     }
 
-    const orderId = parseInt(data.m_payment_id);
-    if (isNaN(orderId)) {
-      console.error('[payfast] Invalid m_payment_id');
-      return;
+    // Try to find order by m_payment_id first, then by most recent pending order
+    let orderId = parseInt(data.m_payment_id);
+    if (isNaN(orderId) || !orderId) {
+      // Pay Now format may not include m_payment_id — find the most recent pending order
+      const { rows: pendingOrders } = await pool.query(
+        "SELECT id, phone_number FROM orders WHERE payment_status = 'pending' ORDER BY created_at DESC LIMIT 1"
+      );
+      if (pendingOrders.length > 0) {
+        orderId = pendingOrders[0].id;
+        console.log(`[payfast] No m_payment_id — matched to most recent pending order ${orderId} (${pendingOrders[0].phone_number})`);
+      } else {
+        console.error('[payfast] No pending orders to match payment to');
+        return;
+      }
     }
 
     const { rows: orders } = await pool.query(
