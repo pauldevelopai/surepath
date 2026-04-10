@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { formatDate, formatDateTime } from "@/lib/format";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -18,6 +18,7 @@ export default function ConversationsPage() {
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
   const [detail, setDetail] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(() => {
     fetch("/api/conversations").then(r => r.json()).then(d => setUsers(d.users || []));
@@ -31,6 +32,7 @@ export default function ConversationsPage() {
     const d = await (await fetch(`/api/conversations?phone=${encodeURIComponent(phone)}`)).json();
     setDetail(d);
     setDetailLoading(false);
+    setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
   }
 
   if (!users) return <p className="text-gray-500 p-8">Loading...</p>;
@@ -95,15 +97,16 @@ export default function ConversationsPage() {
               </div>
 
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-2 bg-[#e5ddd5]">
+              <div className="flex-1 overflow-y-auto p-3 space-y-1.5 bg-[#e5ddd5]">
                 {(detail.messages || []).map((m: any) => (
                   <div key={m.id} className={`flex ${m.direction === "outbound" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[70%] rounded-lg px-3 py-2 text-sm ${m.direction === "outbound" ? "bg-[#dcf8c6] text-gray-800" : "bg-white text-gray-800"}`}>
-                      <div className="whitespace-pre-wrap break-words">{m.body || (m.media_url ? "[Media]" : "—")}</div>
-                      <div className="text-[9px] text-gray-400 text-right mt-1">{formatDateTime(m.created_at)}</div>
+                    <div className={`max-w-[75%] rounded-lg px-3 py-1.5 shadow-sm ${m.direction === "outbound" ? "bg-[#dcf8c6] text-gray-800" : "bg-white text-gray-800"}`}>
+                      <div className="whitespace-pre-wrap break-words text-[13px] leading-snug">{m.body || (m.media_url ? "[Media]" : "—")}</div>
+                      <div className="text-[8px] text-gray-400 text-right mt-0.5">{formatDateTime(m.created_at)}</div>
                     </div>
                   </div>
                 ))}
+                <div ref={chatEndRef} />
               </div>
 
               {/* Orders */}
