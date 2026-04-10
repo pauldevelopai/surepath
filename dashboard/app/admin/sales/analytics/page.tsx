@@ -8,11 +8,27 @@ type A = Record<string, any>;
 export default function MoneyPage() {
   const [data, setData] = useState<A | null>(null);
   const [billing, setBilling] = useState<A | null>(null);
+  const [price, setPrice] = useState<number>(169);
+  const [priceInput, setPriceInput] = useState<string>("169");
+  const [priceSaving, setPriceSaving] = useState(false);
+  const [priceMsg, setPriceMsg] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/analytics").then(r => r.json()).then(setData);
     fetch("/api/billing").then(r => r.json()).then(setBilling).catch(() => {});
+    fetch("/api/settings").then(r => r.json()).then(d => { setPrice(d.report_price); setPriceInput(String(d.report_price)); }).catch(() => {});
   }, []);
+
+  async function savePrice() {
+    const newPrice = parseInt(priceInput);
+    if (isNaN(newPrice) || newPrice < 0) return;
+    setPriceSaving(true);
+    await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ report_price: newPrice }) });
+    setPrice(newPrice);
+    setPriceMsg("Price updated");
+    setPriceSaving(false);
+    setTimeout(() => setPriceMsg(null), 3000);
+  }
 
   if (!data) return <p className="text-gray-500">Loading...</p>;
 
@@ -95,8 +111,18 @@ export default function MoneyPage() {
         <div className="grid grid-cols-3 gap-4 text-xs">
           <div className="bg-gray-50 rounded p-3">
             <div className="text-gray-500 font-bold mb-1">Consumer Report</div>
-            <div className="text-2xl font-bold">R169</div>
-            <div className="text-[10px] text-gray-400 mt-1">Per property report. Includes vision analysis, risk scoring, negotiation intel.</div>
+            <div className="flex items-center gap-1 mt-1">
+              <span className="text-lg font-bold text-gray-400">R</span>
+              <input type="number" value={priceInput} onChange={e => setPriceInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") savePrice(); }}
+                className="text-2xl font-bold w-20 border rounded px-1" min={0} max={10000} />
+              <button onClick={savePrice} disabled={priceSaving || parseInt(priceInput) === price}
+                className="px-2 py-1 bg-[#0D1B2A] text-white rounded text-[10px] font-semibold hover:bg-gray-800 disabled:opacity-30">
+                {priceSaving ? "..." : "Save"}
+              </button>
+            </div>
+            {priceMsg && <div className="text-[10px] text-green-600 mt-1">{priceMsg}</div>}
+            <div className="text-[10px] text-gray-400 mt-1">Changes apply to WhatsApp and PayFast instantly.</div>
           </div>
           <div className="bg-gray-50 rounded p-3">
             <div className="text-gray-500 font-bold mb-1">Avg Generation Cost</div>
@@ -105,8 +131,8 @@ export default function MoneyPage() {
           </div>
           <div className="bg-gray-50 rounded p-3">
             <div className="text-gray-500 font-bold mb-1">Margin per Report</div>
-            <div className="text-2xl font-bold text-green-700">{billing?.avg_cost?.avg_cost_zar ? `R${(169 - Number(billing.avg_cost.avg_cost_zar)).toFixed(2)}` : "—"}</div>
-            <div className="text-[10px] text-gray-400 mt-1">{billing?.avg_cost?.avg_cost_zar ? `${Math.round((1 - Number(billing.avg_cost.avg_cost_zar) / 169) * 100)}% margin` : ""} · Max cost: {billing?.avg_cost?.max_cost_zar ? `R${Number(billing.avg_cost.max_cost_zar).toFixed(2)}` : "—"}</div>
+            <div className="text-2xl font-bold text-green-700">{billing?.avg_cost?.avg_cost_zar ? `R${(price - Number(billing.avg_cost.avg_cost_zar)).toFixed(2)}` : "—"}</div>
+            <div className="text-[10px] text-gray-400 mt-1">{billing?.avg_cost?.avg_cost_zar ? `${Math.round((1 - Number(billing.avg_cost.avg_cost_zar) / price) * 100)}% margin` : ""} · Max cost: {billing?.avg_cost?.max_cost_zar ? `R${Number(billing.avg_cost.max_cost_zar).toFixed(2)}` : "—"}</div>
           </div>
         </div>
       </div>
