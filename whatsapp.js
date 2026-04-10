@@ -96,18 +96,27 @@ function generatePayFastURL(orderId, amount) {
     merchant_key: PAYFAST_MERCHANT_KEY,
     return_url: 'https://surepath.co.za/thankyou',
     cancel_url: 'https://surepath.co.za/cancelled',
-    notify_url: `https://${process.env.SERVER_HOST || 'surepath.co.za'}/webhook/payfast`,
+    notify_url: `http://13.43.118.177/webhook/payfast`,
     m_payment_id: String(orderId),
     amount: amount.toFixed(2),
     item_name: 'Surepath Property Report',
   };
 
-  const paramString = Object.entries(params)
+  // PayFast signature: use raw values (not URL-encoded) joined by &
+  const passphrase = process.env.PAYFAST_PASSPHRASE || '';
+  let sigString = Object.entries(params)
+    .map(([k, v]) => `${k}=${String(v).trim()}`)
+    .join('&');
+  if (passphrase) sigString += `&passphrase=${passphrase.trim()}`;
+
+  const signature = crypto.createHash('md5').update(sigString).digest('hex');
+
+  // URL: use URL-encoded values
+  const urlString = Object.entries(params)
     .map(([k, v]) => `${k}=${encodeURIComponent(String(v).trim())}`)
     .join('&');
 
-  const signature = crypto.createHash('md5').update(paramString).digest('hex');
-  return `https://www.payfast.co.za/eng/process?${paramString}&signature=${signature}`;
+  return `https://www.payfast.co.za/eng/process?${urlString}&signature=${signature}`;
 }
 
 // ─── Conversation state machine ────────────────────────────────────────
