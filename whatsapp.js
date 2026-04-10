@@ -96,7 +96,6 @@ function generatePayFastURL(orderId, amount) {
     receiver: PAYFAST_MERCHANT_ID,
     amount: Math.max(amount, 5).toFixed(2),
     item_name: 'Surepath Property Report',
-    notify_url: `http://13.43.118.177/webhook/payfast`,
     m_payment_id: String(orderId),
   };
 
