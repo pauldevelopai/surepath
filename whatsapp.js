@@ -94,8 +94,6 @@ function generatePayFastURL(orderId, amount) {
   const params = {
     merchant_id: PAYFAST_MERCHANT_ID,
     merchant_key: PAYFAST_MERCHANT_KEY,
-    return_url: 'http://13.43.118.177/thankyou',
-    cancel_url: 'http://13.43.118.177/cancelled',
     notify_url: `http://13.43.118.177/webhook/payfast`,
     m_payment_id: String(orderId),
     amount: amount.toFixed(2),
