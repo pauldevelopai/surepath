@@ -12,11 +12,13 @@ export default function MoneyPage() {
   const [priceInput, setPriceInput] = useState<string>("169");
   const [priceSaving, setPriceSaving] = useState(false);
   const [priceMsg, setPriceMsg] = useState<string | null>(null);
+  const [paymentEnabled, setPaymentEnabled] = useState(true);
+  const [toggling, setToggling] = useState(false);
 
   useEffect(() => {
     fetch("/api/analytics").then(r => r.json()).then(setData);
     fetch("/api/billing").then(r => r.json()).then(setBilling).catch(() => {});
-    fetch("/api/settings").then(r => r.json()).then(d => { setPrice(d.report_price); setPriceInput(String(d.report_price)); }).catch(() => {});
+    fetch("/api/settings").then(r => r.json()).then(d => { setPrice(d.report_price); setPriceInput(String(d.report_price)); setPaymentEnabled(d.payment_enabled !== false); }).catch(() => {});
   }, []);
 
   async function savePrice() {
@@ -45,6 +47,30 @@ export default function MoneyPage() {
           className="px-4 py-2 bg-[#00457C] text-white text-sm rounded font-bold hover:bg-[#003366]">
           PayFast Dashboard
         </a>
+      </div>
+
+      {/* Payment toggle */}
+      <div className={`border rounded-lg p-4 mb-6 flex items-center justify-between ${paymentEnabled ? "bg-green-50 border-green-200" : "bg-amber-50 border-amber-200"}`}>
+        <div>
+          <div className="flex items-center gap-2">
+            <span className={`w-3 h-3 rounded-full ${paymentEnabled ? "bg-green-500" : "bg-amber-500 animate-pulse"}`} />
+            <span className="font-bold text-sm">{paymentEnabled ? "Payments Active" : "Income Paused — Reports are FREE"}</span>
+          </div>
+          <p className="text-[10px] text-gray-500 mt-0.5">{paymentEnabled ? "Users pay via PayFast before receiving reports." : "Users get reports immediately without paying. Turn on when ready to charge."}</p>
+        </div>
+        <button
+          onClick={async () => {
+            setToggling(true);
+            const newState = !paymentEnabled;
+            await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payment_enabled: newState }) });
+            setPaymentEnabled(newState);
+            setToggling(false);
+          }}
+          disabled={toggling}
+          className={`px-5 py-2 rounded text-sm font-bold ${paymentEnabled ? "bg-amber-500 text-white hover:bg-amber-600" : "bg-green-600 text-white hover:bg-green-700"} disabled:opacity-50`}
+        >
+          {toggling ? "..." : paymentEnabled ? "Pause Income" : "Resume Income"}
+        </button>
       </div>
 
       {/* Revenue cards */}

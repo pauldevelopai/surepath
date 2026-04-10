@@ -6,6 +6,7 @@ const SETTINGS_FILE = "/tmp/surepath-settings.json";
 
 const DEFAULTS = {
   report_price: 169,
+  payment_enabled: true,
 };
 
 function loadSettings() {
@@ -52,9 +53,24 @@ export const POST = withAuth(async (req: NextRequest) => {
     settings.report_price = price;
   }
 
+  if (body.payment_enabled !== undefined) {
+    settings.payment_enabled = !!body.payment_enabled;
+  }
+
   const saved = saveSettings(settings);
 
-  // Restart surepath to pick up the new price
+  // Also update PAYMENT_ENABLED in .env
+  try {
+    const path = require("path");
+    const envPath = path.resolve(process.cwd(), "..", ".env");
+    let env = fs.readFileSync(envPath, "utf8");
+    if (env.includes("PAYMENT_ENABLED=")) {
+      env = env.replace(/^PAYMENT_ENABLED=.*/m, `PAYMENT_ENABLED=${saved.payment_enabled ? 'true' : 'false'}`);
+    }
+    fs.writeFileSync(envPath, env);
+  } catch {}
+
+  // Restart surepath to pick up changes
   try {
     const { execSync } = require("child_process");
     execSync("pm2 restart surepath", { timeout: 10000 });
