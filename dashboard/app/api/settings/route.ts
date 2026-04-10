@@ -73,7 +73,7 @@ export const POST = withAuth(async (req: NextRequest) => {
   // Restart surepath to pick up changes
   try {
     const { execSync } = require("child_process");
-    execSync("pm2 restart surepath", { timeout: 10000 });
+    execSync("pm2 restart surepath --update-env", { timeout: 10000 });
   } catch {}
 
   return NextResponse.json({ ok: true, ...saved });

@@ -1525,8 +1525,10 @@ async function generateReport(input, askingPrice, phoneNumber) {
     // ── STEP 14: Create order record ────────────────────────────────
     log(14, 'Creating order record');
 
-    const paymentEnabled = !!(process.env.PAYFAST_MERCHANT_ID && process.env.PAYFAST_MERCHANT_KEY && process.env.PAYMENT_ENABLED === 'true');
-    const reportPrice = paymentEnabled ? (parseInt(process.env.REPORT_PRICE) || 169) : 0;
+    let liveSettings = { report_price: 169, payment_enabled: false };
+    try { liveSettings = JSON.parse(require('fs').readFileSync('/tmp/surepath-settings.json', 'utf8')); } catch {}
+    const paymentEnabled = !!(process.env.PAYFAST_MERCHANT_ID && process.env.PAYFAST_MERCHANT_KEY && liveSettings.payment_enabled);
+    const reportPrice = paymentEnabled ? (liveSettings.report_price || 169) : 0;
     const paymentStatus = paymentEnabled ? 'pending' : 'free';
 
     await pool.query(
