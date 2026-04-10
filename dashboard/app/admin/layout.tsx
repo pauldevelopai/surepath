@@ -44,6 +44,7 @@ const sections = [
     label: "SYSTEM",
     items: [
       { href: "/admin/phone-numbers", label: "Phone Numbers" },
+      { href: "/admin/settings", label: "Settings" },
       { href: "/admin/feedback", label: "Feedback" },
     ],
   },

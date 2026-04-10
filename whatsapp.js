@@ -191,7 +191,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
           '',
           'The full Surepath report includes deeds history, crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
           '',
-          'Reply *1* to get the full report (R169), or send a different listing link.',
+          `Reply *1* to get the full report (R${parseInt(process.env.REPORT_PRICE)||169}), or send a different listing link.`,
         ].join('\n');
 
         await sendWhatsApp(from, message);
@@ -303,7 +303,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
         '',
         'The full Surepath report includes deeds history, crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
         '',
-        'Reply *1* to get the full report (R169), or send a different listing link.',
+        `Reply *1* to get the full report (R${parseInt(process.env.REPORT_PRICE)||169}), or send a different listing link.`,
       ].join('\n');
 
       await sendWhatsApp(from, message);
@@ -718,7 +718,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
             '',
             'The full Surepath report includes deeds history, crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
             '',
-            'Reply *1* to get the full report (R169), or send a different listing link.',
+            `Reply *1* to get the full report (R${parseInt(process.env.REPORT_PRICE)||169}), or send a different listing link.`,
           ].join('\n');
 
           await sendWhatsApp(from, message);
@@ -930,7 +930,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
       '',
       'The full Surepath report includes deeds history, crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
       '',
-      'Reply *1* to get the full report (R169), or send a different listing link.',
+      `Reply *1* to get the full report (R${parseInt(process.env.REPORT_PRICE)||169}), or send a different listing link.`,
     ].join('\n');
 
     await sendWhatsApp(from, message);
@@ -1144,7 +1144,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
       case 'awaiting_property': {
         await upsertConversation(phoneNumber, { state: 'awaiting_property' });
         await sendWhatsApp(from,
-          "Welcome to Surepath 👋\n\nI check properties for hidden risks before you buy.\n\nPaste a PrivateProperty or Property24 listing link and I'll pull the photos, analyse them for defects, and give you a quick preview — free.\n\nThe full report includes deeds history, crime stats, infrastructure risks, and repair cost estimates — R169."
+          `Welcome to Surepath 👋\n\nI check properties for hidden risks before you buy.\n\nPaste a PrivateProperty or Property24 listing link and I'll pull the photos, analyse them for defects, and give you a quick preview — free.\n\nThe full report includes deeds history, crime stats, infrastructure risks, and repair cost estimates — R${parseInt(process.env.REPORT_PRICE)||169}.`
         );
         break;
       }
@@ -1156,7 +1156,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
 
       case 'tease_sent': {
         if (['yes', 'ja', '1', 'buy', 'full report', 'yes please', 'yep', 'sure', 'ok', 'okay', 'do it', 'go ahead', 'lets go', "let's go"].includes(normalised)) {
-          const REPORT_PRICE = 169;
+          const REPORT_PRICE = parseInt(process.env.REPORT_PRICE) || 169;
           const PAYMENT_ENABLED = !!(PAYFAST_MERCHANT_ID && PAYFAST_MERCHANT_KEY && process.env.PAYMENT_ENABLED === 'true');
 
           if (PAYMENT_ENABLED) {
@@ -1207,7 +1207,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
           }
 
         } else {
-          await sendWhatsApp(from, `Reply *1* for the full report (R169), or paste a new listing link to check a different property.`);
+          await sendWhatsApp(from, `Reply *1* for the full report (R${parseInt(process.env.REPORT_PRICE)||169}), or paste a new listing link to check a different property.`);
         }
         break;
       }
