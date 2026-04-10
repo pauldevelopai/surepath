@@ -432,31 +432,7 @@ export default function PropertyDetailPage() {
             </div>
           )}
         </div>
-        {/* Key metrics bar */}
-        {(p.suburb_crime_score || p.solar_ghi_kwh_year || p.water_quality_score) && (
-          <div className="flex gap-3 mt-3">
-            {p.suburb_crime_score != null && p.suburb_crime_score > 0 && (
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium ${p.suburb_crime_score >= 7 ? 'bg-red-100 text-red-800' : p.suburb_crime_score >= 4 ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
-                <span className="text-[10px] text-gray-500">Crime</span>
-                <span className="font-bold">{p.suburb_crime_score}/10</span>
-                <span className="text-[9px]">(SAPS verified)</span>
-              </div>
-            )}
-            {p.solar_ghi_kwh_year && (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium bg-yellow-50 text-yellow-800">
-                <span className="text-[10px] text-gray-500">Solar</span>
-                <span className="font-bold">{Number(p.solar_ghi_kwh_year).toFixed(0)} kWh/m²/yr</span>
-                <span className="text-[9px]">(PVGIS verified)</span>
-              </div>
-            )}
-            {p.water_quality_score != null && (
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium ${p.water_quality_score >= 7 ? 'bg-green-100 text-green-800' : p.water_quality_score >= 4 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}>
-                <span className="text-[10px] text-gray-500">Water</span>
-                <span className="font-bold">{p.water_quality_score}/10</span>
-              </div>
-            )}
-          </div>
-        )}
+        {/* Key metrics bar — removed, data shown in detail sections below */}
       </div>
 
       {/* Nico's Quick Take */}
