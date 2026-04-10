@@ -148,11 +148,15 @@ async function generateYocoCheckout(orderId, amountZAR) {
     }, (res) => {
       let data = '';
       res.on('data', c => data += c);
-      res.on('end', () => {
+      res.on('end', async () => {
         try {
           const json = JSON.parse(data);
           if (res.statusCode === 200 || res.statusCode === 201) {
             console.log(`[yoco] Checkout created: id=${json.id}, order=${orderId}`);
+            // Store checkout ID on the order so webhook can match it
+            try {
+              await pool.query('UPDATE orders SET payfast_payment_id = $1 WHERE id = $2', [json.id, orderId]);
+            } catch {}
             resolve(json.redirectUrl);
           } else {
             console.error(`[yoco] API error ${res.statusCode}:`, data);
@@ -1506,16 +1510,32 @@ router.post('/webhook/yoco', express.json(), async (req, res) => {
 
     const payload = event.payload || event;
     const metadata = payload.metadata || {};
+    const checkoutId = metadata.checkoutId || payload.checkoutId || null;
     let orderId = parseInt(metadata.orderId);
 
+    // Try matching by orderId from our metadata first
     if (isNaN(orderId) || !orderId) {
-      // Fallback: find most recent pending order
+      // Try matching by Yoco checkout ID (stored on order when checkout was created)
+      if (checkoutId) {
+        const { rows: byCheckout } = await pool.query(
+          "SELECT id, phone_number FROM orders WHERE payfast_payment_id = $1 AND payment_status = 'pending' LIMIT 1",
+          [checkoutId]
+        );
+        if (byCheckout.length > 0) {
+          orderId = byCheckout[0].id;
+          console.log(`[yoco] Matched order ${orderId} by checkoutId ${checkoutId}`);
+        }
+      }
+    }
+
+    if (isNaN(orderId) || !orderId) {
+      // Final fallback: most recent pending order
       const { rows: pendingOrders } = await pool.query(
         "SELECT id, phone_number FROM orders WHERE payment_status = 'pending' ORDER BY created_at DESC LIMIT 1"
       );
       if (pendingOrders.length > 0) {
         orderId = pendingOrders[0].id;
-        console.log(`[yoco] No orderId in metadata — matched to pending order ${orderId}`);
+        console.log(`[yoco] Fallback — matched to most recent pending order ${orderId}`);
       } else {
         console.error('[yoco] No pending orders to match payment to');
         return;
