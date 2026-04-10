@@ -1,7 +1,10 @@
-// If DeedsWeb credentials are configured, use the direct government API
-// instead of the Windeed reseller. Cheaper per query, no markup.
+// Priority: DeedsWeb (R18/query) > WinDeed Browser (R50+) > WinDeed REST API (legacy)
 if (process.env.DEEDSWEB_USERNAME && process.env.DEEDSWEB_PASSWORD) {
   module.exports = require('./deedsweb');
+  return;
+}
+if (process.env.WINDEED_USERNAME && process.env.WINDEED_PASSWORD) {
+  module.exports = require('./windeed-browser');
   return;
 }
 

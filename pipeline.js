@@ -720,8 +720,8 @@ async function generateReport(input, askingPrice, phoneNumber) {
       log(1, 'Geocoding failed — continuing without coordinates');
     }
 
-    // ── STEP 02: Deeds lookup ───────────────────────────────────────
-    log(2, 'Deeds lookup via Windeed');
+    // ── STEP 02: Deeds lookup (GVR free → DeedsWeb R18/query) ─────
+    log(2, 'Deeds lookup');
 
     let deedsResult = null;
     try {
@@ -730,10 +730,10 @@ async function generateReport(input, askingPrice, phoneNumber) {
         propertyId = deedsResult.property_id;
         log(2, `Deeds found: ERF ${deedsResult.erf_number}, owner: ${deedsResult.registered_owner}, municipal: R${deedsResult.municipal_value}`);
       } else {
-        log(2, 'Windeed returned no results — creating property from geocode data');
+        log(2, 'Deeds lookup returned no results — will try GVR enrichment after property creation');
       }
     } catch (err) {
-      log(2, `Windeed error (non-fatal): ${err.message}`);
+      log(2, `Deeds lookup error (non-fatal): ${err.message}`);
     }
 
     // If Windeed didn't create the property, find existing or create new
@@ -816,6 +816,50 @@ async function generateReport(input, askingPrice, phoneNumber) {
       const listingFields = ['address_raw', 'listing_url'];
       if (askingPrice) listingFields.push('asking_price');
       await provenance.recordSource(propertyId, listingSource, input, 'scraped', listingFields);
+    }
+
+    // ── STEP 02B: GVR enrichment (free municipal data) ────────────
+    // If deeds lookup didn't return municipal_value or owner, try GVR
+    if (propertyId && !deedsResult) {
+      log('2B', 'Enriching from GVR (free municipal valuation data)');
+      try {
+        const { rows: propCheck } = await pool.query(
+          'SELECT municipal_value, owner_name_gvr, suburb, city FROM properties WHERE id = $1',
+          [propertyId]
+        );
+        const prop = propCheck[0];
+        // If we have suburb+city, try to match GVR data from existing properties in the same area
+        if (prop && !prop.municipal_value && prop.suburb) {
+          const { rows: gvrMatch } = await pool.query(
+            `SELECT municipal_value, owner_name_gvr, stand_size_sqm, zoning, property_category
+             FROM properties
+             WHERE suburb ILIKE $1 AND municipal_value IS NOT NULL AND gvr_source IS NOT NULL
+             AND address_raw ILIKE $2
+             ORDER BY gvr_fetched_at DESC LIMIT 1`,
+            [`%${prop.suburb}%`, `%${address.split(',')[0]}%`]
+          );
+          if (gvrMatch.length > 0) {
+            const g = gvrMatch[0];
+            await pool.query(
+              `UPDATE properties SET
+                 municipal_value = COALESCE(municipal_value, $1),
+                 owner_name_gvr = COALESCE(owner_name_gvr, $2),
+                 stand_size_sqm = COALESCE(stand_size_sqm, $3),
+                 zoning = COALESCE(zoning, $4),
+                 property_category = COALESCE(property_category, $5)
+               WHERE id = $6`,
+              [g.municipal_value, g.owner_name_gvr, g.stand_size_sqm, g.zoning, g.property_category, propertyId]
+            );
+            log('2B', `GVR match: municipal R${g.municipal_value}, owner: ${g.owner_name_gvr || 'n/a'}`);
+          } else {
+            log('2B', 'No GVR match found for this address');
+          }
+        } else if (prop && prop.municipal_value) {
+          log('2B', `Already has municipal value R${prop.municipal_value} — skipping GVR`);
+        }
+      } catch (err) {
+        log('2B', `GVR enrichment error (non-fatal): ${err.message}`);
+      }
     }
 
     // ── STEP 03: Resale check ───────────────────────────────────────

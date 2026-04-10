@@ -1,4 +1,6 @@
 const https = require('https');
+const fs = require('fs');
+const path = require('path');
 const pool = require('./db');
 
 const API_KEY = process.env.GOOGLE_MAPS_API_KEY;
@@ -239,24 +241,34 @@ async function lookupAddress(address, propertyId, listingUrl) {
   let streetviewImageId = null;
   let satelliteImageId = null;
 
+  // Save images to disk (not base64 in DB — pdf.js needs file paths)
+  const imgDir = path.resolve(__dirname, 'dashboard', 'public', 'property-images');
+  if (!fs.existsSync(imgDir)) fs.mkdirSync(imgDir, { recursive: true });
+
   // Store Street View image
   if (streetviewBase64) {
+    const filename = `${propertyId}-streetview-${Date.now()}.jpg`;
+    fs.writeFileSync(path.join(imgDir, filename), Buffer.from(streetviewBase64, 'base64'));
+    const localUrl = `/property-images/${filename}`;
     const { rows } = await pool.query(
       `INSERT INTO property_images (property_id, source, image_url, image_type)
-       VALUES ($1, 'streetview', $2, 'exterior')
+       VALUES ($1, 'streetview', $2, 'streetview')
        RETURNING id`,
-      [propertyId, `data:image/jpeg;base64,${streetviewBase64}`]
+      [propertyId, localUrl]
     );
     streetviewImageId = rows[0].id;
   }
 
   // Store satellite image
   if (satelliteBase64) {
+    const filename = `${propertyId}-satellite-${Date.now()}.png`;
+    fs.writeFileSync(path.join(imgDir, filename), Buffer.from(satelliteBase64, 'base64'));
+    const localUrl = `/property-images/${filename}`;
     const { rows } = await pool.query(
       `INSERT INTO property_images (property_id, source, image_url, image_type)
-       VALUES ($1, 'satellite', $2, 'exterior')
+       VALUES ($1, 'satellite', $2, 'satellite')
        RETURNING id`,
-      [propertyId, `data:image/png;base64,${satelliteBase64}`]
+      [propertyId, localUrl]
     );
     satelliteImageId = rows[0].id;
   }

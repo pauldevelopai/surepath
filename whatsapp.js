@@ -1158,9 +1158,30 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
           if (PAYMENT_ENABLED) {
             // Create order and send payment link
             try {
+              // Find property_id from the listing URL stored in conversation
+              const listingUrl = (conv.input_data || '').replace(/[?#].*$/, '').replace(/\/+$/, '');
+              let orderPropertyId = null;
+              if (listingUrl) {
+                const { rows: propRows } = await pool.query(
+                  'SELECT id FROM properties WHERE listing_url ILIKE $1 ORDER BY id DESC LIMIT 1',
+                  [`%${listingUrl}%`]
+                );
+                if (propRows.length > 0) {
+                  orderPropertyId = propRows[0].id;
+                }
+              }
+              // If no property found yet (shouldn't happen — tease already scraped it), create placeholder
+              if (!orderPropertyId) {
+                const { rows: newProp } = await pool.query(
+                  'INSERT INTO properties (erf_number, address_raw, listing_url) VALUES ($1, $2, $3) RETURNING id',
+                  [`PENDING_${Date.now()}`, listingUrl || 'Unknown', listingUrl || null]
+                );
+                orderPropertyId = newProp[0].id;
+              }
+
               const { rows: orderRows } = await pool.query(
-                'INSERT INTO orders (phone_number, price_zar, payment_status) VALUES ($1, $2, $3) RETURNING id',
-                [phoneNumber, REPORT_PRICE, 'pending']
+                'INSERT INTO orders (property_id, phone_number, price_zar, payment_status) VALUES ($1, $2, $3, $4) RETURNING id',
+                [orderPropertyId, phoneNumber, REPORT_PRICE, 'pending']
               );
               const orderId = orderRows[0].id;
               const payUrl = generatePayFastURL(orderId, REPORT_PRICE);
