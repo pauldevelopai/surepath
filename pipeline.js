@@ -824,16 +824,16 @@ async function generateReport(input, askingPrice, phoneNumber) {
       log('2B', 'Enriching from GVR (free municipal valuation data)');
       try {
         const { rows: propCheck } = await pool.query(
-          'SELECT municipal_value, owner_name_gvr, suburb, city FROM properties WHERE id = $1',
+          'SELECT municipal_valuation, owner_name_gvr, suburb, city FROM properties WHERE id = $1',
           [propertyId]
         );
         const prop = propCheck[0];
         // If we have suburb+city, try to match GVR data from existing properties in the same area
-        if (prop && !prop.municipal_value && prop.suburb) {
+        if (prop && !prop.municipal_valuation && prop.suburb) {
           const { rows: gvrMatch } = await pool.query(
-            `SELECT municipal_value, owner_name_gvr, stand_size_sqm, zoning, property_category
+            `SELECT municipal_valuation, owner_name_gvr, stand_size_sqm, zoning, property_category
              FROM properties
-             WHERE suburb ILIKE $1 AND municipal_value IS NOT NULL AND gvr_source IS NOT NULL
+             WHERE suburb ILIKE $1 AND municipal_valuation IS NOT NULL AND gvr_source IS NOT NULL
              AND address_raw ILIKE $2
              ORDER BY gvr_fetched_at DESC LIMIT 1`,
             [`%${prop.suburb}%`, `%${address.split(',')[0]}%`]
@@ -842,20 +842,20 @@ async function generateReport(input, askingPrice, phoneNumber) {
             const g = gvrMatch[0];
             await pool.query(
               `UPDATE properties SET
-                 municipal_value = COALESCE(municipal_value, $1),
+                 municipal_valuation = COALESCE(municipal_valuation, $1),
                  owner_name_gvr = COALESCE(owner_name_gvr, $2),
                  stand_size_sqm = COALESCE(stand_size_sqm, $3),
                  zoning = COALESCE(zoning, $4),
                  property_category = COALESCE(property_category, $5)
                WHERE id = $6`,
-              [g.municipal_value, g.owner_name_gvr, g.stand_size_sqm, g.zoning, g.property_category, propertyId]
+              [g.municipal_valuation, g.owner_name_gvr, g.stand_size_sqm, g.zoning, g.property_category, propertyId]
             );
-            log('2B', `GVR match: municipal R${g.municipal_value}, owner: ${g.owner_name_gvr || 'n/a'}`);
+            log('2B', `GVR match: municipal R${g.municipal_valuation}, owner: ${g.owner_name_gvr || 'n/a'}`);
           } else {
             log('2B', 'No GVR match found for this address');
           }
-        } else if (prop && prop.municipal_value) {
-          log('2B', `Already has municipal value R${prop.municipal_value} — skipping GVR`);
+        } else if (prop && prop.municipal_valuation) {
+          log('2B', `Already has municipal value R${prop.municipal_valuation} — skipping GVR`);
         }
       } catch (err) {
         log('2B', `GVR enrichment error (non-fatal): ${err.message}`);
@@ -1113,10 +1113,10 @@ async function generateReport(input, askingPrice, phoneNumber) {
         [JSON.stringify(svAnalysis), propertyId]
       );
       log(6, `Street View analysis: ${(svAnalysis.findings || []).length} findings`);
-    } else if (svCheck.length > 0) {
+    } else if (svCheck.length > 0 && svCheck[0].image_url?.startsWith('/property-images/')) {
       // Streetview image exists but wasn't fetched this run — load from file and analyse
-      const svPath = path.resolve(__dirname, 'dashboard', 'public', svCheck[0].image_url?.replace(/^\//, '') || '');
-      if (fs.existsSync(svPath)) {
+      const svPath = path.resolve(__dirname, 'dashboard', 'public', svCheck[0].image_url.replace(/^\//, ''));
+      if (fs.existsSync(svPath) && fs.statSync(svPath).isFile()) {
         streetviewBase64 = fs.readFileSync(svPath).toString('base64');
         const svAnalysis = await vision.analyseStreetView(streetviewBase64);
         await pool.query('UPDATE property_images SET vision_analysis = $1, analysed_at = NOW() WHERE id = $2',
@@ -1146,9 +1146,9 @@ async function generateReport(input, askingPrice, phoneNumber) {
         [JSON.stringify(satAnalysis), propertyId]
       );
       log(7, `Satellite analysis: roof=${satAnalysis.roof_material}, solar=${satAnalysis.solar_installed}, orientation=${satAnalysis.roof_orientation_estimate}`);
-    } else if (satCheck.length > 0) {
-      const satPath = path.resolve(__dirname, 'dashboard', 'public', satCheck[0].image_url?.replace(/^\//, '') || '');
-      if (fs.existsSync(satPath)) {
+    } else if (satCheck.length > 0 && satCheck[0].image_url?.startsWith('/property-images/')) {
+      const satPath = path.resolve(__dirname, 'dashboard', 'public', satCheck[0].image_url.replace(/^\//, ''));
+      if (fs.existsSync(satPath) && fs.statSync(satPath).isFile()) {
         satelliteBase64 = fs.readFileSync(satPath).toString('base64');
         const satAnalysis = await vision.analyseSatellite(satelliteBase64);
         await pool.query('UPDATE property_images SET vision_analysis = $1, analysed_at = NOW() WHERE id = $2',
