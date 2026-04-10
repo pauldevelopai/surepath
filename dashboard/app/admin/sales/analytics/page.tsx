@@ -41,7 +41,7 @@ export default function MoneyPage() {
           <h1 className="text-2xl font-bold">Revenue</h1>
           <p className="text-sm text-gray-500">Revenue, payments, and costs</p>
         </div>
-        <a href="https://payf.st/zcg1y" target="_blank" rel="noreferrer"
+        <a href="https://www.payfast.co.za/dashboard" target="_blank" rel="noreferrer"
           className="px-4 py-2 bg-[#00457C] text-white text-sm rounded font-bold hover:bg-[#003366]">
           PayFast Dashboard
         </a>
@@ -85,10 +85,10 @@ export default function MoneyPage() {
         <div className="grid grid-cols-2 gap-4">
           <div className="border rounded p-3">
             <div className="text-xs font-bold mb-1">PayFast</div>
-            <div className="text-xs text-gray-500 mb-2">Consumer payments for property reports (R169 per report)</div>
-            <a href="https://payf.st/zcg1y" target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">Open PayFast dashboard</a>
+            <div className="text-xs text-gray-500 mb-2">Consumer payments for property reports (R{price} per report)</div>
+            <a href="https://www.payfast.co.za/dashboard" target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">Open PayFast dashboard</a>
             <div className="mt-2 text-[10px] text-gray-400">
-              Webhook: POST /api/payfast/notify<br />
+              Webhook: POST /webhook/payfast<br />
               Return URL: /report/[id]/thank-you<br />
               Cancel URL: /report/[id]
             </div>
