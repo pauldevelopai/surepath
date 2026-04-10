@@ -1525,10 +1525,14 @@ async function generateReport(input, askingPrice, phoneNumber) {
     // ── STEP 14: Create order record ────────────────────────────────
     log(14, 'Creating order record');
 
+    const paymentEnabled = !!(process.env.PAYFAST_MERCHANT_ID && process.env.PAYFAST_MERCHANT_KEY && process.env.PAYMENT_ENABLED === 'true');
+    const reportPrice = paymentEnabled ? (parseInt(process.env.REPORT_PRICE) || 169) : 0;
+    const paymentStatus = paymentEnabled ? 'pending' : 'free';
+
     await pool.query(
       `INSERT INTO orders (property_id, report_id, phone_number, price_zar, was_resale, payment_status)
-       VALUES ($1, $2, $3, 149, FALSE, 'pending')`,
-      [propertyId, reportId, phoneNumber]
+       VALUES ($1, $2, $3, $4, FALSE, $5)`,
+      [propertyId, reportId, phoneNumber, reportPrice, paymentStatus]
     );
 
     await pool.query(

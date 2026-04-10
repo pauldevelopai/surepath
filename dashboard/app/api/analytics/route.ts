@@ -11,8 +11,8 @@ export const GET = withAuth(async () => {
     decisions, defects,
     b2bRevenue,
   ] = await Promise.all([
-    query("SELECT COUNT(*) AS c FROM orders WHERE created_at >= CURRENT_DATE"),
-    query("SELECT COUNT(*) AS c FROM orders WHERE created_at >= date_trunc('month', NOW())"),
+    query("SELECT COUNT(*) AS c, COUNT(*) FILTER (WHERE payment_status='paid') AS paid, COUNT(*) FILTER (WHERE payment_status='free') AS free FROM orders WHERE created_at >= CURRENT_DATE"),
+    query("SELECT COUNT(*) AS c, COUNT(*) FILTER (WHERE payment_status='paid') AS paid, COUNT(*) FILTER (WHERE payment_status='free') AS free FROM orders WHERE created_at >= date_trunc('month', NOW())"),
     query("SELECT COALESCE(SUM(price_zar),0) AS r FROM orders WHERE payment_status='paid' AND created_at >= CURRENT_DATE"),
     query("SELECT COALESCE(SUM(price_zar),0) AS r FROM orders WHERE payment_status='paid' AND created_at >= date_trunc('month', NOW())"),
     query("SELECT COUNT(*) FILTER (WHERE was_resale) AS resales, COUNT(*) AS total FROM orders WHERE created_at >= date_trunc('month', NOW())"),
@@ -38,7 +38,11 @@ export const GET = withAuth(async () => {
   const rs = resaleStats[0];
   return NextResponse.json({
     orders_today: Number(ordersToday[0].c),
+    orders_today_paid: Number(ordersToday[0].paid),
+    orders_today_free: Number(ordersToday[0].free),
     orders_month: Number(ordersMonth[0].c),
+    orders_month_paid: Number(ordersMonth[0].paid),
+    orders_month_free: Number(ordersMonth[0].free),
     revenue_today: Number(revenueToday[0].r),
     revenue_month: Number(revenueMonth[0].r) + Number(b2bRevenue[0].r),
     b2b_revenue_month: Number(b2bRevenue[0].r),

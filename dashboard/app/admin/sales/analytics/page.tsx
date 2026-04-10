@@ -76,8 +76,8 @@ export default function MoneyPage() {
       {/* Revenue cards */}
       <div className="grid grid-cols-4 gap-4 mb-6">
         {[
-          { label: "Revenue Today", value: formatZAR(data.revenue_today), sub: `${data.orders_today} orders` },
-          { label: "Revenue This Month", value: formatZAR(data.revenue_month), sub: `${data.orders_month} orders` },
+          { label: "Revenue Today", value: formatZAR(data.revenue_today), sub: data.orders_today_paid > 0 ? `${data.orders_today_paid} paid` : `${data.orders_today} reports${data.orders_today_free ? ` (${data.orders_today_free} free)` : ""}` },
+          { label: "Revenue This Month", value: formatZAR(data.revenue_month), sub: data.orders_month_paid > 0 ? `${data.orders_month_paid} paid, ${data.orders_month_free || 0} free` : `${data.orders_month} reports${data.orders_month_free ? ` (${data.orders_month_free} free)` : ""}` },
           { label: "B2B Revenue / Month", value: formatZAR(data.b2b_revenue_month), sub: "API client billing" },
           { label: "Resale Rate", value: `${data.resale_pct}%`, sub: "reports sold more than once" },
         ].map(c => (
