@@ -43,7 +43,7 @@ const sections = [
   {
     label: "SYSTEM",
     items: [
-      { href: "/admin/phone-numbers", label: "Phone Numbers" },
+      { href: "/admin/conversations", label: "Conversations" },
       { href: "/admin/feedback", label: "Feedback" },
     ],
   },
