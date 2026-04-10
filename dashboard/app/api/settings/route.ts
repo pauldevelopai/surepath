@@ -61,6 +61,10 @@ export const POST = withAuth(async (req: NextRequest) => {
     settings.payment_enabled = !!body.payment_enabled;
   }
 
+  if (body.payment_provider !== undefined) {
+    settings.payment_provider = body.payment_provider === "payfast" ? "payfast" : "yoco";
+  }
+
   const saved = saveSettings(settings);
 
   // saveSettings already updates .env — no need to restart since whatsapp.js

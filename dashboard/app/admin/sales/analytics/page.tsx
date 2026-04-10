@@ -14,11 +14,13 @@ export default function MoneyPage() {
   const [priceMsg, setPriceMsg] = useState<string | null>(null);
   const [paymentEnabled, setPaymentEnabled] = useState(true);
   const [toggling, setToggling] = useState(false);
+  const [provider, setProvider] = useState<string>("yoco");
+  const [switchingProvider, setSwitchingProvider] = useState(false);
 
   useEffect(() => {
     fetch("/api/analytics").then(r => r.json()).then(setData);
     fetch("/api/billing").then(r => r.json()).then(setBilling).catch(() => {});
-    fetch("/api/settings", { cache: "no-store" }).then(r => r.json()).then(d => { setPrice(d.report_price); setPriceInput(String(d.report_price)); setPaymentEnabled(d.payment_enabled !== false); }).catch(() => {});
+    fetch("/api/settings", { cache: "no-store" }).then(r => r.json()).then(d => { setPrice(d.report_price); setPriceInput(String(d.report_price)); setPaymentEnabled(d.payment_enabled !== false); setProvider(d.payment_provider || "yoco"); }).catch(() => {});
   }, []);
 
   async function savePrice() {
@@ -108,15 +110,29 @@ export default function MoneyPage() {
       {/* Payment integration */}
       <div className="bg-white border rounded-lg p-4 mb-6">
         <h2 className="font-bold text-sm mb-2">Payment Integration</h2>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="border rounded p-3">
-            <div className="text-xs font-bold mb-1">PayFast</div>
-            <div className="text-xs text-gray-500 mb-2">Consumer payments for property reports (R{price} per report)</div>
+        <div className="grid grid-cols-3 gap-4">
+          <div className={`border rounded p-3 ${provider === "yoco" ? "border-green-400 bg-green-50" : ""}`}>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-xs font-bold">Yoco</div>
+              {provider !== "yoco" && <button onClick={async () => { setSwitchingProvider(true); await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payment_provider: "yoco" }) }); setProvider("yoco"); setSwitchingProvider(false); }} disabled={switchingProvider} className="text-[10px] px-2 py-0.5 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50">{switchingProvider ? "..." : "Activate"}</button>}
+              {provider === "yoco" && <span className="text-[10px] px-2 py-0.5 bg-green-600 text-white rounded">Active</span>}
+            </div>
+            <div className="text-xs text-gray-500 mb-2">Checkout API — R{price} per report (~2.95% + R1)</div>
+            <a href="https://portal.yoco.co.za" target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">Open Yoco dashboard</a>
+            <div className="mt-2 text-[10px] text-gray-400">
+              Webhook: POST /webhook/yoco
+            </div>
+          </div>
+          <div className={`border rounded p-3 ${provider === "payfast" ? "border-green-400 bg-green-50" : ""}`}>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-xs font-bold">PayFast</div>
+              {provider !== "payfast" && <button onClick={async () => { setSwitchingProvider(true); await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payment_provider: "payfast" }) }); setProvider("payfast"); setSwitchingProvider(false); }} disabled={switchingProvider} className="text-[10px] px-2 py-0.5 bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50">{switchingProvider ? "..." : "Activate"}</button>}
+              {provider === "payfast" && <span className="text-[10px] px-2 py-0.5 bg-green-600 text-white rounded">Active</span>}
+            </div>
+            <div className="text-xs text-gray-500 mb-2">Pay Now links — R{price} per report (~3.5% + R2)</div>
             <a href="https://www.payfast.co.za/dashboard" target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">Open PayFast dashboard</a>
             <div className="mt-2 text-[10px] text-gray-400">
-              Webhook: POST /webhook/payfast<br />
-              Return URL: /report/[id]/thank-you<br />
-              Cancel URL: /report/[id]
+              Webhook: POST /webhook/payfast
             </div>
           </div>
           <div className="border rounded p-3">

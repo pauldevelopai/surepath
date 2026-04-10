@@ -19,7 +19,7 @@ function getLiveSettings() {
     const raw = fs.readFileSync('/tmp/surepath-settings.json', 'utf8');
     return JSON.parse(raw);
   } catch {
-    return { report_price: parseInt(process.env.REPORT_PRICE) || 169, payment_enabled: process.env.PAYMENT_ENABLED === 'true' };
+    return { report_price: parseInt(process.env.REPORT_PRICE) || 169, payment_enabled: process.env.PAYMENT_ENABLED === 'true', payment_provider: process.env.PAYMENT_PROVIDER || 'yoco' };
   }
 }
 
@@ -115,6 +115,63 @@ function generatePayFastURL(orderId, amount) {
     .join('&');
 
   return `https://payment.payfast.io/eng/process?${urlString}`;
+}
+
+// ─── Yoco Checkout API ────────────────────────────────────────────────
+
+const YOCO_SECRET_KEY = process.env.YOCO_SECRET_KEY;
+
+async function generateYocoCheckout(orderId, amountZAR) {
+  const https = require('https');
+  const serverHost = process.env.SERVER_HOST || 'surepath.co.za';
+  const proto = serverHost.includes('localhost') ? 'http' : 'https';
+
+  const body = JSON.stringify({
+    amount: Math.round(amountZAR * 100), // Yoco wants cents
+    currency: 'ZAR',
+    successUrl: `${proto}://${serverHost}/report/${orderId}/thank-you`,
+    cancelUrl: `${proto}://${serverHost}/report/${orderId}`,
+    failureUrl: `${proto}://${serverHost}/report/${orderId}`,
+    metadata: { orderId: String(orderId) },
+  });
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'payments.yoco.com',
+      path: '/api/checkouts',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${YOCO_SECRET_KEY}`,
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (res.statusCode === 200 || res.statusCode === 201) {
+            console.log(`[yoco] Checkout created: id=${json.id}, order=${orderId}`);
+            resolve(json.redirectUrl);
+          } else {
+            console.error(`[yoco] API error ${res.statusCode}:`, data);
+            reject(new Error(`Yoco API ${res.statusCode}: ${json.message || data.substring(0, 200)}`));
+          }
+        } catch (e) {
+          reject(new Error(`Yoco API parse error: ${data.substring(0, 200)}`));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function getPaymentProvider() {
+  const settings = getLiveSettings();
+  return settings.payment_provider || process.env.PAYMENT_PROVIDER || (YOCO_SECRET_KEY ? 'yoco' : 'payfast');
 }
 
 // ─── Conversation state machine ────────────────────────────────────────
@@ -1165,7 +1222,11 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
         if (['yes', 'ja', '1', 'buy', 'full report', 'yes please', 'yep', 'sure', 'ok', 'okay', 'do it', 'go ahead', 'lets go', "let's go"].includes(normalised)) {
           const settings = getLiveSettings();
           const REPORT_PRICE = settings.report_price || 169;
-          const PAYMENT_ENABLED = !!(PAYFAST_MERCHANT_ID && PAYFAST_MERCHANT_KEY && settings.payment_enabled);
+          const provider = getPaymentProvider();
+          const PAYMENT_ENABLED = settings.payment_enabled && (
+            (provider === 'yoco' && YOCO_SECRET_KEY) ||
+            (provider === 'payfast' && PAYFAST_MERCHANT_ID && PAYFAST_MERCHANT_KEY)
+          );
 
           if (PAYMENT_ENABLED) {
             // Create order and send payment link
@@ -1196,7 +1257,9 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
                 [orderPropertyId, phoneNumber, REPORT_PRICE, 'pending']
               );
               const orderId = orderRows[0].id;
-              const payUrl = generatePayFastURL(orderId, REPORT_PRICE);
+              const payUrl = provider === 'yoco'
+                ? await generateYocoCheckout(orderId, REPORT_PRICE)
+                : generatePayFastURL(orderId, REPORT_PRICE);
 
               await upsertConversation(phoneNumber, {
                 state: 'payment_pending',
@@ -1421,6 +1484,87 @@ router.post('/webhook/payfast', express.urlencoded({ extended: false }), async (
 
   } catch (err) {
     console.error('[payfast] Error processing ITN:', err);
+  }
+});
+
+// ─── Yoco webhook (POST /webhook/yoco) ────────────────────────────────
+
+router.post('/webhook/yoco', express.json(), async (req, res) => {
+  const event = req.body;
+
+  console.log(`[yoco] Webhook received: type=${event.type}, id=${event.id}`);
+  res.sendStatus(200);
+
+  try {
+    console.log(`[yoco] Event data:`, JSON.stringify(event));
+
+    // Yoco sends event.type = 'payment.succeeded' on success
+    if (event.type !== 'payment.succeeded') {
+      console.log(`[yoco] Ignoring event type: ${event.type}`);
+      return;
+    }
+
+    const payload = event.payload || event;
+    const metadata = payload.metadata || {};
+    let orderId = parseInt(metadata.orderId);
+
+    if (isNaN(orderId) || !orderId) {
+      // Fallback: find most recent pending order
+      const { rows: pendingOrders } = await pool.query(
+        "SELECT id, phone_number FROM orders WHERE payment_status = 'pending' ORDER BY created_at DESC LIMIT 1"
+      );
+      if (pendingOrders.length > 0) {
+        orderId = pendingOrders[0].id;
+        console.log(`[yoco] No orderId in metadata — matched to pending order ${orderId}`);
+      } else {
+        console.error('[yoco] No pending orders to match payment to');
+        return;
+      }
+    }
+
+    const { rows: orders } = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+    if (orders.length === 0) {
+      console.error(`[yoco] Order ${orderId} not found`);
+      return;
+    }
+
+    const order = orders[0];
+
+    await pool.query(
+      `UPDATE orders SET payment_status = 'paid', payfast_payment_id = $1 WHERE id = $2`,
+      [event.id || payload.checkoutId || 'yoco', orderId]
+    );
+
+    console.log(`[yoco] Order ${orderId} marked as paid for ${order.phone_number}`);
+
+    let phone = order.phone_number;
+    if (!phone.startsWith('+') && !phone.startsWith('whatsapp:')) {
+      phone = '+' + phone.replace(/^\s+/, '');
+    }
+
+    try {
+      await sendWhatsApp(`whatsapp:${phone}`, "Payment received — thank you! Generating your full property report now. This takes a few minutes, I'll send it as soon as it's ready. ⏳");
+    } catch (sendErr) {
+      console.error(`[yoco] Failed to send confirmation to ${phone}: ${sendErr.message}`);
+    }
+
+    await upsertConversation(phone, { state: 'generating' });
+
+    const conv = await getConversation(phone);
+    if (!conv) {
+      const conv2 = await getConversation(order.phone_number);
+      if (!conv2) {
+        console.error(`[yoco] No conversation found for ${order.phone_number}`);
+        return;
+      }
+      runPipelineAsync(order, conv2);
+      return;
+    }
+
+    runPipelineAsync(order, conv);
+
+  } catch (err) {
+    console.error('[yoco] Error processing webhook:', err);
   }
 });
 
