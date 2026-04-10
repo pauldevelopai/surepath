@@ -42,9 +42,9 @@ export default function ConversationsPage() {
       <h1 className="text-2xl font-bold mb-1">Conversations</h1>
       <p className="text-sm text-gray-500 mb-4">WhatsApp users, messages, and conversation state</p>
 
-      <div className="flex gap-4" style={{ height: "calc(100vh - 180px)" }}>
+      <div className="flex gap-4" style={{ height: "calc(100vh - 160px)", minHeight: "500px" }}>
         {/* User list */}
-        <div className="w-80 shrink-0 overflow-y-auto border rounded-lg bg-white">
+        <div className="w-72 shrink-0 overflow-y-auto border rounded-lg bg-white">
           {users.length === 0 ? (
             <p className="text-gray-400 text-sm p-4">No conversations yet</p>
           ) : users.map(u => (
@@ -69,7 +69,7 @@ export default function ConversationsPage() {
         </div>
 
         {/* Chat view */}
-        <div className="flex-1 border rounded-lg bg-white flex flex-col">
+        <div className="flex-1 border rounded-lg bg-white flex flex-col overflow-hidden">
           {!selectedPhone ? (
             <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">Select a user to view their conversation</div>
           ) : detailLoading ? (
@@ -97,7 +97,7 @@ export default function ConversationsPage() {
               </div>
 
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-3 space-y-1.5 bg-[#e5ddd5]">
+              <div className="flex-1 overflow-y-auto p-3 space-y-1 bg-[#e5ddd5]" style={{ minHeight: 0 }}>
                 {(detail.messages || []).map((m: any) => (
                   <div key={m.id} className={`flex ${m.direction === "outbound" ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-[75%] rounded-lg px-3 py-1.5 shadow-sm ${m.direction === "outbound" ? "bg-[#dcf8c6] text-gray-800" : "bg-white text-gray-800"}`}>
