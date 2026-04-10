@@ -21,16 +21,18 @@ function saveSettings(settings: Record<string, unknown>) {
   const merged = { ...DEFAULTS, ...settings };
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(merged, null, 2));
 
-  // Also update the surepath .env so the WhatsApp server picks it up
+  // Also update the surepath .env — remove ALL existing lines then append once
   try {
     const path = require("path");
     const envPath = path.resolve(process.cwd(), "..", ".env");
     let env = fs.readFileSync(envPath, "utf8");
-    if (env.includes("REPORT_PRICE=")) {
-      env = env.replace(/^REPORT_PRICE=.*/m, `REPORT_PRICE=${merged.report_price}`);
-    } else {
-      env += `\nREPORT_PRICE=${merged.report_price}`;
-    }
+    // Remove all existing REPORT_PRICE and PAYMENT_ENABLED lines (prevents duplicates)
+    env = env.replace(/^REPORT_PRICE=.*\n?/gm, "");
+    env = env.replace(/^PAYMENT_ENABLED=.*\n?/gm, "");
+    // Remove trailing blank lines and append fresh values
+    env = env.trimEnd() + "\n";
+    env += `REPORT_PRICE=${merged.report_price}\n`;
+    env += `PAYMENT_ENABLED=${merged.payment_enabled ? "true" : "false"}\n`;
     fs.writeFileSync(envPath, env);
   } catch {}
 
@@ -61,22 +63,8 @@ export const POST = withAuth(async (req: NextRequest) => {
 
   const saved = saveSettings(settings);
 
-  // Also update PAYMENT_ENABLED in .env
-  try {
-    const path = require("path");
-    const envPath = path.resolve(process.cwd(), "..", ".env");
-    let env = fs.readFileSync(envPath, "utf8");
-    if (env.includes("PAYMENT_ENABLED=")) {
-      env = env.replace(/^PAYMENT_ENABLED=.*/m, `PAYMENT_ENABLED=${saved.payment_enabled ? 'true' : 'false'}`);
-    }
-    fs.writeFileSync(envPath, env);
-  } catch {}
-
-  // Restart surepath to pick up changes
-  try {
-    const { execSync } = require("child_process");
-    execSync("pm2 restart surepath --update-env", { timeout: 10000 });
-  } catch {}
+  // saveSettings already updates .env — no need to restart since whatsapp.js
+  // reads from /tmp/surepath-settings.json on every request
 
   return NextResponse.json({ ok: true, ...saved });
 });
