@@ -18,7 +18,7 @@ export default function MoneyPage() {
   useEffect(() => {
     fetch("/api/analytics").then(r => r.json()).then(setData);
     fetch("/api/billing").then(r => r.json()).then(setBilling).catch(() => {});
-    fetch("/api/settings").then(r => r.json()).then(d => { setPrice(d.report_price); setPriceInput(String(d.report_price)); setPaymentEnabled(d.payment_enabled !== false); }).catch(() => {});
+    fetch("/api/settings", { cache: "no-store" }).then(r => r.json()).then(d => { setPrice(d.report_price); setPriceInput(String(d.report_price)); setPaymentEnabled(d.payment_enabled !== false); }).catch(() => {});
   }, []);
 
   async function savePrice() {

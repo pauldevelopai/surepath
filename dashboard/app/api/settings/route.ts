@@ -38,7 +38,9 @@ function saveSettings(settings: Record<string, unknown>) {
 }
 
 export const GET = withAuth(async () => {
-  return NextResponse.json(loadSettings());
+  const resp = NextResponse.json(loadSettings());
+  resp.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  return resp;
 });
 
 export const POST = withAuth(async (req: NextRequest) => {
