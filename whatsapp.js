@@ -92,29 +92,19 @@ function isProperty24URL(text) {
 
 function generatePayFastURL(orderId, amount) {
   const params = {
-    merchant_id: PAYFAST_MERCHANT_ID,
-    merchant_key: PAYFAST_MERCHANT_KEY,
+    cmd: '_paynow',
+    receiver: PAYFAST_MERCHANT_ID,
+    amount: Math.max(amount, 5).toFixed(2),
+    item_name: 'Surepath Property Report',
     notify_url: `http://13.43.118.177/webhook/payfast`,
     m_payment_id: String(orderId),
-    amount: amount.toFixed(2),
-    item_name: 'Surepath Property Report',
   };
 
-  // PayFast signature: use raw values (not URL-encoded) joined by &
-  const passphrase = process.env.PAYFAST_PASSPHRASE || '';
-  let sigString = Object.entries(params)
-    .map(([k, v]) => `${k}=${String(v).trim()}`)
-    .join('&');
-  if (passphrase) sigString += `&passphrase=${passphrase.trim()}`;
-
-  const signature = crypto.createHash('md5').update(sigString).digest('hex');
-
-  // URL: use URL-encoded values
   const urlString = Object.entries(params)
     .map(([k, v]) => `${k}=${encodeURIComponent(String(v).trim())}`)
     .join('&');
 
-  return `https://www.payfast.co.za/eng/process?${urlString}&signature=${signature}`;
+  return `https://payment.payfast.io/eng/process?${urlString}`;
 }
 
 // ─── Conversation state machine ────────────────────────────────────────
