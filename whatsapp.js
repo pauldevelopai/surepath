@@ -1156,7 +1156,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
 
       case 'tease_sent': {
         if (['yes', 'ja', '1', 'buy', 'full report', 'yes please', 'yep', 'sure', 'ok', 'okay', 'do it', 'go ahead', 'lets go', "let's go"].includes(normalised)) {
-          const REPORT_PRICE = 149;
+          const REPORT_PRICE = 169;
           const PAYMENT_ENABLED = !!(PAYFAST_MERCHANT_ID && PAYFAST_MERCHANT_KEY && process.env.PAYMENT_ENABLED === 'true');
 
           if (PAYMENT_ENABLED) {
