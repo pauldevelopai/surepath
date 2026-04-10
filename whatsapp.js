@@ -1352,11 +1352,35 @@ router.post('/webhook/payfast', express.urlencoded({ extended: false }), async (
       [data.pf_payment_id, orderId]
     );
 
-    console.log(`[payfast] Order ${orderId} marked as paid`);
+    console.log(`[payfast] Order ${orderId} marked as paid for ${order.phone_number}`);
 
-    const conv = await getConversation(order.phone_number);
+    // Normalize phone number
+    let phone = order.phone_number;
+    if (!phone.startsWith('+') && !phone.startsWith('whatsapp:')) {
+      phone = '+' + phone.replace(/^\s+/, '');
+    }
+
+    // Send confirmation message immediately
+    try {
+      await sendWhatsApp(`whatsapp:${phone}`, "Payment received — thank you! Generating your full property report now. This takes a few minutes, I'll send it as soon as it's ready. ⏳");
+      console.log(`[payfast] Confirmation sent to ${phone}`);
+    } catch (sendErr) {
+      console.error(`[payfast] Failed to send confirmation to ${phone}: ${sendErr.message}`);
+    }
+
+    // Update conversation state
+    await upsertConversation(phone, { state: 'generating' });
+
+    const conv = await getConversation(phone);
     if (!conv) {
-      console.error(`[payfast] No conversation found for ${order.phone_number}`);
+      console.error(`[payfast] No conversation found for ${phone}`);
+      // Try with original number format
+      const conv2 = await getConversation(order.phone_number);
+      if (!conv2) {
+        console.error(`[payfast] No conversation found for ${order.phone_number} either`);
+        return;
+      }
+      runPipelineAsync(order, conv2);
       return;
     }
 
