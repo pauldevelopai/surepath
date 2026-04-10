@@ -235,7 +235,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
       const tease = typeof conv.tease_data === 'string' ? JSON.parse(conv.tease_data) : conv.tease_data;
       // Only reuse if it's a real Nico tease, not a fallback from when API credits were empty
       const isFallbackTease = !tease.nicoTease ||
-        tease.nicoTease.includes('Get the full report for deeds') ||
+        tease.nicoTease.includes('Get the full report for') ||
         tease.nicoTease.includes('Photos look clean from what we can see') ||
         tease.nicoTease.startsWith('Key concerns:') ||
         (tease.nicoTease.length < 60 && !tease.nicoTease.includes('.'));
@@ -257,7 +257,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
           '',
           tease.nicoTease,
           '',
-          'The full Surepath report includes deeds history, crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
+          'The full Surepath report includes crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
           '',
           `Reply *1* to get the full report (R${getLiveSettings().report_price||169}), or send a different listing link.`,
         ].join('\n');
@@ -347,7 +347,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
         console.error(`[tease] Claude tease generation failed: ${err.message}`);
         nicoTease = topRiskFlags.length > 0
           ? `Key concerns: ${topRiskFlags.slice(0, 2).map(f => f.split('.')[0]).join('. ')}.`
-          : 'Photos look clean from what we can see. The full report covers deeds, crime, infrastructure and more.';
+          : 'Photos look clean from what we can see. The full report covers crime, infrastructure and more.';
       }
 
       const priceFormatted = p.asking_price ? 'R' + Number(p.asking_price).toLocaleString('en-ZA') : 'Price not listed';
@@ -369,7 +369,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
         '',
         nicoTease,
         '',
-        'The full Surepath report includes deeds history, crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
+        'The full Surepath report includes crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
         '',
         `Reply *1* to get the full report (R${getLiveSettings().report_price||169}), or send a different listing link.`,
       ].join('\n');
@@ -765,7 +765,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
               messages: [{ role: 'user', content: `Property: ${address}. ${propertyDetails}. Asking price: R${p.asking_price ? Number(p.asking_price).toLocaleString('en-ZA') : 'unknown'}. Risk flags: ${flagsText}.` }],
             });
             nicoTease = resp.content[0].text;
-          } catch { nicoTease = `${propertyDetails || 'This property'} in ${(address || '').split(',')[0]} at R${p.asking_price ? Number(p.asking_price).toLocaleString('en-ZA') : 'unknown'} — the full report covers deeds history, crime stats, structural risks, and compliance.`; }
+          } catch { nicoTease = `${propertyDetails || 'This property'} in ${(address || '').split(',')[0]} at R${p.asking_price ? Number(p.asking_price).toLocaleString('en-ZA') : 'unknown'} — the full report covers crime stats, structural risks, and compliance.`; }
 
           const priceFormatted = p.asking_price ? 'R' + Number(p.asking_price).toLocaleString('en-ZA') : 'Price not listed';
           const bedsLine = [p.bedrooms ? `${p.bedrooms} bed` : null, p.bathrooms ? `${p.bathrooms} bath` : null].filter(Boolean).join(' · ');
@@ -784,7 +784,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
             '',
             nicoTease,
             '',
-            'The full Surepath report includes deeds history, crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
+            'The full Surepath report includes crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
             '',
             `Reply *1* to get the full report (R${getLiveSettings().report_price||169}), or send a different listing link.`,
           ].join('\n');
@@ -996,7 +996,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
       '',
       tease.nicoTease,
       '',
-      'The full Surepath report includes deeds history, crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
+      'The full Surepath report includes crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
       '',
       `Reply *1* to get the full report (R${getLiveSettings().report_price||169}), or send a different listing link.`,
     ].join('\n');
@@ -1212,7 +1212,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
       case 'awaiting_property': {
         await upsertConversation(phoneNumber, { state: 'awaiting_property' });
         await sendWhatsApp(from,
-          `Welcome to Surepath 👋\n\nI check properties for hidden risks before you buy.\n\nPaste a PrivateProperty or Property24 listing link and I'll pull the photos, analyse them for defects, and give you a quick preview — free.\n\nThe full report includes deeds history, crime stats, infrastructure risks, and repair cost estimates — R${getLiveSettings().report_price||169}.`
+          `Welcome to Surepath 👋\n\nI check properties for hidden risks before you buy.\n\nPaste a PrivateProperty or Property24 listing link and I'll pull the photos, analyse them for defects, and give you a quick preview — free.\n\nThe full report includes crime stats, infrastructure risks, and repair cost estimates — R${getLiveSettings().report_price||169}.`
         );
         break;
       }
@@ -1274,7 +1274,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
                 `The full Surepath report for this property is *R${REPORT_PRICE}*.`,
                 '',
                 'It includes:',
-                '• Deeds history & ownership',
+                '• Ownership & property history',
                 '• Crime statistics for the area',
                 '• All photo risk analysis findings',
                 '• Repair cost estimates',
@@ -1681,7 +1681,7 @@ async function runPipelineAsync(order, conv) {
     }
 
     const reportMsg = `*Your Surepath Report is Ready*\n\n` +
-      `We've checked the listing photos, Street View, satellite imagery, deeds history, crime stats, infrastructure risks, and compliance requirements.\n\n` +
+      `We've checked the listing photos, Street View, satellite imagery, crime stats, infrastructure risks, and compliance requirements.\n\n` +
       `To check another property, send a new listing link.\n\n` +
       `We'd love to hear what you think — type *feedback* followed by your thoughts.`;
 
