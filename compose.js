@@ -13,6 +13,10 @@ const s3 = new S3Client({ region: AWS_REGION });
 
 const LOGO_S3_KEY = process.env.SUREPATH_LOGO_S3_KEY || 'assets/surepath-logo.png';
 
+// Brand colours
+const BRAND_RED = '#E63946';
+const BRAND_DARK = '#0D1B2A';
+
 /**
  * Download a file from S3 or URL to a local temp path.
  */
@@ -73,16 +77,64 @@ function cleanup(...paths) {
 }
 
 /**
- * Compose final video with captions, logo, and name card.
+ * Download property photos for a property, return array of local temp paths.
+ * Falls back to branded background if no photos available.
+ */
+async function downloadPropertyPhotos(propertyId, maxPhotos = 4) {
+  if (!propertyId) return [];
+
+  const rows = await pool.query(
+    `SELECT image_url FROM property_images
+     WHERE property_id = $1 AND source IN ('property24','privateproperty')
+     ORDER BY id LIMIT $2`,
+    [propertyId, maxPhotos]
+  );
+
+  const paths = [];
+  for (const row of rows) {
+    try {
+      const ext = row.image_url.includes('.png') ? '.png' : '.jpg';
+      const p = await downloadToTemp(row.image_url, ext);
+      paths.push(p);
+      console.log(`[compose] Downloaded photo: ${row.image_url.substring(0, 80)}...`);
+    } catch (e) {
+      console.warn(`[compose] Failed to download photo: ${e.message}`);
+    }
+  }
+  return paths;
+}
+
+/**
+ * Generate a branded background image (1080x1920) using FFmpeg.
+ * Dark background with Surepath red accent bar.
+ */
+function generateBrandedBackground() {
+  const tmpPath = path.join(os.tmpdir(), `surepath_bg_${Date.now()}.png`);
+  // Dark background with red accent bar at top
+  execSync(
+    `ffmpeg -y -f lavfi -i "color=c=${BRAND_DARK.replace('#', '0x')}:s=1080x1920:d=1" ` +
+    `-vf "drawbox=x=0:y=0:w=1080:h=8:color=${BRAND_RED.replace('#', '0x')}:t=fill" ` +
+    `-frames:v 1 "${tmpPath}"`,
+    { stdio: 'pipe' }
+  );
+  return tmpPath;
+}
+
+/**
+ * Compose a 10-second reel video from property photos + audio + captions.
  *
- * @param {string} avatarVideoUrl - S3 URL of the avatar video
+ * Visual: photos crossfade as slideshow (or branded bg if no photos),
+ * branded caption bar at bottom, Surepath logo watermark, name card first 3s.
+ *
+ * @param {string} audioUrl - S3 URL of the voiceover MP3
  * @param {string} srtContent - SRT caption content string
- * @param {string} [backgroundAsset] - S3 URL of background (optional)
+ * @param {number|null} propertyId - property ID for fetching photos (optional)
+ * @param {string} hookText - hook text for the opening title card
  * @param {string} outputName - Output filename (without extension)
  * @param {number} [postId] - content_posts.id to update
  * @returns {string} S3 URL of the final video
  */
-async function composeVideo(avatarVideoUrl, srtContent, backgroundAsset, outputName, postId) {
+async function composeVideo(audioUrl, srtContent, propertyId, hookText, outputName, postId) {
   console.log(`[compose] Starting composition: ${outputName}`);
 
   // Verify FFmpeg is available
@@ -92,24 +144,31 @@ async function composeVideo(avatarVideoUrl, srtContent, backgroundAsset, outputN
     throw new Error('FFmpeg is not installed or not in PATH');
   }
 
-  // Download files to temp
-  const avatarPath = await downloadToTemp(avatarVideoUrl, '.mp4');
+  // Download audio
+  const audioPath = await downloadToTemp(audioUrl, '.mp3');
+
+  // Get audio duration
+  let audioDuration;
+  try {
+    const probe = execSync(
+      `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${audioPath}"`,
+      { encoding: 'utf8' }
+    ).trim();
+    audioDuration = parseFloat(probe) || 12;
+  } catch {
+    audioDuration = 12;
+  }
+  console.log(`[compose] Audio duration: ${audioDuration}s`);
+
   const srtPath = writeSRTToTemp(srtContent);
   const outputPath = path.join(os.tmpdir(), `surepath_final_${Date.now()}.mp4`);
 
-  let bgPath = null;
+  // Download property photos
+  const photos = await downloadPropertyPhotos(propertyId);
+  const hasPhotos = photos.length > 0;
+
+  // Download logo
   let logoPath = null;
-
-  // Try to download background asset
-  if (backgroundAsset) {
-    try {
-      bgPath = await downloadToTemp(backgroundAsset, '.mp4');
-    } catch (e) {
-      console.warn(`[compose] Background download failed: ${e.message}`);
-    }
-  }
-
-  // Try to download logo
   try {
     logoPath = await downloadToTemp(
       `https://${S3_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${LOGO_S3_KEY}`,
@@ -119,46 +178,104 @@ async function composeVideo(avatarVideoUrl, srtContent, backgroundAsset, outputN
     console.warn('[compose] Logo not found — composing without watermark');
   }
 
-  console.log(`[compose] Files ready. Running FFmpeg...`);
+  // Generate branded background
+  const bgPath = generateBrandedBackground();
 
-  // Build FFmpeg filter complex
-  // Captions: white text, black outline, bottom third
-  // Logo: bottom right, 10% opacity
-  // Name card: first 3 seconds, lower third
-  let filterComplex = '';
-  let inputs = `-i "${avatarPath}"`;
-  let inputIdx = 0;
+  console.log(`[compose] Photos: ${photos.length}, Logo: ${!!logoPath}, Duration: ${audioDuration}s`);
 
-  if (bgPath) {
-    inputs += ` -i "${bgPath}"`;
-    inputIdx++;
-  }
-
-  if (logoPath) {
-    inputs += ` -i "${logoPath}"`;
-  }
-
-  // Base: scale avatar to 1080x1920 vertical
-  filterComplex += `[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black[base];`;
-
-  // Add captions (subtitles filter with SRT)
-  // Style: white, bold, black outline, bottom area
+  // Escape SRT path for FFmpeg subtitles filter
   const escapedSrt = srtPath.replace(/'/g, "'\\''").replace(/:/g, '\\:');
-  filterComplex += `[base]subtitles='${escapedSrt}':force_style='FontSize=22,FontName=Arial,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Bold=1,Alignment=2,MarginV=120'[captioned];`;
 
-  // Add name card for first 3 seconds
-  filterComplex += `[captioned]drawtext=text='Nico | Surepath':fontcolor=white:fontsize=28:font=Arial:x=(w-text_w)/2:y=h-200:enable='between(t\\,0\\,3)':box=1:boxcolor=black@0.6:boxborderw=10[named];`;
+  // Caption style — bold white text on semi-transparent dark bar at bottom
+  const captionStyle = "FontSize=24,FontName=Arial,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Bold=1,Alignment=2,MarginV=160,BackColour=&H80000000";
 
-  // Add logo watermark if available
-  if (logoPath) {
-    const logoIdx = bgPath ? 2 : 1;
-    filterComplex += `[${logoIdx}:v]scale=120:-1,format=rgba,colorchannelmixer=aa=0.1[logo];`;
-    filterComplex += `[named][logo]overlay=W-w-30:H-h-30[final]`;
+  let cmd;
+
+  if (hasPhotos) {
+    // ─── PHOTO SLIDESHOW MODE ───
+    // Each photo gets equal time, crossfade between them
+    const photoDuration = audioDuration / photos.length;
+
+    // Build input flags for all photos + audio
+    let inputs = '';
+    photos.forEach((p, i) => {
+      inputs += `-loop 1 -t ${photoDuration.toFixed(2)} -i "${p}" `;
+    });
+    inputs += `-i "${audioPath}"`;
+    if (logoPath) inputs += ` -i "${logoPath}"`;
+
+    const audioIdx = photos.length;
+    const logoIdx = photos.length + 1;
+
+    // Build filter: scale each photo to 1080x1920, concatenate, add branded bar + captions
+    let filter = '';
+
+    // Scale each photo to fill 1080x1920 (crop to fit vertical)
+    photos.forEach((_, i) => {
+      filter += `[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fade=t=in:st=0:d=0.3,fade=t=out:st=${(photoDuration - 0.3).toFixed(2)}:d=0.3[p${i}];`;
+    });
+
+    // Concatenate all photo segments
+    photos.forEach((_, i) => { filter += `[p${i}]`; });
+    filter += `concat=n=${photos.length}:v=1:a=0[slideshow];`;
+
+    // Add branded bar at bottom (dark strip behind captions)
+    filter += `[slideshow]drawbox=x=0:y=ih-240:w=iw:h=240:color=${BRAND_DARK.replace('#', '0x')}@0.7:t=fill[barred];`;
+
+    // Add red accent line above the bar
+    filter += `[barred]drawbox=x=0:y=ih-240:w=iw:h=4:color=${BRAND_RED.replace('#', '0x')}:t=fill[accented];`;
+
+    // Add name card for first 3 seconds
+    filter += `[accented]drawtext=text='Nico | Surepath':fontcolor=white:fontsize=28:font=Arial:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)':box=1:boxcolor=${BRAND_DARK.replace('#', '0x')}@0.7:boxborderw=12[named];`;
+
+    // Add captions
+    filter += `[named]subtitles='${escapedSrt}':force_style='${captionStyle}'[captioned];`;
+
+    // Add logo watermark if available
+    if (logoPath) {
+      filter += `[${logoIdx}:v]scale=100:-1,format=rgba,colorchannelmixer=aa=0.15[logo];`;
+      filter += `[captioned][logo]overlay=W-w-24:24[final]`;
+    } else {
+      filter += `[captioned]copy[final]`;
+    }
+
+    cmd = `ffmpeg -y ${inputs} -filter_complex "${filter}" -map "[final]" -map ${audioIdx}:a -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -movflags +faststart -shortest -r 30 "${outputPath}" 2>&1`;
+
   } else {
-    filterComplex += `[named]copy[final]`;
-  }
+    // ─── BRANDED BACKGROUND MODE (no photos) ───
+    // Static branded bg with hook text, captions, and voiceover
+    let inputs = `-loop 1 -t ${audioDuration.toFixed(2)} -i "${bgPath}" -i "${audioPath}"`;
+    if (logoPath) inputs += ` -i "${logoPath}"`;
 
-  const cmd = `ffmpeg -y ${inputs} -filter_complex "${filterComplex}" -map "[final]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -movflags +faststart -r 30 "${outputPath}" 2>&1`;
+    const safeHook = (hookText || 'Surepath').replace(/'/g, "\u2019").replace(/:/g, '\\:').replace(/\\/g, '\\\\');
+
+    let filter = '';
+    // Scale bg
+    filter += `[0:v]scale=1080:1920[bg];`;
+
+    // Add branded bar at bottom
+    filter += `[bg]drawbox=x=0:y=ih-240:w=iw:h=240:color=${BRAND_DARK.replace('#', '0x')}@0.7:t=fill[barred];`;
+    filter += `[barred]drawbox=x=0:y=ih-240:w=iw:h=4:color=${BRAND_RED.replace('#', '0x')}:t=fill[accented];`;
+
+    // Hook text large in centre
+    filter += `[accented]drawtext=text='${safeHook}':fontcolor=white:fontsize=42:font=Arial:x=(w-text_w)/2:y=(h-text_h)/2-60:enable='between(t\\,0\\,${audioDuration.toFixed(2)})':line_spacing=12[hooked];`;
+
+    // Name card first 3 seconds
+    filter += `[hooked]drawtext=text='Nico | Surepath':fontcolor=white:fontsize=28:font=Arial:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)':box=1:boxcolor=${BRAND_DARK.replace('#', '0x')}@0.7:boxborderw=12[named];`;
+
+    // Captions
+    filter += `[named]subtitles='${escapedSrt}':force_style='${captionStyle}'[captioned];`;
+
+    // Logo
+    if (logoPath) {
+      filter += `[2:v]scale=100:-1,format=rgba,colorchannelmixer=aa=0.15[logo];`;
+      filter += `[captioned][logo]overlay=W-w-24:24[final]`;
+    } else {
+      filter += `[captioned]copy[final]`;
+    }
+
+    cmd = `ffmpeg -y ${inputs} -filter_complex "${filter}" -map "[final]" -map 1:a -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -movflags +faststart -shortest -r 30 "${outputPath}" 2>&1`;
+  }
 
   console.log(`[compose] FFmpeg command length: ${cmd.length} chars`);
 
@@ -166,12 +283,12 @@ async function composeVideo(avatarVideoUrl, srtContent, backgroundAsset, outputN
     execSync(cmd, { stdio: 'pipe', maxBuffer: 50 * 1024 * 1024, timeout: 300000 });
   } catch (err) {
     const stderr = err.stderr ? err.stderr.toString().slice(-500) : err.message;
-    // Try simpler pipeline without logo/namecard if complex fails
-    console.warn(`[compose] Complex filter failed, trying simple: ${stderr}`);
+    console.warn(`[compose] Complex filter failed, trying simple fallback: ${stderr}`);
 
-    const simpleCmd = `ffmpeg -y -i "${avatarPath}" -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,subtitles='${escapedSrt}':force_style='FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Bold=1,Alignment=2,MarginV=120'" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -movflags +faststart -r 30 "${outputPath}" 2>&1`;
+    // Simple fallback: just audio + branded bg + captions
+    const fallbackCmd = `ffmpeg -y -loop 1 -t ${audioDuration.toFixed(2)} -i "${bgPath}" -i "${audioPath}" -vf "scale=1080:1920,subtitles='${escapedSrt}':force_style='FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Bold=1,Alignment=2,MarginV=120'" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -movflags +faststart -shortest -r 30 "${outputPath}" 2>&1`;
 
-    execSync(simpleCmd, { stdio: 'pipe', maxBuffer: 50 * 1024 * 1024, timeout: 300000 });
+    execSync(fallbackCmd, { stdio: 'pipe', maxBuffer: 50 * 1024 * 1024, timeout: 300000 });
   }
 
   // Verify output exists
@@ -202,9 +319,9 @@ async function composeVideo(avatarVideoUrl, srtContent, backgroundAsset, outputN
   }
 
   // Cleanup
-  cleanup(avatarPath, srtPath, outputPath, bgPath, logoPath);
+  cleanup(audioPath, srtPath, outputPath, bgPath, logoPath, ...photos);
 
   return s3Url;
 }
 
-module.exports = { composeVideo, downloadToTemp, writeSRTToTemp };
+module.exports = { composeVideo, downloadToTemp, writeSRTToTemp, downloadPropertyPhotos };

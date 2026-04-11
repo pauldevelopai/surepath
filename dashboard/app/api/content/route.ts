@@ -114,7 +114,10 @@ export const GET = withAuth(async (req: NextRequest) => {
 });
 
 export const POST = withAuth(async (req: NextRequest) => {
-  const { action, pillar, topic, script, post_id, insight } = await req.json();
+  const { action, pillar, topic, script, post_id, insight, tease_text } = await req.json();
+  // Dynamic require to load Node modules from parent dir (bypass webpack static analysis)
+  // eslint-disable-next-line no-eval
+  const loadModule = (name: string) => eval('require')(require('path').resolve(process.cwd(), '..', name));
 
   if (action === "generate_script") {
     const Anthropic = (await import("@anthropic-ai/sdk")).default;
@@ -134,29 +137,40 @@ ${(insight.topRiskFlags || []).map((f: string) => `- ${f}`).join("\n")}
 Use these REAL findings as the basis for the script. Reference the actual issues found. Do not invent problems that aren't in the risk flags.`;
     }
 
+    // If the user refined the tease text, use it as the hook direction
+    const teaseDirection = tease_text
+      ? `\n\nThe user has refined the hook to: "${tease_text}". Use this as the opening line or closely adapt it. Do not discard it.`
+      : "";
+
     const message = await client.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 2048,
-      system: `You are Nico, a South African ex-property agent, aged 38-42. You are calm, direct, and slightly contrarian. You've seen a lot of properties and you don't sugarcoat things. You create short-form video scripts for Instagram Reels and TikTok about property risks in South Africa.
+      max_tokens: 1024,
+      system: `You are Nico — South African, ex-property agent, 38-42. Calm, direct, slightly contrarian. You've inspected hundreds of properties and you don't sugarcoat anything. You make 10-second Instagram Reels and TikToks that stop the scroll.
 
-Your style: punchy, direct, no fluff. Every video has a strong hook in the first 3 seconds, builds tension with real findings, and ends with a clear CTA to use Surepath. Write in plain conversational South African English. Do not use estate agent language. Do not say "however" or "that said".
+RULES FOR 10-SECOND VIDEOS:
+- Total script must be 25-35 words MAX. That's it. Read it aloud — if it takes more than 10 seconds, cut it.
+- Hook (first 2 seconds): one punchy line that makes someone stop scrolling. A question, a shock, or a bold claim.
+- Body (5 seconds): one specific finding or insight. Be concrete — name the defect, the number, the risk. No filler.
+- CTA (3 seconds): one short line driving to Surepath. "Send me your listing" or "Link in bio — Surepath checks it for free."
+- Write in plain South African English. Short sentences. No estate-agent speak. No "however", "that said", "it's important to note".
+- Sound like a mate warning you, not a presenter reading a script.
 
 Content pillars:
-- Warning: "Don't buy until you read this" style
-- Comparison: Before/after, good vs bad deals
-- Reality Check: Exposing what agents won't tell you
-- Inspection Reveal: Showing real defects found by Surepath
-- Market Signal: Data-driven market insights
+- Warning: "Don't buy until you see this"
+- Comparison: Before/after, good vs bad
+- Reality Check: What agents won't tell you
+- Inspection Reveal: Real defects Surepath found
+- Market Signal: Data-driven market takes
 
-Format your response as JSON:
+Format as JSON:
 {
-  "hook": "first 3 seconds hook text — must grab attention immediately",
-  "script": "full script (60-90 seconds when read aloud). Reference real findings if provided. Be specific, not generic.",
-  "cta": "call to action — drive to Surepath WhatsApp or website"
+  "hook": "2-second opening line — must stop the scroll",
+  "script": "full 10-second script (25-35 words total including hook and CTA)",
+  "cta": "short CTA — 1 sentence max"
 }`,
       messages: [{
         role: "user",
-        content: `Create a ${pillar.replace(/_/g, " ")} video script about: ${topic}${insightContext}\n\nReturn JSON only.`,
+        content: `Create a ${pillar.replace(/_/g, " ")} 10-second reel script about: ${topic}${insightContext}${teaseDirection}\n\nReturn JSON only.`,
       }],
     });
 
@@ -164,11 +178,12 @@ Format your response as JSON:
     if (text.startsWith("```")) text = text.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
     const parsed = JSON.parse(text);
 
-    // Save to DB
+    // Save to DB (include property_id if from insight)
+    const propertyId = insight?.propertyId || null;
     const rows = await query(
-      `INSERT INTO content_posts (pillar, hook, script, cta, status)
-       VALUES ($1, $2, $3, $4, 'draft') RETURNING id`,
-      [pillar, parsed.hook, parsed.script, parsed.cta]
+      `INSERT INTO content_posts (pillar, hook, script, cta, status, property_id)
+       VALUES ($1, $2, $3, $4, 'draft', $5) RETURNING id`,
+      [pillar, parsed.hook, parsed.script, parsed.cta, propertyId]
     );
 
     return NextResponse.json({ id: rows[0].id, ...parsed });
@@ -180,23 +195,85 @@ Format your response as JSON:
   }
 
   if (action === "generate_audio") {
-    return NextResponse.json({ audio_url: null, message: "ElevenLabs integration pending — set ELEVENLABS_API_KEY" });
+    try {
+      const { generateVoice } = loadModule('voice.js');
+      // Get the script text from the post
+      const rows = await query("SELECT script, hook, cta FROM content_posts WHERE id = $1", [post_id]);
+      if (!rows[0]) return NextResponse.json({ error: "Post not found" }, { status: 404 });
+      const fullScript = `${rows[0].hook}. ${rows[0].script}. ${rows[0].cta}`;
+      const audioUrl = await generateVoice(fullScript, undefined, post_id);
+      return NextResponse.json({ audio_url: audioUrl, message: "Audio generated" });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
   }
 
-  if (action === "generate_video") {
-    return NextResponse.json({ video_url: null, message: "HeyGen integration pending — set HEYGEN_API_KEY" });
+  if (action === "generate_captions") {
+    try {
+      const { generateCaptions } = loadModule('captions.js');
+      const { estimateDuration } = loadModule('voice.js');
+
+      const rows = await query("SELECT audio_url, hook, script, cta FROM content_posts WHERE id = $1", [post_id]);
+      if (!rows[0]?.audio_url) return NextResponse.json({ error: "No audio yet" }, { status: 400 });
+
+      // Build full script text and estimate duration from audio file size
+      const fullScript = `${rows[0].hook}. ${rows[0].script}. ${rows[0].cta}`;
+
+      // Fetch audio to get file size for duration estimate
+      const audioRes = await fetch(rows[0].audio_url, { method: 'HEAD' });
+      const contentLength = parseInt(audioRes.headers.get('content-length') || '0');
+      const durationSec = contentLength > 0 ? estimateDuration(Buffer.alloc(contentLength)) : 10;
+
+      const srtContent = generateCaptions(fullScript, durationSec);
+      await query("UPDATE content_posts SET srt_content = $1 WHERE id = $2", [srtContent, post_id]);
+      return NextResponse.json({ message: "Captions generated from script" });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
   }
 
   if (action === "compose_final") {
-    return NextResponse.json({ final_url: null, message: "FFmpeg composition pending — server-side processing" });
+    try {
+      const { composeVideo } = loadModule('compose.js');
+      const rows = await query(
+        "SELECT audio_url, srt_content, hook, property_id FROM content_posts WHERE id = $1",
+        [post_id]
+      );
+      if (!rows[0]?.audio_url) return NextResponse.json({ error: "No audio yet" }, { status: 400 });
+      if (!rows[0]?.srt_content) return NextResponse.json({ error: "No captions yet — generate captions first" }, { status: 400 });
+
+      const propertyId = rows[0].property_id || null;
+      const outputName = `nico-reel-${post_id}-${Date.now()}`;
+
+      const finalUrl = await composeVideo(
+        rows[0].audio_url,
+        rows[0].srt_content,
+        propertyId,
+        rows[0].hook,
+        outputName,
+        post_id
+      );
+      return NextResponse.json({ final_url: finalUrl, message: "Video composed" });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
   }
 
   if (action === "publish") {
-    await query(
-      "UPDATE content_posts SET status = 'posted', posted_at = NOW() WHERE id = $1",
-      [post_id]
-    );
-    return NextResponse.json({ message: "Publishing to Instagram, TikTok, YouTube — API integrations pending" });
+    try {
+      const { publishToAll } = loadModule('publish.js');
+      const rows = await query("SELECT final_video_url, script, hook, cta FROM content_posts WHERE id = $1", [post_id]);
+      if (!rows[0]?.final_video_url) return NextResponse.json({ error: "No final video yet" }, { status: 400 });
+      const caption = `${rows[0].hook}\n\n${rows[0].script}\n\n${rows[0].cta}\n\n#surepath #property #southafrica #realestate`;
+      const result = await publishToAll(rows[0].final_video_url, caption, post_id);
+      return NextResponse.json({ message: "Published", ...result });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });

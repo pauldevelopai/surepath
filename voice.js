@@ -84,8 +84,8 @@ async function generateVoice(scriptText, voiceId, postId) {
   const durationSec = estimateDuration(mp3Buffer);
   console.log(`[voice] Audio: ${mp3Buffer.length} bytes, ~${durationSec}s`);
 
-  if (durationSec < 28 || durationSec > 32) {
-    console.warn(`[voice] WARNING: duration ~${durationSec}s is outside 28-32s target range`);
+  if (durationSec < 8 || durationSec > 15) {
+    console.warn(`[voice] WARNING: duration ~${durationSec}s is outside 8-15s target range for 10s reels`);
   }
 
   // Upload to S3

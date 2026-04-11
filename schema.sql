@@ -95,6 +95,7 @@ CREATE TABLE content_posts (
   pillar TEXT NOT NULL,
   hook TEXT NOT NULL, script TEXT, cta TEXT NOT NULL,
   audio_url TEXT, avatar_video_url TEXT, final_video_url TEXT,
+  srt_content TEXT, srt_url TEXT, property_id INTEGER,
   status content_status NOT NULL DEFAULT 'draft',
   instagram_post_id TEXT, tiktok_post_id TEXT, youtube_post_id TEXT,
   scheduled_for TIMESTAMPTZ, posted_at TIMESTAMPTZ,

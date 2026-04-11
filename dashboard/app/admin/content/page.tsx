@@ -15,9 +15,10 @@ export default function ContentPage() {
   const [postId, setPostId] = useState<number | null>(null);
   const [script, setScript] = useState({ hook: "", script: "", cta: "" });
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [captionsReady, setCaptionsReady] = useState(false);
   const [finalUrl, setFinalUrl] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
+  const [error, setError] = useState("");
 
   // Tease insights from WhatsApp conversations
   const [insights, setInsights] = useState<A[]>([]);
@@ -32,29 +33,38 @@ export default function ContentPage() {
   async function callApi(action: string, extra: Record<string, unknown> = {}) {
     setLoading(true);
     setMsg("");
+    setError("");
     const res = await fetch("/api/content", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, pillar, topic, post_id: postId, ...extra }),
+      body: JSON.stringify({ action, pillar, topic, post_id: postId, insight: selectedInsight, ...extra }),
     });
     const json = await res.json();
     setLoading(false);
+    if (json.error) setError(json.error);
     return json;
   }
 
   async function generateScript() {
     const json = await callApi("generate_script", {
       insight: selectedInsight || undefined,
+      tease_text: teaseText || undefined,
     });
     setScript({ hook: json.hook, script: json.script, cta: json.cta });
     setPostId(json.id);
     setCurrentStep(1);
   }
 
+  // Editable tease text — loaded from insight, refined before script generation
+  const [teaseText, setTeaseText] = useState("");
+
   async function generateFromInsight(insight: A) {
     setSelectedInsight(insight);
     setTopic(`${insight.address} — ${insight.topRiskFlags?.[0]?.substring(0, 80) || insight.nicoTease?.substring(0, 80) || "property risk"}`);
     setPillar("inspection_reveal");
+    // Pre-fill tease text for editing
+    const tease = insight.nicoTease || insight.topRiskFlags?.[0] || "";
+    setTeaseText(tease);
   }
 
   async function saveScript() {
@@ -64,29 +74,37 @@ export default function ContentPage() {
 
   async function generateAudio() {
     const json = await callApi("generate_audio");
-    setAudioUrl(json.audio_url);
-    setMsg(json.message || "Audio generated");
-    setCurrentStep(2);
+    if (json.audio_url) {
+      setAudioUrl(json.audio_url);
+      setMsg(json.message || "Audio generated");
+      setCurrentStep(2);
+    }
   }
 
-  async function generateVideo() {
-    const json = await callApi("generate_video");
-    setVideoUrl(json.video_url);
-    setMsg(json.message || "Video generated");
-    setCurrentStep(3);
+  async function generateCaptions() {
+    const json = await callApi("generate_captions");
+    if (!json.error) {
+      setCaptionsReady(true);
+      setMsg(json.message || "Captions generated");
+      setCurrentStep(3);
+    }
   }
 
   async function composeFinal() {
     const json = await callApi("compose_final");
-    setFinalUrl(json.final_url);
-    setMsg(json.message || "Final composed");
-    setCurrentStep(4);
+    if (json.final_url) {
+      setFinalUrl(json.final_url);
+      setMsg(json.message || "Video composed");
+      setCurrentStep(4);
+    }
   }
 
   async function publish() {
     const json = await callApi("publish");
-    setMsg(json.message || "Published");
-    setCurrentStep(5);
+    if (!json.error) {
+      setMsg(json.message || "Published");
+      setCurrentStep(5);
+    }
   }
 
   const stepClass = (step: number) =>
@@ -95,7 +113,7 @@ export default function ContentPage() {
   return (
     <div className="max-w-4xl">
       <h1 className="text-2xl font-bold mb-1">Create Video</h1>
-      <p className="text-sm text-gray-500 mb-4">Turn property insights from WhatsApp into short-form reel videos</p>
+      <p className="text-sm text-gray-500 mb-4">Turn property insights into 10-second Nico reels</p>
 
       {/* Tease Insights from WhatsApp */}
       {insights.length > 0 && (
@@ -144,13 +162,22 @@ export default function ContentPage() {
           <input className="flex-1 border rounded px-3 py-2 text-sm" placeholder="Topic — or click an insight above to pre-fill" value={topic} onChange={e => setTopic(e.target.value)} />
         </div>
         {selectedInsight && (
-          <div className="bg-blue-50 border border-blue-200 rounded p-2 text-xs text-blue-800 flex justify-between items-center">
-            <span>Using insight from: <strong>{selectedInsight.address}</strong> — {selectedInsight.topRiskFlags?.length || 0} risk flags will be included in the script</span>
-            <button onClick={() => { setSelectedInsight(null); setTopic(""); }} className="text-blue-500 hover:text-blue-700 text-xs ml-2">Clear</button>
+          <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-800">
+            <div className="flex justify-between items-center mb-2">
+              <span>Using insight from: <strong>{selectedInsight.address}</strong> — {selectedInsight.topRiskFlags?.length || 0} risk flags</span>
+              <button onClick={() => { setSelectedInsight(null); setTopic(""); setTeaseText(""); }} className="text-blue-500 hover:text-blue-700 text-xs ml-2">Clear</button>
+            </div>
+            <label className="text-[10px] text-blue-500 block mb-1">Refine the hook — this becomes the video's opening line</label>
+            <textarea
+              className="w-full border border-blue-200 rounded px-3 py-2 text-sm bg-white text-gray-900 h-20"
+              value={teaseText}
+              onChange={e => setTeaseText(e.target.value)}
+              placeholder="Edit the tease to sharpen the hook..."
+            />
           </div>
         )}
         <button onClick={generateScript} disabled={loading || !topic} className="bg-[#E63946] text-white px-6 py-2 rounded font-semibold hover:bg-red-700 disabled:opacity-50">
-          {loading && currentStep === 0 ? "Generating..." : "Generate Script"}
+          {loading && currentStep === 0 ? "Generating..." : "Generate 10s Script"}
         </button>
       </div>
 
@@ -162,8 +189,8 @@ export default function ContentPage() {
           <input className="w-full border rounded px-3 py-2 text-sm font-bold" value={script.hook} onChange={e => setScript({ ...script, hook: e.target.value })} />
         </div>
         <div className="mb-2">
-          <label className="text-xs text-gray-500 block">Script</label>
-          <textarea className="w-full border rounded px-3 py-2 text-sm h-40" value={script.script} onChange={e => setScript({ ...script, script: e.target.value })} />
+          <label className="text-xs text-gray-500 block">Script (25-35 words, ~10 seconds)</label>
+          <textarea className="w-full border rounded px-3 py-2 text-sm h-24" value={script.script} onChange={e => setScript({ ...script, script: e.target.value })} />
         </div>
         <div className="mb-3">
           <label className="text-xs text-gray-500 block">CTA</label>
@@ -175,7 +202,7 @@ export default function ContentPage() {
         </div>
       </div>
 
-      {/* Step 2: Audio */}
+      {/* Step 2: Audio preview + generate captions */}
       <div className={`mt-6 ${stepClass(2)}`}>
         <h2 className="font-bold text-lg mb-2">Audio</h2>
         {audioUrl ? (
@@ -183,27 +210,32 @@ export default function ContentPage() {
         ) : (
           <p className="text-sm text-gray-400">ElevenLabs audio will appear here</p>
         )}
-        <button onClick={generateVideo} disabled={loading} className="mt-2 bg-[#0D1B2A] text-white px-4 py-2 rounded text-sm">Generate Avatar Video</button>
+        <button onClick={generateCaptions} disabled={loading} className="mt-2 bg-[#0D1B2A] text-white px-4 py-2 rounded text-sm">
+          {loading && currentStep === 2 ? "Transcribing..." : "Generate Captions"}
+        </button>
       </div>
 
-      {/* Step 3: Avatar video */}
+      {/* Step 3: Captions ready → compose video */}
       <div className={`mt-6 ${stepClass(3)}`}>
-        <h2 className="font-bold text-lg mb-2">Avatar Video</h2>
-        {videoUrl ? (
-          <video controls src={videoUrl} className="w-full rounded" />
-        ) : (
-          <p className="text-sm text-gray-400">HeyGen avatar video will appear here</p>
-        )}
-        <button onClick={composeFinal} disabled={loading} className="mt-2 bg-[#0D1B2A] text-white px-4 py-2 rounded text-sm">Compose Final Video</button>
+        <h2 className="font-bold text-lg mb-2">Compose Video</h2>
+        <p className="text-sm text-gray-500 mb-2">
+          {selectedInsight?.propertyId
+            ? "Property photos will be used as slideshow background with branded caption bar."
+            : "Branded Surepath background with caption overlay."}
+        </p>
+        {captionsReady && <p className="text-xs text-green-600 mb-2">Captions ready</p>}
+        <button onClick={composeFinal} disabled={loading} className="bg-[#0D1B2A] text-white px-4 py-2 rounded text-sm">
+          {loading && currentStep === 3 ? "Composing..." : "Compose Final Video"}
+        </button>
       </div>
 
-      {/* Step 4: Final video */}
+      {/* Step 4: Final video preview + publish */}
       <div className={`mt-6 ${stepClass(4)}`}>
         <h2 className="font-bold text-lg mb-2">Final Video</h2>
         {finalUrl ? (
-          <video controls src={finalUrl} className="w-full rounded" />
+          <video controls src={finalUrl} className="w-full rounded max-w-sm" />
         ) : (
-          <p className="text-sm text-gray-400">FFmpeg composed video will appear here</p>
+          <p className="text-sm text-gray-400">Composed video will appear here</p>
         )}
         <button onClick={publish} disabled={loading} className="mt-2 bg-[#E63946] text-white px-6 py-2 rounded font-semibold">Publish to All Platforms</button>
       </div>
@@ -215,7 +247,8 @@ export default function ContentPage() {
         </div>
       )}
 
-      {msg && <p className="mt-4 text-sm text-blue-600">{msg}</p>}
+      {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
+      {msg && !error && <p className="mt-4 text-sm text-blue-600">{msg}</p>}
     </div>
   );
 }
