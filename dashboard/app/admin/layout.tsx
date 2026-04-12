@@ -9,6 +9,7 @@ const sections = [
     items: [
       { href: "/admin/sales/orders", label: "Orders" },
       { href: "/admin/sales/analytics", label: "Revenue" },
+      { href: "/admin/billing", label: "Billing" },
     ],
   },
   {
@@ -19,6 +20,7 @@ const sections = [
       { href: "/admin/data/rag-review", label: "RAG Review" },
       { href: "/admin/data/knowledge-base", label: "RAG Seeding" },
       { href: "/admin/services", label: "Service Providers" },
+      { href: "/admin/intelligence", label: "Nico's Brain" },
     ],
   },
   {
@@ -30,23 +32,11 @@ const sections = [
     ],
   },
   {
-    label: "INTELLIGENCE",
-    items: [
-      { href: "/admin/intelligence", label: "Nico's Brain" },
-    ],
-  },
-  {
-    label: "API",
-    items: [
-      { href: "/admin/api", label: "Clients & Docs" },
-      { href: "/admin/billing", label: "Billing" },
-    ],
-  },
-  {
     label: "SYSTEM",
     items: [
       { href: "/admin/conversations", label: "Conversations" },
       { href: "/admin/feedback", label: "Feedback" },
+      { href: "/admin/api", label: "Clients & Docs" },
     ],
   },
 ];
