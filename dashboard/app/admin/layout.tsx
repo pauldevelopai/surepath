@@ -25,6 +25,8 @@ const sections = [
     label: "MARKETING",
     items: [
       { href: "/admin/content", label: "Create Video" },
+      { href: "/admin/videos", label: "Videos" },
+      { href: "/admin/viral-lessons", label: "Viral Lessons" },
     ],
   },
   {

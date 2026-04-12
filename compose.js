@@ -4,18 +4,19 @@ const path = require('path');
 const os = require('os');
 const https = require('https');
 const http = require('http');
-const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const pool = require('./db');
+const { saveFile } = require('./storage');
 
-const S3_BUCKET = process.env.AWS_S3_BUCKET || 'surepath-reports';
-const AWS_REGION = process.env.AWS_REGION || 'af-south-1';
-const s3 = new S3Client({ region: AWS_REGION });
-
-const LOGO_S3_KEY = process.env.SUREPATH_LOGO_S3_KEY || 'assets/surepath-logo.png';
+const LOGO_PATH = process.env.SUREPATH_LOGO_PATH || path.resolve(__dirname, 'dashboard', 'public', 'surepath-logo.png');
 
 // Brand colours
 const BRAND_RED = '#E63946';
 const BRAND_DARK = '#0D1B2A';
+const WHATSAPP_GREEN = '#25D366';
+
+// WhatsApp contact — appears at the end of every video
+const WHATSAPP_NUMBER = process.env.SUREPATH_WHATSAPP_NUMBER || '+27 79 219 8649';
+const WHATSAPP_BANNER_DURATION = 3; // seconds shown at the end
 
 /**
  * Download a file from S3 or URL to a local temp path.
@@ -23,16 +24,27 @@ const BRAND_DARK = '#0D1B2A';
 async function downloadToTemp(urlOrS3Key, extension) {
   const tmpPath = path.join(os.tmpdir(), `surepath_${Date.now()}_${Math.random().toString(36).slice(2)}${extension}`);
 
-  // If it's an S3 URL for our bucket, use GetObject
-  if (urlOrS3Key.includes(S3_BUCKET)) {
-    const key = urlOrS3Key.split('.amazonaws.com/')[1];
-    if (key) {
-      const res = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
-      const chunks = [];
-      for await (const chunk of res.Body) {
-        chunks.push(chunk);
-      }
-      fs.writeFileSync(tmpPath, Buffer.concat(chunks));
+  // Local file reference — just copy it
+  if (urlOrS3Key.startsWith('/') && fs.existsSync(urlOrS3Key)) {
+    fs.copyFileSync(urlOrS3Key, tmpPath);
+    return tmpPath;
+  }
+
+  // Our own content URLs — resolve to local path instead of HTTP fetching
+  if (urlOrS3Key.includes('surepath.co.za/content/')) {
+    const relPath = urlOrS3Key.split('surepath.co.za/content/')[1];
+    const localPath = path.resolve(__dirname, 'dashboard', 'public', 'content', relPath);
+    if (fs.existsSync(localPath)) {
+      fs.copyFileSync(localPath, tmpPath);
+      return tmpPath;
+    }
+  }
+
+  // Relative URLs for property-images served by dashboard/public/property-images
+  if (urlOrS3Key.startsWith('/property-images/')) {
+    const localPath = path.resolve(__dirname, 'dashboard', 'public', urlOrS3Key.replace(/^\//, ''));
+    if (fs.existsSync(localPath)) {
+      fs.copyFileSync(localPath, tmpPath);
       return tmpPath;
     }
   }
@@ -132,9 +144,10 @@ function generateBrandedBackground() {
  * @param {string} hookText - hook text for the opening title card
  * @param {string} outputName - Output filename (without extension)
  * @param {number} [postId] - content_posts.id to update
+ * @param {Array} [shotList] - Optional timed shot list from visuals.js
  * @returns {string} S3 URL of the final video
  */
-async function composeVideo(audioUrl, srtContent, propertyId, hookText, outputName, postId) {
+async function composeVideo(audioUrl, srtContent, propertyId, hookText, outputName, postId, shotList) {
   console.log(`[compose] Starting composition: ${outputName}`);
 
   // Verify FFmpeg is available
@@ -163,17 +176,46 @@ async function composeVideo(audioUrl, srtContent, propertyId, hookText, outputNa
   const srtPath = writeSRTToTemp(srtContent);
   const outputPath = path.join(os.tmpdir(), `surepath_final_${Date.now()}.mp4`);
 
-  // Download property photos
-  const photos = await downloadPropertyPhotos(propertyId);
-  const hasPhotos = photos.length > 0;
+  // ─── Resolve shot list → list of local file paths with durations ───
+  // If a shot list was provided (from visuals.js), use it.
+  // Otherwise fall back to the legacy behaviour: property photos slideshow.
+  const shots = [];  // { path, durationSec, isVideo }
 
-  // Download logo
+  if (shotList && shotList.length > 0) {
+    console.log(`[compose] Using shot list with ${shotList.length} shots`);
+    for (const s of shotList) {
+      const durSec = Math.max(0.5, (s.endMs - s.startMs) / 1000);
+      const isVideo = s.type === 'stock';
+      const ext = isVideo ? '.mp4' : (s.url.includes('.png') ? '.png' : '.jpg');
+      try {
+        const p = await downloadToTemp(s.url, ext);
+        shots.push({ path: p, durationSec: durSec, isVideo });
+        console.log(`  [shot] ${s.type} ${durSec.toFixed(1)}s — ${(s.description || '').substring(0, 60)}`);
+      } catch (e) {
+        console.warn(`  [shot] Failed to download ${s.url.substring(0, 80)}: ${e.message}`);
+      }
+    }
+  }
+
+  // Legacy fallback: property photos only
+  let photos = [];
+  if (shots.length === 0) {
+    photos = await downloadPropertyPhotos(propertyId);
+    for (const p of photos) {
+      shots.push({ path: p, durationSec: audioDuration / Math.max(photos.length, 1), isVideo: false });
+    }
+  }
+
+  const hasPhotos = shots.length > 0;
+
+  // Load logo from local file
   let logoPath = null;
   try {
-    logoPath = await downloadToTemp(
-      `https://${S3_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${LOGO_S3_KEY}`,
-      '.png'
-    );
+    if (fs.existsSync(LOGO_PATH)) {
+      logoPath = LOGO_PATH;
+    } else {
+      console.warn(`[compose] Logo not found at ${LOGO_PATH} — composing without watermark`);
+    }
   } catch {
     console.warn('[compose] Logo not found — composing without watermark');
   }
@@ -192,32 +234,37 @@ async function composeVideo(audioUrl, srtContent, propertyId, hookText, outputNa
   let cmd;
 
   if (hasPhotos) {
-    // ─── PHOTO SLIDESHOW MODE ───
-    // Each photo gets equal time, crossfade between them
-    const photoDuration = audioDuration / photos.length;
+    // ─── SHOT-LIST SLIDESHOW MODE (photos + stock clips mixed) ───
 
-    // Build input flags for all photos + audio
+    // Build input flags — for videos, use -t to trim; for photos, -loop 1 -t for still frames
     let inputs = '';
-    photos.forEach((p, i) => {
-      inputs += `-loop 1 -t ${photoDuration.toFixed(2)} -i "${p}" `;
+    shots.forEach((s) => {
+      if (s.isVideo) {
+        inputs += `-t ${s.durationSec.toFixed(2)} -i "${s.path}" `;
+      } else {
+        inputs += `-loop 1 -t ${s.durationSec.toFixed(2)} -i "${s.path}" `;
+      }
     });
     inputs += `-i "${audioPath}"`;
     if (logoPath) inputs += ` -i "${logoPath}"`;
 
-    const audioIdx = photos.length;
-    const logoIdx = photos.length + 1;
+    const audioIdx = shots.length;
+    const logoIdx = shots.length + 1;
 
-    // Build filter: scale each photo to 1080x1920, concatenate, add branded bar + captions
     let filter = '';
 
-    // Scale each photo to fill 1080x1920 (crop to fit vertical)
-    photos.forEach((_, i) => {
-      filter += `[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fade=t=in:st=0:d=0.3,fade=t=out:st=${(photoDuration - 0.3).toFixed(2)}:d=0.3[p${i}];`;
+    // Normalise each shot to 1080x1920, strip audio.
+    // First shot: NO fade-in (must hit viewers with a bold image immediately).
+    // Other shots: quick 0.15s fade-in for smooth crossfade feel (no black flash).
+    shots.forEach((s, i) => {
+      const isFirst = i === 0;
+      const fadeIn = isFirst ? '' : `,fade=t=in:st=0:d=0.15`;
+      filter += `[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30${fadeIn}[s${i}];`;
     });
 
-    // Concatenate all photo segments
-    photos.forEach((_, i) => { filter += `[p${i}]`; });
-    filter += `concat=n=${photos.length}:v=1:a=0[slideshow];`;
+    // Concatenate all shots
+    shots.forEach((_, i) => { filter += `[s${i}]`; });
+    filter += `concat=n=${shots.length}:v=1:a=0[slideshow];`;
 
     // Add branded bar at bottom (dark strip behind captions)
     filter += `[slideshow]drawbox=x=0:y=ih-240:w=iw:h=240:color=${BRAND_DARK.replace('#', '0x')}@0.7:t=fill[barred];`;
@@ -231,12 +278,22 @@ async function composeVideo(audioUrl, srtContent, propertyId, hookText, outputNa
     // Add captions
     filter += `[named]subtitles='${escapedSrt}':force_style='${captionStyle}'[captioned];`;
 
+    // Add WhatsApp banner for the final WHATSAPP_BANNER_DURATION seconds
+    const bannerStart = Math.max(0, audioDuration - WHATSAPP_BANNER_DURATION);
+    const waNumber = WHATSAPP_NUMBER.replace(/'/g, "\\'");
+    // Full-height green banner covering the whole frame during the last 3 seconds.
+    // Covers any lingering captions and gives the contact info the entire screen.
+    filter += `[captioned]drawbox=x=0:y=0:w=iw:h=ih:color=${WHATSAPP_GREEN.replace('#', '0x')}@0.97:t=fill:enable='gte(t\\,${bannerStart.toFixed(2)})'[wabox];`;
+    filter += `[wabox]drawtext=text='WhatsApp Nico':fontcolor=white:fontsize=64:font=Arial:x=(w-text_w)/2:y=h*0.32:enable='gte(t\\,${bannerStart.toFixed(2)})'[walabel];`;
+    filter += `[walabel]drawtext=text='${waNumber}':fontcolor=white:fontsize=110:font=Arial:x=(w-text_w)/2:y=h*0.43:enable='gte(t\\,${bannerStart.toFixed(2)})'[wanum];`;
+    filter += `[wanum]drawtext=text='Send a property listing for your Surepath report':fontcolor=white:fontsize=36:font=Arial:x=(w-text_w)/2:y=h*0.58:enable='gte(t\\,${bannerStart.toFixed(2)})'[wacta];`;
+
     // Add logo watermark if available
     if (logoPath) {
       filter += `[${logoIdx}:v]scale=100:-1,format=rgba,colorchannelmixer=aa=0.15[logo];`;
-      filter += `[captioned][logo]overlay=W-w-24:24[final]`;
+      filter += `[wacta][logo]overlay=W-w-24:24[final]`;
     } else {
-      filter += `[captioned]copy[final]`;
+      filter += `[wacta]copy[final]`;
     }
 
     cmd = `ffmpeg -y ${inputs} -filter_complex "${filter}" -map "[final]" -map ${audioIdx}:a -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -movflags +faststart -shortest -r 30 "${outputPath}" 2>&1`;
@@ -266,12 +323,22 @@ async function composeVideo(audioUrl, srtContent, propertyId, hookText, outputNa
     // Captions
     filter += `[named]subtitles='${escapedSrt}':force_style='${captionStyle}'[captioned];`;
 
+    // WhatsApp banner for the final seconds
+    const bannerStart = Math.max(0, audioDuration - WHATSAPP_BANNER_DURATION);
+    const waNumber = WHATSAPP_NUMBER.replace(/'/g, "\\'");
+    // Full-height green banner covering the whole frame during the last 3 seconds.
+    // Covers any lingering captions and gives the contact info the entire screen.
+    filter += `[captioned]drawbox=x=0:y=0:w=iw:h=ih:color=${WHATSAPP_GREEN.replace('#', '0x')}@0.97:t=fill:enable='gte(t\\,${bannerStart.toFixed(2)})'[wabox];`;
+    filter += `[wabox]drawtext=text='WhatsApp Nico':fontcolor=white:fontsize=64:font=Arial:x=(w-text_w)/2:y=h*0.32:enable='gte(t\\,${bannerStart.toFixed(2)})'[walabel];`;
+    filter += `[walabel]drawtext=text='${waNumber}':fontcolor=white:fontsize=110:font=Arial:x=(w-text_w)/2:y=h*0.43:enable='gte(t\\,${bannerStart.toFixed(2)})'[wanum];`;
+    filter += `[wanum]drawtext=text='Send a property listing for your Surepath report':fontcolor=white:fontsize=36:font=Arial:x=(w-text_w)/2:y=h*0.58:enable='gte(t\\,${bannerStart.toFixed(2)})'[wacta];`;
+
     // Logo
     if (logoPath) {
       filter += `[2:v]scale=100:-1,format=rgba,colorchannelmixer=aa=0.15[logo];`;
-      filter += `[captioned][logo]overlay=W-w-24:24[final]`;
+      filter += `[wacta][logo]overlay=W-w-24:24[final]`;
     } else {
-      filter += `[captioned]copy[final]`;
+      filter += `[wacta]copy[final]`;
     }
 
     cmd = `ffmpeg -y ${inputs} -filter_complex "${filter}" -map "[final]" -map 1:a -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -movflags +faststart -shortest -r 30 "${outputPath}" 2>&1`;
@@ -299,29 +366,18 @@ async function composeVideo(audioUrl, srtContent, propertyId, hookText, outputNa
   const fileSize = fs.statSync(outputPath).size;
   console.log(`[compose] Output: ${outputPath} (${Math.round(fileSize / 1024)}KB)`);
 
-  // Upload to S3
-  const s3Key = `content/final/${outputName}.mp4`;
-  const fileBuffer = fs.readFileSync(outputPath);
+  // Save locally — served at https://surepath.co.za/content/video/...
+  const { url } = saveFile(outputPath, 'video', `${outputName}.mp4`);
+  console.log(`[compose] Saved: ${url}`);
 
-  await s3.send(new PutObjectCommand({
-    Bucket: S3_BUCKET,
-    Key: s3Key,
-    Body: fileBuffer,
-    ContentType: 'video/mp4',
-  }));
-
-  const s3Url = `https://${S3_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${s3Key}`;
-  console.log(`[compose] Uploaded: ${s3Url}`);
-
-  // Update content_posts
   if (postId) {
-    await pool.query('UPDATE content_posts SET final_video_url = $1 WHERE id = $2', [s3Url, postId]);
+    await pool.query('UPDATE content_posts SET final_video_url = $1 WHERE id = $2', [url, postId]);
   }
 
-  // Cleanup
-  cleanup(audioPath, srtPath, outputPath, bgPath, logoPath, ...photos);
+  // Cleanup (skip logoPath — it's the source logo, not a temp)
+  cleanup(audioPath, srtPath, outputPath, bgPath, ...photos, ...shots.map((s) => s.path));
 
-  return s3Url;
+  return url;
 }
 
 module.exports = { composeVideo, downloadToTemp, writeSRTToTemp, downloadPropertyPhotos };

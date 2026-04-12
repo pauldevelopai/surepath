@@ -24,7 +24,8 @@ export default function ConversationsPage() {
     fetch("/api/conversations").then(r => r.json()).then(d => setUsers(d.users || []));
   }, []);
 
-  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
+  // Poll every 5 seconds — new WhatsApp conversations appear near-instantly
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
 
   async function openUser(phone: string) {
     setSelectedPhone(phone);

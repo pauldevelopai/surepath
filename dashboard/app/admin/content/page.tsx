@@ -13,7 +13,7 @@ export default function ContentPage() {
   const [currentStep, setCurrentStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [postId, setPostId] = useState<number | null>(null);
-  const [script, setScript] = useState({ hook: "", script: "", cta: "" });
+  const [script, setScript] = useState("");
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [captionsReady, setCaptionsReady] = useState(false);
   const [finalUrl, setFinalUrl] = useState<string | null>(null);
@@ -24,11 +24,44 @@ export default function ContentPage() {
   const [insights, setInsights] = useState<A[]>([]);
   const [selectedInsight, setSelectedInsight] = useState<A | null>(null);
 
+  // TikTok connection state
+  const [tiktok, setTiktok] = useState<{ connected: boolean; configured: boolean; account?: A } | null>(null);
+
   useEffect(() => {
     fetch("/api/content?action=insights").then(r => r.json()).then(data => {
       if (Array.isArray(data.insights)) setInsights(data.insights);
     });
+    fetch("/api/tiktok/status").then(r => r.json()).then(setTiktok);
+
+    // Check URL for TikTok callback outcome
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("tiktok_connected")) setMsg("TikTok connected");
+    if (params.get("tiktok_error")) setError(`TikTok: ${params.get("tiktok_error")}`);
+
+    // If ?id= is set, load an existing video
+    const loadId = params.get("id");
+    if (loadId) {
+      fetch("/api/content?action=list").then(r => r.json()).then(data => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const video = (data.videos || []).find((v: any) => String(v.id) === loadId);
+        if (video) {
+          setPostId(video.id);
+          setScript(video.script || "");
+          setPillar(video.pillar || PILLARS[0]);
+          setTopic(video.script?.substring(0, 60) || "Loaded draft");
+          if (video.audio_url) setAudioUrl(video.audio_url);
+          if (video.srt_content) setCaptionsReady(true);
+          if (video.final_video_url) setFinalUrl(video.final_video_url);
+          // Walk the pipeline step forward to the last completed stage
+          if (video.final_video_url) setCurrentStep(4);
+          else if (video.srt_content) setCurrentStep(3);
+          else if (video.audio_url) setCurrentStep(2);
+          else if (video.script) setCurrentStep(1);
+        }
+      });
+    }
   }, []);
+
 
   async function callApi(action: string, extra: Record<string, unknown> = {}) {
     setLoading(true);
@@ -50,7 +83,7 @@ export default function ContentPage() {
       insight: selectedInsight || undefined,
       tease_text: teaseText || undefined,
     });
-    setScript({ hook: json.hook, script: json.script, cta: json.cta });
+    setScript(json.script || "");
     setPostId(json.id);
     setCurrentStep(1);
   }
@@ -68,9 +101,18 @@ export default function ContentPage() {
   }
 
   async function saveScript() {
-    await callApi("update_script", { script: script.script });
+    await callApi("update_script", { script });
     setMsg("Script saved");
   }
+
+  const wordCount = script.trim() ? script.trim().split(/\s+/).length : 0;
+  const wordCountColour = wordCount === 0
+    ? "text-gray-400"
+    : wordCount <= 28
+      ? "text-green-600"
+      : wordCount <= 35
+        ? "text-amber-600"
+        : "text-red-600";
 
   async function generateAudio() {
     const json = await callApi("generate_audio");
@@ -99,13 +141,6 @@ export default function ContentPage() {
     }
   }
 
-  async function publish() {
-    const json = await callApi("publish");
-    if (!json.error) {
-      setMsg(json.message || "Published");
-      setCurrentStep(5);
-    }
-  }
 
   const stepClass = (step: number) =>
     currentStep >= step ? "opacity-100" : "opacity-40 pointer-events-none";
@@ -115,6 +150,26 @@ export default function ContentPage() {
       <h1 className="text-2xl font-bold mb-1">Create Video</h1>
       <p className="text-sm text-gray-500 mb-4">Turn property insights into 10-second Nico reels</p>
 
+      {/* TikTok connection status */}
+      {tiktok && (
+        <div className={`mb-4 rounded border p-3 text-xs flex items-center justify-between ${tiktok.connected ? "border-green-300 bg-green-50" : tiktok.configured ? "border-amber-300 bg-amber-50" : "border-gray-200 bg-gray-50"}`}>
+          <div>
+            {tiktok.connected ? (
+              <span className="text-green-700">TikTok connected{tiktok.account?.display_name ? ` · ${tiktok.account.display_name}` : ""}</span>
+            ) : tiktok.configured ? (
+              <span className="text-amber-700">TikTok app configured but not connected — click to authorize</span>
+            ) : (
+              <span className="text-gray-600">TikTok API not configured (set TIKTOK_CLIENT_KEY + TIKTOK_CLIENT_SECRET on server)</span>
+            )}
+          </div>
+          {tiktok.configured && (
+            <a href="/api/tiktok/connect" className="bg-black text-white px-3 py-1 rounded text-xs font-semibold hover:bg-gray-800">
+              {tiktok.connected ? "Reconnect" : "Connect TikTok"}
+            </a>
+          )}
+        </div>
+      )}
+
       {/* Tease Insights from WhatsApp */}
       {insights.length > 0 && (
         <div className="bg-white border rounded-lg p-4 mb-6">
@@ -123,13 +178,18 @@ export default function ContentPage() {
           <div className="space-y-2 max-h-64 overflow-y-auto">
             {insights.map((ins, i) => (
               <div key={i}
-                className={`border rounded p-3 cursor-pointer transition ${selectedInsight?.address === ins.address ? "border-[#E63946] bg-red-50" : "hover:bg-gray-50"}`}
+                className={`border rounded p-3 cursor-pointer transition ${selectedInsight?.address === ins.address ? "border-[#E63946] bg-red-50" : ins.videoCount > 0 ? "border-gray-200 bg-gray-50/50" : "hover:bg-gray-50"}`}
                 onClick={() => generateFromInsight(ins)}>
                 <div className="flex justify-between items-start">
                   <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm">{ins.address}</span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`font-medium text-sm ${ins.videoCount > 0 ? "text-gray-500" : ""}`}>{ins.address}</span>
                       <span className={`px-1 py-0.5 rounded text-[7px] font-bold ${ins.source === "whatsapp" ? "bg-green-100 text-green-700" : ins.source === "nico_evidence" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-600"}`}>{ins.source === "whatsapp" ? "WhatsApp" : ins.source === "nico_evidence" ? "Nico" : "Vision"}</span>
+                      {ins.videoCount > 0 && (
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${ins.anyPosted ? "bg-green-600 text-white" : "bg-blue-600 text-white"}`}>
+                          {ins.anyPosted ? `Posted · ${ins.videoCount} video${ins.videoCount > 1 ? "s" : ""}` : `${ins.videoCount} video${ins.videoCount > 1 ? "s" : ""} made`}
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-gray-500 mt-0.5">{(ins.nicoTease || ins.topRiskFlags?.[0] || "").substring(0, 150)}</div>
                   </div>
@@ -184,17 +244,16 @@ export default function ContentPage() {
       {/* Step 1: Edit script */}
       <div className={stepClass(1)}>
         <h2 className="font-bold text-lg mb-2">Script</h2>
-        <div className="mb-2">
-          <label className="text-xs text-gray-500 block">Hook (first 3 seconds)</label>
-          <input className="w-full border rounded px-3 py-2 text-sm font-bold" value={script.hook} onChange={e => setScript({ ...script, hook: e.target.value })} />
-        </div>
-        <div className="mb-2">
-          <label className="text-xs text-gray-500 block">Script (25-35 words, ~10 seconds)</label>
-          <textarea className="w-full border rounded px-3 py-2 text-sm h-24" value={script.script} onChange={e => setScript({ ...script, script: e.target.value })} />
-        </div>
-        <div className="mb-3">
-          <label className="text-xs text-gray-500 block">CTA</label>
-          <input className="w-full border rounded px-3 py-2 text-sm" value={script.cta} onChange={e => setScript({ ...script, cta: e.target.value })} />
+        <div className="mb-3 relative">
+          <label className="text-xs text-gray-500 block mb-1">Full script — hook, punch, CTA flow as one (~22-28 words for 10 seconds)</label>
+          <textarea
+            className="w-full border rounded px-3 py-2 text-sm h-32 font-medium"
+            value={script}
+            onChange={e => setScript(e.target.value)}
+          />
+          <div className={`absolute bottom-2 right-3 text-xs font-bold ${wordCountColour} bg-white/90 px-2 py-0.5 rounded`}>
+            {wordCount} words
+          </div>
         </div>
         <div className="flex gap-2">
           <button onClick={saveScript} disabled={loading} className="bg-gray-800 text-white px-4 py-2 rounded text-sm">Save Script</button>
@@ -215,37 +274,34 @@ export default function ContentPage() {
         </button>
       </div>
 
-      {/* Step 3: Captions ready → compose video */}
+      {/* Step 3: Generate the visual video (photos slideshow + captions + audio + WhatsApp banner) */}
       <div className={`mt-6 ${stepClass(3)}`}>
-        <h2 className="font-bold text-lg mb-2">Compose Video</h2>
+        <h2 className="font-bold text-lg mb-2">Video</h2>
         <p className="text-sm text-gray-500 mb-2">
           {selectedInsight?.propertyId
-            ? "Property photos will be used as slideshow background with branded caption bar."
-            : "Branded Surepath background with caption overlay."}
+            ? "Property photos will be matched to each beat of the script, with stock footage for abstract moments. Branded caption bar + WhatsApp end-banner added automatically."
+            : "Branded Surepath background with captions + WhatsApp end-banner."}
         </p>
         {captionsReady && <p className="text-xs text-green-600 mb-2">Captions ready</p>}
         <button onClick={composeFinal} disabled={loading} className="bg-[#0D1B2A] text-white px-4 py-2 rounded text-sm">
-          {loading && currentStep === 3 ? "Composing..." : "Compose Final Video"}
+          {loading && currentStep === 3 ? "Generating video... (~60s)" : "Generate Video"}
         </button>
       </div>
 
-      {/* Step 4: Final video preview + publish */}
+      {/* Step 4: Preview the finished video — stored, not auto-published */}
       <div className={`mt-6 ${stepClass(4)}`}>
-        <h2 className="font-bold text-lg mb-2">Final Video</h2>
+        <h2 className="font-bold text-lg mb-2">Preview</h2>
         {finalUrl ? (
-          <video controls src={finalUrl} className="w-full rounded max-w-sm" />
+          <>
+            <video controls src={finalUrl} className="w-full rounded max-w-sm" />
+            <div className="mt-3 bg-green-50 border border-green-200 rounded p-3 text-sm text-green-800">
+              Video saved to your library. Review and publish from the <a href="/admin/videos" className="font-bold underline">Videos page</a> when you&apos;re ready.
+            </div>
+          </>
         ) : (
           <p className="text-sm text-gray-400">Composed video will appear here</p>
         )}
-        <button onClick={publish} disabled={loading} className="mt-2 bg-[#E63946] text-white px-6 py-2 rounded font-semibold">Publish to All Platforms</button>
       </div>
-
-      {/* Step 5: Published */}
-      {currentStep >= 5 && (
-        <div className="mt-6 bg-green-50 p-4 rounded text-green-800 text-sm">
-          Published to Instagram, TikTok, and YouTube.
-        </div>
-      )}
 
       {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
       {msg && !error && <p className="mt-4 text-sm text-blue-600">{msg}</p>}

@@ -21,6 +21,10 @@ const SCRAPERS = [
   { id: "fibre", label: "Fibre Coverage", desc: "ISP coverage check — Openserve, Vumatel, Frogfoot", color: "bg-indigo-700", hover: "hover:bg-indigo-800" },
   { id: "electricity", label: "Electricity", desc: "Eskom/municipal tariffs + load shedding status — monthly cost estimates", color: "bg-amber-700", hover: "hover:bg-amber-800" },
   { id: "articles", label: "Articles", desc: "SA construction, renovation, defect articles — web sources to Knowledge Base", color: "bg-[#E63946]", hover: "hover:bg-red-700" },
+  { id: "pexels", label: "Pexels Stock Footage", desc: "Vertical stock videos for social content — kitchens, defects, signing, emotion (API)", color: "bg-pink-600", hover: "hover:bg-pink-700" },
+  { id: "mixkit", label: "Mixkit Free Videos", desc: "Free stock videos scraped and trimmed to 2s — stored in our S3 so we own them", color: "bg-fuchsia-600", hover: "hover:bg-fuchsia-700" },
+  { id: "unsplash", label: "Unsplash Free Photos", desc: "Free stock photos for beats where stills work better than video", color: "bg-violet-600", hover: "hover:bg-violet-700" },
+  { id: "trending", label: "Trending Hashtags", desc: "Refresh SA property trending hashtags from TikTok Creative Center + curated list for captions", color: "bg-purple-700", hover: "hover:bg-purple-800" },
 ];
 
 function formatDuration(startStr: string): string {

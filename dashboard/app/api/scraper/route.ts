@@ -526,6 +526,18 @@ export const POST = withAuth(async (req: NextRequest) => {
           await pool.end();
         })();
       `];
+    } else if (source === "pexels") {
+      scraperName = "pexels";
+      args = [scriptPath("scrape-pexels.js")];
+    } else if (source === "mixkit") {
+      scraperName = "mixkit";
+      args = [scriptPath("scrape-mixkit.js")];
+    } else if (source === "unsplash") {
+      scraperName = "unsplash";
+      args = [scriptPath("scrape-unsplash-photos.js")];
+    } else if (source === "trending") {
+      scraperName = "trending";
+      args = [scriptPath("scrape-trending-hashtags.js")];
     } else if (source === "articles") {
       scraperName = "articles";
       args = ["-e", `

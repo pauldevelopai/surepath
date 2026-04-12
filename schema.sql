@@ -95,12 +95,68 @@ CREATE TABLE content_posts (
   pillar TEXT NOT NULL,
   hook TEXT NOT NULL, script TEXT, cta TEXT NOT NULL,
   audio_url TEXT, avatar_video_url TEXT, final_video_url TEXT,
-  srt_content TEXT, srt_url TEXT, property_id INTEGER,
+  srt_content TEXT, srt_url TEXT, property_id INTEGER, downloaded_at TIMESTAMPTZ,
   status content_status NOT NULL DEFAULT 'draft',
   instagram_post_id TEXT, tiktok_post_id TEXT, youtube_post_id TEXT,
   scheduled_for TIMESTAMPTZ, posted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE trending_hashtags (
+  id SERIAL PRIMARY KEY,
+  tag TEXT UNIQUE NOT NULL,
+  category TEXT,
+  rank INTEGER,
+  score NUMERIC,
+  post_count BIGINT,
+  source TEXT NOT NULL DEFAULT 'curated',
+  region TEXT DEFAULT 'ZA',
+  active BOOLEAN DEFAULT TRUE,
+  first_seen TIMESTAMPTZ DEFAULT NOW(),
+  last_seen TIMESTAMPTZ DEFAULT NOW(),
+  fetched_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_trending_hashtags_active_rank ON trending_hashtags(active, rank) WHERE active = TRUE;
+CREATE INDEX idx_trending_hashtags_category ON trending_hashtags(category);
+
+CREATE TABLE tiktok_accounts (
+  id SERIAL PRIMARY KEY,
+  open_id TEXT UNIQUE NOT NULL,
+  union_id TEXT,
+  display_name TEXT,
+  access_token TEXT NOT NULL,
+  refresh_token TEXT,
+  access_token_expires_at TIMESTAMPTZ,
+  refresh_token_expires_at TIMESTAMPTZ,
+  scope TEXT,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE stock_footage (
+  id SERIAL PRIMARY KEY,
+  source TEXT NOT NULL DEFAULT 'pexels',
+  source_id TEXT NOT NULL,
+  media_type TEXT DEFAULT 'video',
+  video_url TEXT NOT NULL,
+  thumbnail_url TEXT,
+  preview_url TEXT,
+  s3_key TEXT,
+  trimmed BOOLEAN DEFAULT FALSE,
+  duration_seconds NUMERIC,
+  width INTEGER,
+  height INTEGER,
+  category TEXT,
+  keyword TEXT,
+  tags JSONB,
+  description TEXT,
+  photographer TEXT,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(source, source_id)
+);
+CREATE INDEX idx_stock_footage_category ON stock_footage(category);
+CREATE INDEX idx_stock_footage_keyword ON stock_footage(keyword);
 
 CREATE TABLE api_clients (
   id SERIAL PRIMARY KEY,

@@ -27,7 +27,11 @@ function generateCaptions(scriptText, durationSec, wordsPerLine = 4) {
   const words = scriptText.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return '';
 
-  const totalMs = durationSec * 1000;
+  // Trim caption window so it ends before the WhatsApp banner appears
+  // Banner shows in last 3 seconds — captions stop at duration - 3s
+  const BANNER_DURATION_SEC = 3;
+  const captionWindowSec = Math.max(durationSec - BANNER_DURATION_SEC, durationSec * 0.6);
+  const totalMs = captionWindowSec * 1000;
   const msPerWord = totalMs / words.length;
 
   const lines = [];

@@ -1,11 +1,8 @@
 const https = require('https');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const pool = require('./db');
+const { saveBuffer } = require('./storage');
 
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
-const S3_BUCKET = process.env.AWS_S3_BUCKET || 'surepath-reports';
-const AWS_REGION = process.env.AWS_REGION || 'af-south-1';
-const s3 = new S3Client({ region: AWS_REGION });
 
 // Default voice — change to your cloned Nico voice ID
 const DEFAULT_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'pNInz6obpgDQGcFmaJgB';
@@ -88,26 +85,16 @@ async function generateVoice(scriptText, voiceId, postId) {
     console.warn(`[voice] WARNING: duration ~${durationSec}s is outside 8-15s target range for 10s reels`);
   }
 
-  // Upload to S3
+  // Save locally — served at https://surepath.co.za/content/audio/...
   const timestamp = Date.now();
-  const s3Key = `content/audio/${timestamp}.mp3`;
+  const { url, localPath } = saveBuffer(mp3Buffer, 'audio', `${timestamp}.mp3`);
+  console.log(`[voice] Saved: ${url} (${localPath})`);
 
-  await s3.send(new PutObjectCommand({
-    Bucket: S3_BUCKET,
-    Key: s3Key,
-    Body: mp3Buffer,
-    ContentType: 'audio/mpeg',
-  }));
-
-  const s3Url = `https://${S3_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${s3Key}`;
-  console.log(`[voice] Uploaded: ${s3Url}`);
-
-  // Update content_posts if postId provided
   if (postId) {
-    await pool.query('UPDATE content_posts SET audio_url = $1 WHERE id = $2', [s3Url, postId]);
+    await pool.query('UPDATE content_posts SET audio_url = $1 WHERE id = $2', [url, postId]);
   }
 
-  return s3Url;
+  return url;
 }
 
 module.exports = { generateVoice, callElevenLabs, estimateDuration };
