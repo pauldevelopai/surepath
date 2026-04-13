@@ -154,7 +154,7 @@ export default function VideosPage() {
       </div>
 
       {/* Summary stats */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
         <div className="bg-white border rounded-lg p-3">
           <div className="text-2xl font-bold">{counts.total}</div>
           <div className="text-xs text-gray-500">Total</div>
@@ -186,7 +186,7 @@ export default function VideosPage() {
           </a>
         </div>
       ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {videos.map((v) => {
             const status = getStatus(v);
             const address = v.address_normalised || v.address_raw || "—";

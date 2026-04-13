@@ -1,1 +1,33 @@
 @import "tailwindcss";
+
+/* Mobile safety: prevent horizontal page overflow from rogue wide content.
+   Individual tables/charts can still scroll inside their own wrapper. */
+html, body {
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Tables: make them horizontally scrollable on mobile instead of breaking layout. */
+@media (max-width: 767px) {
+  table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+
+  /* Common chart / wide-content containers should scroll rather than overflow. */
+  .overflow-x-safe {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Make buttons and inputs a bit bigger on touch for usability */
+  input[type="text"],
+  input[type="number"],
+  input[type="email"],
+  textarea,
+  select {
+    font-size: 16px; /* prevents iOS zoom on focus */
+  }
+}

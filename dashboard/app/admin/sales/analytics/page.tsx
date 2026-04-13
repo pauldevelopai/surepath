@@ -116,7 +116,7 @@ export default function MoneyPage() {
       )}
 
       {/* Revenue cards */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6">
         {[
           { label: "Revenue Today", value: formatZAR(data.revenue_today), sub: data.orders_today_paid > 0 ? `${data.orders_today_paid} paid` : `${data.orders_today} reports${data.orders_today_free ? ` (${data.orders_today_free} free)` : ""}` },
           { label: "Revenue This Month", value: formatZAR(data.revenue_month), sub: data.orders_month_paid > 0 ? `${data.orders_month_paid} paid, ${data.orders_month_free || 0} free` : `${data.orders_month} reports${data.orders_month_free ? ` (${data.orders_month_free} free)` : ""}` },
@@ -150,7 +150,7 @@ export default function MoneyPage() {
       {/* Payment integration */}
       <div className="bg-white border rounded-lg p-4 mb-6">
         <h2 className="font-bold text-sm mb-2">Payment Integration</h2>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
           <div className={`border rounded p-3 ${provider === "yoco" ? "border-green-400 bg-green-50" : ""}`}>
             <div className="flex items-center justify-between mb-1">
               <div className="text-xs font-bold">Yoco</div>
