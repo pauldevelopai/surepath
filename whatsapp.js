@@ -1187,7 +1187,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
     if (isGreeting) {
       await upsertConversation(phoneNumber, { state: 'awaiting_property', tease_data: null });
       await sendWhatsApp(from,
-        `Welcome to Surepath 👋\n\nI check properties for hidden risks before you buy.\n\nPaste a PrivateProperty or Property24 listing link and I'll pull the photos, analyse them for defects, and give you a quick preview — free.`
+        `Welcome to Surepath 👋\n\nI check properties for hidden risks before you buy.\n\nPaste a PrivateProperty or Property24 listing link and I'll pull the photos, analyse them for defects, and give you a quick preview.`
       );
       res.type('text/xml').send('<Response></Response>');
       return;
@@ -1224,7 +1224,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
       case 'awaiting_property': {
         await upsertConversation(phoneNumber, { state: 'awaiting_property' });
         await sendWhatsApp(from,
-          `Welcome to Surepath 👋\n\nI check properties for hidden risks before you buy.\n\nPaste a PrivateProperty or Property24 listing link and I'll pull the photos, analyse them for defects, and give you a quick preview — free.\n\nThe full report includes crime stats, infrastructure risks, and repair cost estimates — R${getLiveSettings().report_price||169}.`
+          `Welcome to Surepath 👋\n\nI check properties for hidden risks before you buy.\n\nPaste a PrivateProperty or Property24 listing link and I'll pull the photos, analyse them for defects, and give you a quick preview.\n\nThe full report includes crime stats, infrastructure risks, and repair cost estimates — R${getLiveSettings().report_price||169}.`
         );
         break;
       }
@@ -1383,7 +1383,7 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
       default: {
         await upsertConversation(phoneNumber, { state: 'awaiting_property' });
         await sendWhatsApp(from,
-          "Welcome to Surepath 👋\n\nPaste a PrivateProperty or Property24 listing link and I'll give you a free risk preview."
+          "Welcome to Surepath 👋\n\nPaste a PrivateProperty or Property24 listing link and I'll give you a quick risk preview."
         );
       }
     }
