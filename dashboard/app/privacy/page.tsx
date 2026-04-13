@@ -1,11 +1,15 @@
+import { SiteHeader, SiteFooter } from "../components/SiteChrome";
+
 export const metadata = {
-  title: "Privacy Policy | Surepath",
+  title: "Privacy Policy",
 };
 
 export default function PrivacyPage() {
   return (
-    <div className="max-w-3xl mx-auto px-6 py-12 text-gray-800">
-      <h1 className="text-3xl font-bold mb-6">Privacy Policy</h1>
+    <div className="bg-white">
+      <SiteHeader />
+      <div className="max-w-3xl mx-auto px-6 py-12 text-gray-800">
+        <h1 className="text-3xl font-bold mb-6">Privacy Policy</h1>
       <p className="text-sm text-gray-500 mb-8">Last updated: 12 April 2026</p>
 
       <section className="space-y-4 text-sm leading-relaxed">
@@ -52,6 +56,8 @@ export default function PrivacyPage() {
           For privacy questions, WhatsApp +27 79 219 8649.
         </p>
       </section>
+      </div>
+      <SiteFooter />
     </div>
   );
 }
