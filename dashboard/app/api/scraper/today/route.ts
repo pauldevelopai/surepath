@@ -172,29 +172,60 @@ export const GET = withAuth(async (req: NextRequest) => {
     try {
       const Anthropic = (await import("@anthropic-ai/sdk")).default;
       const claude = new Anthropic();
-      const prompt = `You are a data-pipeline analyst for SurePath, a South African property due-diligence platform. Below is a snapshot of last night's scraper run + 7-day stats. Respond with a CONCISE morning brief (markdown, ~250 words max) covering:
 
-1. **Headline** — one line, what's the overall health.
-2. **Issues to fix today** — bullet list of scrapers that look broken (high fail rate, timeouts, empty results) with a likely root cause inferred from the error sample.
-3. **Coverage gaps** — what data is most behind (use backlog).
-4. **New data sources to consider** — 2-3 specific SA property data sources we don't yet scrape that would meaningfully improve a property report (be specific to ZA: deeds, municipal, environmental, demographics, lifestyle, etc.).
+      // Scrapers that already exist — so the model doesn't suggest ones we already have
+      const existingScrapers = [
+        "PrivateProperty + Property24 listings", "Crime (SAPS precinct stats)",
+        "Solar (PVGIS)", "Water quality (DWS Blue/Green Drop)",
+        "Municipal valuation roll (6 metros)", "SAPS stations + CPF",
+        "Security coverage (Assist247, Procompare)", "Schools (Google Places 3km)",
+        "Climate (Open-Meteo rainfall/wind/humidity)", "Load shedding (EskomSePush)",
+        "Sold prices + price trends (Property24)", "True cost (transfer duty, bond, attorney)",
+        "Fibre coverage (Openserve, Vumatel, Frogfoot)", "Electricity tariffs",
+        "Deeds (GVR free + DeedsWeb per-query)",
+        "Articles (SA construction/defect knowledge)",
+        "Stock footage (Pexels, Mixkit, Unsplash)", "TikTok trending hashtags",
+      ].join("; ");
+
+      const noData = lastNight.length === 0 && gaps.length > 0;
+
+      const prompt = `You write a morning brief for the SurePath scraper operator. SurePath is a SA property due-diligence service.
+
+OUTPUT RULES (strict):
+- Plain text. No markdown headings, no tables, no horizontal rules, no emojis, no bold.
+- 5 bullets maximum, each one line, each starts with "- ".
+- No filler, no restating the question, no greetings, no closing line.
+- If there is nothing to say in a section, skip it — do not pad.
+- Total length: 80 words max.
+- When you mention a scraper, use its exact name.
+- Do NOT suggest data sources we already have (listed below).
+
+WHAT TO COVER (only if there's real signal):
+1. One-line health verdict.
+2. Broken scrapers + likely cause, inferred from error_sample (only if fail_rate or errors > 0).
+3. Biggest coverage backlog and the one scraper to run today to close it.
+4. One new SA data source worth adding (only if genuinely novel — not on the existing list).
+
+EXISTING SCRAPERS (do not propose these): ${existingScrapers}
 
 DATA:
-Last night totals: ${JSON.stringify(totals)}
-Per-scraper last night: ${JSON.stringify(lastNight)}
-Scheduled-but-missing: ${JSON.stringify(gaps)}
-7-day underperformers: ${JSON.stringify(underperformers)}
-Backlog: ${JSON.stringify(backlog)}`;
+last_night_totals=${JSON.stringify(totals)}
+per_scraper=${JSON.stringify(lastNight)}
+scheduled_missing=${JSON.stringify(gaps)}
+underperformers_7d=${JSON.stringify(underperformers)}
+backlog=${JSON.stringify(backlog)}
+
+${noData ? "NOTE: no runs recorded in last 24h — likely the tracker wasn't running during the last cron. Skip the health verdict; lead with the single action that will produce real data (e.g. trigger a manual run), then note the biggest backlog." : ""}`;
 
       const resp = await claude.messages.create({
         model: "claude-sonnet-4-6",
-        max_tokens: 800,
+        max_tokens: 400,
         messages: [{ role: "user", content: prompt }],
       });
       const block = resp.content.find((b) => b.type === "text");
-      suggestions = block && block.type === "text" ? block.text : null;
+      suggestions = block && block.type === "text" ? block.text.trim() : null;
     } catch (e) {
-      suggestions = `_AI suggestions unavailable: ${(e as Error).message}_`;
+      suggestions = `AI brief unavailable: ${(e as Error).message}`;
     }
   }
 

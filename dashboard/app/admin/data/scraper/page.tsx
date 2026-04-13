@@ -264,11 +264,11 @@ export default function ScraperPage() {
               </div>
             </div>
 
-            {/* AI brief */}
+            {/* AI brief — plain text bullets, no markdown rendering */}
             {t.suggestions && (
               <div className="bg-amber-950/30 border border-amber-900/40 rounded p-3">
-                <div className="text-xs font-bold text-amber-300 mb-2">🤖 AI Morning Brief</div>
-                <div className="text-[12px] text-amber-100 whitespace-pre-wrap leading-relaxed">{t.suggestions}</div>
+                <div className="text-xs font-bold text-amber-300 mb-2">AI Morning Brief</div>
+                <div className="text-[12px] text-amber-100 whitespace-pre-wrap leading-relaxed font-sans">{t.suggestions}</div>
               </div>
             )}
           </>
