@@ -45,6 +45,9 @@ export default function ScraperPage() {
   const [showErrors, setShowErrors] = useState(false);
   const [expandedLogs, setExpandedLogs] = useState<Record<string, boolean>>({});
   const [now, setNow] = useState(Date.now());
+  const [today, setToday] = useState<any>(null);
+  const [todayLoading, setTodayLoading] = useState(true);
+  const [aiLoading, setAiLoading] = useState(false);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   const load = useCallback(() => {
@@ -53,6 +56,17 @@ export default function ScraperPage() {
     fetch("/api/scraper", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "scraper_status" }) })
       .then(r => r.json()).then(setMasterStatus).catch(() => {});
   }, []);
+
+  const loadToday = useCallback((withSuggestions: boolean) => {
+    if (withSuggestions) setAiLoading(true);
+    fetch(`/api/scraper/today${withSuggestions ? "?suggestions=1" : ""}`)
+      .then(r => r.json())
+      .then(setToday)
+      .catch(() => {})
+      .finally(() => { setTodayLoading(false); setAiLoading(false); });
+  }, []);
+
+  useEffect(() => { loadToday(false); }, [loadToday]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -127,6 +141,10 @@ export default function ScraperPage() {
     fibre:         { pending: 0, done: s.fibre_total || 0, total: s.fibre_total || 0, unit: "areas" },
     electricity:   { pending: 0, done: s.electricity_total || 0, total: s.electricity_total || 0, unit: "areas" },
     articles:      { pending: 0, done: s.kb_total || 0, total: s.kb_total || 0, unit: "entries" },
+    pexels:        { pending: 0, done: s.pexels_total || 0, total: s.pexels_total || 0, unit: "videos" },
+    mixkit:        { pending: 0, done: s.mixkit_total || 0, total: s.mixkit_total || 0, unit: "videos" },
+    unsplash:      { pending: 0, done: s.unsplash_total || 0, total: s.unsplash_total || 0, unit: "photos" },
+    trending:      { pending: 0, done: s.trending_total || 0, total: s.trending_total || 0, unit: "tags" },
   };
 
   const ragLayers: Record<string, number> = s.rag_chunks_by_layer || {};
@@ -144,8 +162,119 @@ export default function ScraperPage() {
     security_company: "bg-cyan-700",
   };
 
+  const t = today || {};
+  const tTotals = t.totals || { runs: 0, collected: 0, errors: 0, failed_scrapers: 0, empty_scrapers: 0 };
+  const tLastNight: any[] = t.last_night || [];
+  const tGaps: string[] = t.gaps || [];
+  const tUnder: any[] = t.underperformers || [];
+  const tBacklog: any[] = t.backlog || [];
+
   return (
     <div>
+      {/* ─── Today review ─── */}
+      <div className="mb-4 bg-gradient-to-br from-[#0D1B2A] to-[#1a2a3f] rounded-lg p-4 border border-gray-700">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="text-lg font-bold text-white">☀️ Today — Morning Review</h2>
+            <p className="text-[11px] text-gray-400">Last 24 hours of scraper activity</p>
+          </div>
+          <button
+            onClick={() => loadToday(true)}
+            disabled={aiLoading}
+            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded disabled:opacity-50"
+          >
+            {aiLoading ? "Analyzing…" : t.suggestions ? "Refresh AI Brief" : "Generate AI Brief"}
+          </button>
+        </div>
+
+        {todayLoading ? (
+          <p className="text-gray-500 text-sm">Loading…</p>
+        ) : (
+          <>
+            {/* Top-line tiles */}
+            <div className="grid grid-cols-5 gap-2 mb-3">
+              <div className="bg-black/30 rounded p-2"><div className="text-[10px] text-gray-500 uppercase">Runs</div><div className="text-xl font-bold text-white">{tTotals.runs}</div></div>
+              <div className="bg-black/30 rounded p-2"><div className="text-[10px] text-gray-500 uppercase">Collected</div><div className="text-xl font-bold text-green-400">{tTotals.collected.toLocaleString()}</div></div>
+              <div className="bg-black/30 rounded p-2"><div className="text-[10px] text-gray-500 uppercase">Errors</div><div className={"text-xl font-bold " + (tTotals.errors > 0 ? "text-red-400" : "text-gray-500")}>{tTotals.errors}</div></div>
+              <div className="bg-black/30 rounded p-2"><div className="text-[10px] text-gray-500 uppercase">Failed</div><div className={"text-xl font-bold " + (tTotals.failed_scrapers > 0 ? "text-red-400" : "text-gray-500")}>{tTotals.failed_scrapers}</div></div>
+              <div className="bg-black/30 rounded p-2"><div className="text-[10px] text-gray-500 uppercase">Empty</div><div className={"text-xl font-bold " + (tTotals.empty_scrapers > 0 ? "text-amber-400" : "text-gray-500")}>{tTotals.empty_scrapers}</div></div>
+            </div>
+
+            {tLastNight.length === 0 && (
+              <p className="text-amber-400 text-sm bg-amber-950/30 border border-amber-900/40 rounded p-2 mb-3">
+                No scraper runs recorded in the last 24 hours. Either nothing was scheduled or the run tracker is not yet wired into your cron.
+              </p>
+            )}
+
+            {/* Per-scraper last night */}
+            {tLastNight.length > 0 && (
+              <div className="mb-3">
+                <div className="text-xs font-semibold text-gray-300 mb-1">Last night per scraper</div>
+                <div className="bg-black/40 rounded overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead className="bg-black/40 text-gray-400">
+                      <tr>
+                        <th className="text-left px-2 py-1">Scraper</th>
+                        <th className="text-right px-2 py-1">Collected</th>
+                        <th className="text-right px-2 py-1">Errors</th>
+                        <th className="text-right px-2 py-1">Duration</th>
+                        <th className="text-left px-2 py-1">Status</th>
+                        <th className="text-left px-2 py-1">Last error</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tLastNight.map((row: any) => (
+                        <tr key={row.scraper} className="border-t border-gray-800">
+                          <td className="px-2 py-1 text-white font-mono">{row.scraper}</td>
+                          <td className="px-2 py-1 text-right text-green-300">{row.collected}</td>
+                          <td className={"px-2 py-1 text-right " + (row.errors > 0 ? "text-red-400" : "text-gray-600")}>{row.errors}</td>
+                          <td className="px-2 py-1 text-right text-gray-400">{row.duration_seconds}s</td>
+                          <td className="px-2 py-1">
+                            <span className={"px-1.5 py-0.5 rounded text-[10px] " +
+                              (row.status === "success" ? "bg-green-900/60 text-green-300" :
+                               row.status === "failed" || row.status === "timeout" ? "bg-red-900/60 text-red-300" :
+                               row.status === "empty" ? "bg-gray-800 text-gray-400" :
+                               "bg-amber-900/60 text-amber-300")}>{row.status}</span>
+                          </td>
+                          <td className="px-2 py-1 text-red-400 truncate max-w-md" title={row.last_error || ""}>{row.last_error || ""}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Gaps + underperformers + backlog */}
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              <div className="bg-black/30 rounded p-2">
+                <div className="text-xs font-semibold text-gray-300 mb-1">Scheduled but didn&apos;t run</div>
+                {tGaps.length === 0 ? <div className="text-[11px] text-gray-500">None — all scheduled scrapers ran ✓</div> :
+                  <div className="flex flex-wrap gap-1">{tGaps.map((g) => <span key={g} className="px-1.5 py-0.5 bg-amber-900/60 text-amber-300 text-[10px] rounded font-mono">{g}</span>)}</div>}
+              </div>
+              <div className="bg-black/30 rounded p-2">
+                <div className="text-xs font-semibold text-gray-300 mb-1">7-day underperformers</div>
+                {tUnder.length === 0 ? <div className="text-[11px] text-gray-500">None ✓</div> :
+                  <ul className="text-[11px] space-y-0.5">{tUnder.slice(0, 5).map((u: any) => <li key={u.scraper} className="text-red-300"><span className="font-mono">{u.scraper}</span> — {u.fail_rate}% fail, {u.collected} collected over {u.runs} runs</li>)}</ul>}
+              </div>
+              <div className="bg-black/30 rounded p-2">
+                <div className="text-xs font-semibold text-gray-300 mb-1">Coverage backlog</div>
+                {tBacklog.length === 0 ? <div className="text-[11px] text-gray-500">—</div> :
+                  <ul className="text-[11px] space-y-0.5">{tBacklog.map((b: any) => <li key={b.type} className="text-gray-300"><span className="font-mono">{b.type}</span>: <span className="text-amber-300">{Number(b.pending).toLocaleString()}</span> pending</li>)}</ul>}
+              </div>
+            </div>
+
+            {/* AI brief */}
+            {t.suggestions && (
+              <div className="bg-amber-950/30 border border-amber-900/40 rounded p-3">
+                <div className="text-xs font-bold text-amber-300 mb-2">🤖 AI Morning Brief</div>
+                <div className="text-[12px] text-amber-100 whitespace-pre-wrap leading-relaxed">{t.suggestions}</div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
       {/* Master scraper status banner */}
       {masterStatus?.running && (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
@@ -278,7 +407,7 @@ export default function ScraperPage() {
         {SCRAPERS.map(sc => {
           const proc = getProcessInfo(sc.id);
           const log = getLog(sc.id);
-          const ct = counts[sc.id];
+          const ct = counts[sc.id] || { pending: 0, done: 0, total: 0, unit: "" };
           const pct = ct.total > 0 ? Math.round((ct.done / ct.total) * 100) : 0;
           const hasErrors = log.some(l => l.includes("ERROR") || l.includes("FAIL"));
           const logExpanded = expandedLogs[sc.id] || false;

@@ -17,14 +17,22 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') }
 
 const { spawn } = require('child_process');
 const path = require('path');
+const tracker = require(path.resolve(__dirname, '..', 'scraper-run-tracker'));
 
 const ROOT = path.resolve(__dirname, '..');
 const BOOTSTRAP = __dirname;
 
+let CURRENT_RUN_ID = null;
+
 function runCmd({ name, cmd, args, cwd = ROOT, nice = false, timeoutMin = 90 }) {
-  return new Promise((resolve) => {
+  return new Promise(async (resolve) => {
     const start = Date.now();
     console.log(`\n[orchestrator] START ${name}`);
+
+    const itemId = await tracker.startItem(CURRENT_RUN_ID, name);
+    let collected = 0;
+    let errorSample = null;
+    let timedOut = false;
 
     const actualCmd = nice ? 'nice' : cmd;
     const actualArgs = nice ? ['-n', '15', cmd, ...args] : args;
@@ -32,23 +40,40 @@ function runCmd({ name, cmd, args, cwd = ROOT, nice = false, timeoutMin = 90 }) 
     const child = spawn(actualCmd, actualArgs, { cwd, env: process.env, stdio: 'pipe' });
 
     child.stdout.on('data', (c) => {
-      const lines = c.toString().trim().split('\n');
+      const text = c.toString();
+      // Heuristic: count "OK" / "NEW" / "stored" / "success" lines as collected items
+      for (const line of text.split('\n')) {
+        if (/\b(OK|NEW|stored|success)\b/i.test(line)) collected++;
+      }
+      const lines = text.trim().split('\n');
       const last = lines[lines.length - 1];
       if (last) console.log(`  [${name}] ${last.slice(0, 200)}`);
     });
     child.stderr.on('data', (c) => {
-      console.error(`  [${name}:err] ${c.toString().trim().slice(0, 200)}`);
+      const text = c.toString().trim();
+      if (text && !errorSample) errorSample = text.slice(0, 500);
+      console.error(`  [${name}:err] ${text.slice(0, 200)}`);
     });
 
     const killTimer = setTimeout(() => {
       console.error(`[${name}] TIMEOUT (${timeoutMin} min) — killing`);
+      timedOut = true;
       child.kill('SIGKILL');
     }, timeoutMin * 60 * 1000);
 
-    child.on('exit', (code) => {
+    child.on('exit', async (code) => {
       clearTimeout(killTimer);
       const secs = Math.round((Date.now() - start) / 1000);
       console.log(`[orchestrator] ${name} exited code=${code} duration=${secs}s`);
+      const status = timedOut ? 'timeout'
+                   : code === 0 ? (collected > 0 ? 'success' : 'empty')
+                   : 'failed';
+      await tracker.endItem(itemId, {
+        collected,
+        errors: code === 0 ? 0 : 1,
+        status,
+        errorSample: status === 'failed' || status === 'timeout' ? (errorSample || `exit ${code}`) : null,
+      });
       resolve(code);
     });
   });
@@ -214,10 +239,28 @@ async function run() {
 
   console.log(`[orchestrator] Queued ${jobs.length}: ${jobs.map((j) => j.name).join(', ')}`);
 
+  CURRENT_RUN_ID = await tracker.startRun({
+    runType: 'scheduled',
+    trigger: 'cron',
+    notes: `dow=${dayOfWeek} dom=${dayOfMonth} jobs=${jobs.map((j) => j.name).join(',')}`,
+  });
+
+  let totalErrors = 0;
   for (const job of jobs) {
-    try { await runCmd(job); }
-    catch (e) { console.error(`[orchestrator] ${job.name} crashed: ${e.message}`); }
+    try {
+      const code = await runCmd(job);
+      if (code !== 0) totalErrors++;
+    } catch (e) {
+      console.error(`[orchestrator] ${job.name} crashed: ${e.message}`);
+      totalErrors++;
+    }
   }
+
+  await tracker.endRun(CURRENT_RUN_ID, {
+    status: totalErrors === 0 ? 'success' : (totalErrors === jobs.length ? 'failed' : 'partial'),
+    totalCollected: 0, // per-item collected is recorded per scraper_run_items row
+    totalErrors,
+  });
 
   console.log('\n[orchestrator] ALL DONE');
   process.exit(0);

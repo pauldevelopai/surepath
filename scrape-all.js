@@ -17,6 +17,7 @@ require('dotenv').config();
 const pool = require('./db');
 const fs = require('fs');
 const path = require('path');
+const tracker = require('./scraper-run-tracker');
 
 const STATUS_FILE = '/tmp/surepath-scraper-status.json';
 const STOP_FILE = '/tmp/surepath-scraper-stop';
@@ -447,6 +448,9 @@ async function main() {
   log('=== SUREPATH MASTER SCRAPER STARTED ===');
   log(`${SCRAPERS.length} scrapers, batch size ${BATCH_SIZE}, ${onceOnly ? 'single pass' : 'continuous'}`);
 
+  const runId = await tracker.startRun({ runType: 'master', trigger: 'dashboard', notes: onceOnly ? 'single pass' : 'continuous' });
+  let runCollected = 0, runErrors = 0;
+
   let pass = 0;
 
   while (true) {
@@ -462,6 +466,7 @@ async function main() {
       updateStatus({ current_scraper: scraper.label });
       log(`[${scraper.name}] Starting...`);
 
+      const itemId = await tracker.startItem(runId, scraper.name);
       try {
         const result = await withTimeout(() => scraper.fn(), 120000, scraper.name);
         const scraperStatus = status.scrapers[scraper.name] || { total_processed: 0, total_errors: 0, runs: 0 };
@@ -476,8 +481,17 @@ async function main() {
 
         if (!result.done) allDone = false;
         log(`[${scraper.name}] Done: ${result.processed || 0} processed, ${result.errors || 0} errors${result.done ? ' (ALL COMPLETE)' : ''}`);
+
+        runCollected += result.processed || 0;
+        runErrors += result.errors || 0;
+        const itemStatus = (result.processed || 0) === 0 && (result.errors || 0) === 0
+          ? 'empty'
+          : (result.errors || 0) > 0 ? 'partial' : 'success';
+        await tracker.endItem(itemId, { collected: result.processed || 0, errors: result.errors || 0, status: itemStatus });
       } catch (e) {
         log(`[${scraper.name}] FATAL: ${e.message}`);
+        runErrors++;
+        await tracker.endItem(itemId, { collected: 0, errors: 1, status: 'failed', errorSample: e.message });
         // Don't let a timeout stop the whole loop — move to next scraper
       }
 
@@ -510,13 +524,19 @@ async function main() {
   // RAG re-seed happens via PM2 cron at 3am daily (rag-reseed process)
   // or manually via the "Re-seed RAG" button on the scraper page
 
+  const finalStatus = status.stopped_reason === 'all_complete' ? 'success'
+                    : status.stopped_reason === 'user_stopped' ? 'killed'
+                    : status.stopped_reason === 'single_pass' ? 'success'
+                    : runErrors > 0 ? 'partial' : 'success';
+  await tracker.endRun(runId, { status: finalStatus, totalCollected: runCollected, totalErrors: runErrors });
+
   await pool.end();
   log('=== MASTER SCRAPER EXITED ===');
 }
 
-main().catch(e => {
+main().catch(async (e) => {
   console.error('Fatal error:', e);
   updateStatus({ running: false, stopped_reason: 'error: ' + e.message });
-  pool.end();
+  try { await pool.end(); } catch {}
   process.exit(1);
 });

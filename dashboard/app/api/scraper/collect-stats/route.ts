@@ -3,7 +3,7 @@ import { query } from "@/lib/db";
 import { withAuth } from "@/lib/auth";
 
 export const GET = withAuth(async () => {
-  const [crimePending, crimeTotal, solarPending, solarTotal, ppTotal, ppLatest, suburbs, suburbsWithListings, securityPending, securityTotal, sapsTotal, assist247Suburbs, procompareCompanies, waterPending, waterTotal, gvrTotal, schoolsTotal, schoolsPending, climateTotal, climatePending, loadsheddingTotal, soldpricesTotal, fibreTotal, kbTotal, kbActive, electricityTotal, ragChunksByLayer, ragLastSeeded, ragPending, pricetrendsTotal, pricetrendsPending, propertycostsTotal, propertycostsPending] = await Promise.all([
+  const [crimePending, crimeTotal, solarPending, solarTotal, ppTotal, ppLatest, suburbs, suburbsWithListings, securityPending, securityTotal, sapsTotal, assist247Suburbs, procompareCompanies, waterPending, waterTotal, gvrTotal, schoolsTotal, schoolsPending, climateTotal, climatePending, loadsheddingTotal, soldpricesTotal, fibreTotal, kbTotal, kbActive, electricityTotal, ragChunksByLayer, ragLastSeeded, ragPending, pricetrendsTotal, pricetrendsPending, propertycostsTotal, propertycostsPending, pexelsTotal, mixkitTotal, unsplashTotal, trendingTotal] = await Promise.all([
     query(`SELECT COUNT(DISTINCT (p.suburb || '|' || p.city)) as cnt FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'crime_detailed')`),
     query(`SELECT COUNT(*) as cnt FROM area_risk_data WHERE risk_type = 'crime_detailed'`),
@@ -49,6 +49,10 @@ export const GET = withAuth(async () => {
     query(`SELECT COUNT(DISTINCT (p.suburb || '|' || p.city)) as cnt FROM properties p WHERE p.suburb IS NOT NULL AND p.city IS NOT NULL AND NOT EXISTS (SELECT 1 FROM area_risk_data ard WHERE ard.suburb ILIKE p.suburb AND ard.city ILIKE p.city AND ard.risk_type = 'price_trends')`).catch(() => [{ cnt: 0 }]),
     query(`SELECT COUNT(*) as cnt FROM properties WHERE extra_costs_json IS NOT NULL`).catch(() => [{ cnt: 0 }]),
     query(`SELECT COUNT(*) as cnt FROM properties WHERE asking_price > 0 AND suburb IS NOT NULL AND extra_costs_json IS NULL`).catch(() => [{ cnt: 0 }]),
+    query(`SELECT COUNT(*) as cnt FROM stock_footage WHERE source = 'pexels'`).catch(() => [{ cnt: 0 }]),
+    query(`SELECT COUNT(*) as cnt FROM stock_footage WHERE source = 'mixkit'`).catch(() => [{ cnt: 0 }]),
+    query(`SELECT COUNT(*) as cnt FROM stock_footage WHERE source = 'unsplash'`).catch(() => [{ cnt: 0 }]),
+    query(`SELECT COUNT(*) as cnt FROM trending_hashtags`).catch(() => [{ cnt: 0 }]),
   ]);
 
   const chunks: Record<string, number> = {};
@@ -106,5 +110,9 @@ export const GET = withAuth(async () => {
     rag_total_chunks: totalChunks,
     rag_last_seeded: ragLastSeeded[0]?.last_seeded || null,
     rag_pending_by_source: pendingBySource,
+    pexels_total: parseInt(pexelsTotal[0].cnt),
+    mixkit_total: parseInt(mixkitTotal[0].cnt),
+    unsplash_total: parseInt(unsplashTotal[0].cnt),
+    trending_total: parseInt(trendingTotal[0].cnt),
   });
 });
