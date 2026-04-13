@@ -14,17 +14,24 @@ export function SiteHeader() {
         <nav className="hidden md:flex items-center gap-7 text-sm text-gray-700">
           <Link href="/#how" className="hover:text-[#E63946]">How it works</Link>
           <Link href="/#checks" className="hover:text-[#E63946]">What we check</Link>
-          <Link href="/#tiktok" className="hover:text-[#E63946]">TikTok integration</Link>
           <Link href="/#pricing" className="hover:text-[#E63946]">Pricing</Link>
           <Link href="/#faq" className="hover:text-[#E63946]">FAQ</Link>
         </nav>
-        <a
-          href={WHATSAPP_LINK}
-          className="bg-[#E63946] text-white text-sm font-semibold px-4 py-2 rounded-md hover:bg-red-700 transition"
-          target="_blank" rel="noopener noreferrer"
-        >
-          Start on WhatsApp
-        </a>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/admin/data/properties"
+            className="hidden sm:inline-block text-sm font-semibold px-3 py-2 text-[#0D1B2A] hover:text-[#E63946] transition"
+          >
+            Admin
+          </Link>
+          <a
+            href={WHATSAPP_LINK}
+            className="bg-[#E63946] text-white text-sm font-semibold px-4 py-2 rounded-md hover:bg-red-700 transition"
+            target="_blank" rel="noopener noreferrer"
+          >
+            Start on WhatsApp
+          </a>
+        </div>
       </div>
     </header>
   );
