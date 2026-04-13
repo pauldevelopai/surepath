@@ -16,11 +16,25 @@ export default function MoneyPage() {
   const [toggling, setToggling] = useState(false);
   const [provider, setProvider] = useState<string>("yoco");
   const [switchingProvider, setSwitchingProvider] = useState(false);
+  const [liveStatus, setLiveStatus] = useState<A | null>(null);
+
+  async function refreshLiveStatus() {
+    try {
+      const r = await fetch("/api/settings/live-status", { cache: "no-store" });
+      const j = await r.json();
+      setLiveStatus(j);
+    } catch {
+      setLiveStatus(null);
+    }
+  }
 
   useEffect(() => {
     fetch("/api/analytics").then(r => r.json()).then(setData);
     fetch("/api/billing").then(r => r.json()).then(setBilling).catch(() => {});
     fetch("/api/settings", { cache: "no-store" }).then(r => r.json()).then(d => { setPrice(d.report_price); setPriceInput(String(d.report_price)); setPaymentEnabled(d.payment_enabled !== false); setProvider(d.payment_provider || "yoco"); }).catch(() => {});
+    refreshLiveStatus();
+    const t = setInterval(refreshLiveStatus, 3000); // re-check live status every 3s
+    return () => clearInterval(t);
   }, []);
 
   async function savePrice() {
@@ -29,9 +43,10 @@ export default function MoneyPage() {
     setPriceSaving(true);
     await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ report_price: newPrice }) });
     setPrice(newPrice);
-    setPriceMsg("Price updated");
+    setPriceMsg(`Price updated — bot now charging R${newPrice}`);
     setPriceSaving(false);
-    setTimeout(() => setPriceMsg(null), 3000);
+    await refreshLiveStatus();
+    setTimeout(() => setPriceMsg(null), 4000);
   }
 
   if (!data) return <p className="text-gray-500">Loading...</p>;
@@ -45,10 +60,17 @@ export default function MoneyPage() {
           <h1 className="text-2xl font-bold">Revenue</h1>
           <p className="text-sm text-gray-500">Revenue, payments, and costs</p>
         </div>
-        <a href="https://www.payfast.co.za/dashboard" target="_blank" rel="noreferrer"
-          className="px-4 py-2 bg-[#00457C] text-white text-sm rounded font-bold hover:bg-[#003366]">
-          PayFast Dashboard
-        </a>
+        {provider === "yoco" ? (
+          <a href="https://portal.yoco.co.za" target="_blank" rel="noreferrer"
+            className="px-4 py-2 bg-[#0BAE6F] text-white text-sm rounded font-bold hover:bg-[#097F54]">
+            Yoco Dashboard
+          </a>
+        ) : (
+          <a href="https://www.payfast.co.za/dashboard" target="_blank" rel="noreferrer"
+            className="px-4 py-2 bg-[#00457C] text-white text-sm rounded font-bold hover:bg-[#003366]">
+            PayFast Dashboard
+          </a>
+        )}
       </div>
 
       {/* Payment toggle */}
@@ -56,9 +78,9 @@ export default function MoneyPage() {
         <div>
           <div className="flex items-center gap-2">
             <span className={`w-3 h-3 rounded-full ${paymentEnabled ? "bg-green-500" : "bg-amber-500 animate-pulse"}`} />
-            <span className="font-bold text-sm">{paymentEnabled ? "Payments Active" : "Income Paused — Reports are FREE"}</span>
+            <span className="font-bold text-sm">{paymentEnabled ? `Payments Active via ${provider === "yoco" ? "Yoco" : "PayFast"}` : "Income Paused — Reports are FREE"}</span>
           </div>
-          <p className="text-[10px] text-gray-500 mt-0.5">{paymentEnabled ? "Users pay via PayFast before receiving reports." : "Users get reports immediately without paying. Turn on when ready to charge."}</p>
+          <p className="text-[10px] text-gray-500 mt-0.5">{paymentEnabled ? `WhatsApp users pay R${price} via ${provider === "yoco" ? "Yoco" : "PayFast"} before receiving reports.` : "Users get reports immediately without paying. Turn on when ready to charge."}</p>
         </div>
         <button
           onClick={async () => {
@@ -67,6 +89,7 @@ export default function MoneyPage() {
             await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payment_enabled: newState }) });
             setPaymentEnabled(newState);
             setToggling(false);
+            await refreshLiveStatus();
           }}
           disabled={toggling}
           className={`px-5 py-2 rounded text-sm font-bold ${paymentEnabled ? "bg-amber-500 text-white hover:bg-amber-600" : "bg-green-600 text-white hover:bg-green-700"} disabled:opacity-50`}
@@ -74,6 +97,23 @@ export default function MoneyPage() {
           {toggling ? "..." : paymentEnabled ? "Pause Income" : "Resume Income"}
         </button>
       </div>
+
+      {/* Live bot status — what the WhatsApp bot is ACTUALLY doing right now */}
+      {liveStatus && (
+        <div className={`border rounded-lg p-3 mb-6 text-xs flex items-center gap-3 ${
+          liveStatus.effective_behaviour === "charge_users" ? "bg-green-50 border-green-200" :
+          liveStatus.effective_behaviour === "free_reports" ? "bg-amber-50 border-amber-200" :
+          "bg-red-50 border-red-300"
+        }`}>
+          <span className={`w-2 h-2 rounded-full ${liveStatus.effective_behaviour === "missing_credentials_will_fail" ? "bg-red-500 animate-pulse" : "bg-green-500"}`} />
+          <div className="flex-1">
+            <div className="font-bold">Bot live state: {liveStatus.effective_message}</div>
+            <div className="text-[10px] text-gray-500 mt-0.5">
+              Settings last saved: {liveStatus.settings_file_last_written ? new Date(liveStatus.settings_file_last_written).toLocaleString() : "—"} · re-checking every 3s
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Revenue cards */}
       <div className="grid grid-cols-4 gap-4 mb-6">
@@ -114,7 +154,7 @@ export default function MoneyPage() {
           <div className={`border rounded p-3 ${provider === "yoco" ? "border-green-400 bg-green-50" : ""}`}>
             <div className="flex items-center justify-between mb-1">
               <div className="text-xs font-bold">Yoco</div>
-              {provider !== "yoco" && <button onClick={async () => { setSwitchingProvider(true); await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payment_provider: "yoco" }) }); setProvider("yoco"); setSwitchingProvider(false); }} disabled={switchingProvider} className="text-[10px] px-2 py-0.5 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50">{switchingProvider ? "..." : "Activate"}</button>}
+              {provider !== "yoco" && <button onClick={async () => { setSwitchingProvider(true); await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payment_provider: "yoco" }) }); setProvider("yoco"); setSwitchingProvider(false); await refreshLiveStatus(); }} disabled={switchingProvider} className="text-[10px] px-2 py-0.5 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50">{switchingProvider ? "..." : "Activate"}</button>}
               {provider === "yoco" && <span className="text-[10px] px-2 py-0.5 bg-green-600 text-white rounded">Active</span>}
             </div>
             <div className="text-xs text-gray-500 mb-2">Checkout API — R{price} per report (~2.95% + R1)</div>
@@ -126,7 +166,7 @@ export default function MoneyPage() {
           <div className={`border rounded p-3 ${provider === "payfast" ? "border-green-400 bg-green-50" : ""}`}>
             <div className="flex items-center justify-between mb-1">
               <div className="text-xs font-bold">PayFast</div>
-              {provider !== "payfast" && <button onClick={async () => { setSwitchingProvider(true); await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payment_provider: "payfast" }) }); setProvider("payfast"); setSwitchingProvider(false); }} disabled={switchingProvider} className="text-[10px] px-2 py-0.5 bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50">{switchingProvider ? "..." : "Activate"}</button>}
+              {provider !== "payfast" && <button onClick={async () => { setSwitchingProvider(true); await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payment_provider: "payfast" }) }); setProvider("payfast"); setSwitchingProvider(false); await refreshLiveStatus(); }} disabled={switchingProvider} className="text-[10px] px-2 py-0.5 bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50">{switchingProvider ? "..." : "Activate"}</button>}
               {provider === "payfast" && <span className="text-[10px] px-2 py-0.5 bg-green-600 text-white rounded">Active</span>}
             </div>
             <div className="text-xs text-gray-500 mb-2">Pay Now links — R{price} per report (~3.5% + R2)</div>
@@ -164,7 +204,7 @@ export default function MoneyPage() {
               </button>
             </div>
             {priceMsg && <div className="text-[10px] text-green-600 mt-1">{priceMsg}</div>}
-            <div className="text-[10px] text-gray-400 mt-1">Changes apply to WhatsApp and PayFast instantly.</div>
+            <div className="text-[10px] text-gray-400 mt-1">Changes apply to WhatsApp and {provider === "yoco" ? "Yoco" : "PayFast"} instantly — the bot re-reads settings on every message.</div>
           </div>
           <div className="bg-gray-50 rounded p-3">
             <div className="text-gray-500 font-bold mb-1">Avg Generation Cost</div>

@@ -1178,11 +1178,23 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
       return;
     }
 
-    // ── GLOBAL: Reset commands work from awaiting/tease states only ──
-    const isReset = ['start again', 'reset', 'new', 'new property', 'start over', 'restart', 'cancel', 'menu', 'hi', 'hello', 'hey'].includes(normalised);
+    // ── GLOBAL: Greetings and reset commands ALWAYS start a fresh flow ──
+    // Hellos work even after a completed report (state=report_ready) — treat
+    // them as a fresh conversation opener, not a "your report was sent" stub.
+    const isGreeting = ['hi', 'hello', 'hey', 'hiya', 'howzit', 'morning', 'evening', 'good morning', 'good evening'].includes(normalised);
+    const isReset = ['start again', 'reset', 'new', 'new property', 'start over', 'restart', 'cancel', 'menu'].includes(normalised);
 
-    if (isReset && state !== 'awaiting_property' && state !== 'report_ready') {
-      await upsertConversation(phoneNumber, { state: 'awaiting_property' });
+    if (isGreeting) {
+      await upsertConversation(phoneNumber, { state: 'awaiting_property', tease_data: null });
+      await sendWhatsApp(from,
+        `Welcome to Surepath 👋\n\nI check properties for hidden risks before you buy.\n\nPaste a PrivateProperty or Property24 listing link and I'll pull the photos, analyse them for defects, and give you a quick preview — free.`
+      );
+      res.type('text/xml').send('<Response></Response>');
+      return;
+    }
+
+    if (isReset && state !== 'awaiting_property') {
+      await upsertConversation(phoneNumber, { state: 'awaiting_property', tease_data: null });
       await sendWhatsApp(from,
         "No problem — let's start fresh.\n\nSend me a PrivateProperty or Property24 listing link and I'll give you a quick risk preview before you decide on the full report."
       );
