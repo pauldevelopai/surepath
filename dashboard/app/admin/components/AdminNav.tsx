@@ -25,8 +25,8 @@ export default function AdminNav({ sections, user }: { sections: NavSection[]; u
 
   return (
     <>
-      {/* Mobile top bar — visible on small screens only */}
-      <header className="md:hidden fixed top-0 left-0 right-0 h-12 bg-[#0D1B2A] text-white flex items-center justify-between px-3 z-40 border-b border-white/10">
+      {/* Mobile top bar — visible on small screens only, hidden when printing */}
+      <header className="md:hidden print:hidden fixed top-0 left-0 right-0 h-12 bg-[#0D1B2A] text-white flex items-center justify-between px-3 z-40 border-b border-white/10">
         <button
           aria-label="Open menu"
           onClick={() => setOpen(true)}

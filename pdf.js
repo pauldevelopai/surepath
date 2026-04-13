@@ -1533,7 +1533,11 @@ async function exportInspectPagePDF(propertyId, askingPrice, options = {}) {
   // Extra wait for images to render
   await new Promise(r => setTimeout(r, 2000));
 
-  // Generate PDF with print media (triggers @media print styles which add cover page and hide sidebar)
+  // Emulate print media so @media print CSS triggers — hides admin sidebar,
+  // mobile header, and any other chrome the user shouldn't see in the PDF.
+  await page.emulateMediaType('print');
+
+  // Generate PDF
   const pdfBuffer = await page.pdf({
     format: 'A4',
     printBackground: true,

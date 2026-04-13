@@ -49,9 +49,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     <>
     <style>{`
       @media print {
-        aside { display: none !important; }
-        main { padding: 0 !important; }
+        /* Hide every piece of the admin chrome in PDF output */
+        aside, header { display: none !important; }
+        main { padding: 0 !important; margin: 0 !important; }
         body { background: white !important; }
+        .flex.min-h-screen { display: block !important; }
       }
     `}</style>
     <div className="flex min-h-screen">
