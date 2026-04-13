@@ -45,9 +45,6 @@ export default function ScraperPage() {
   const [showErrors, setShowErrors] = useState(false);
   const [expandedLogs, setExpandedLogs] = useState<Record<string, boolean>>({});
   const [now, setNow] = useState(Date.now());
-  const [today, setToday] = useState<any>(null);
-  const [todayLoading, setTodayLoading] = useState(true);
-  const [aiLoading, setAiLoading] = useState(false);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   const load = useCallback(() => {
@@ -57,16 +54,6 @@ export default function ScraperPage() {
       .then(r => r.json()).then(setMasterStatus).catch(() => {});
   }, []);
 
-  const loadToday = useCallback((withSuggestions: boolean) => {
-    if (withSuggestions) setAiLoading(true);
-    fetch(`/api/scraper/today${withSuggestions ? "?suggestions=1" : ""}`)
-      .then(r => r.json())
-      .then(setToday)
-      .catch(() => {})
-      .finally(() => { setTodayLoading(false); setAiLoading(false); });
-  }, []);
-
-  useEffect(() => { loadToday(false); }, [loadToday]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -162,35 +149,8 @@ export default function ScraperPage() {
     security_company: "bg-cyan-700",
   };
 
-  const t = today || {};
-
   return (
     <div>
-      {/* ─── Today review ─── */}
-      <div className="mb-4 bg-gradient-to-br from-[#0D1B2A] to-[#1a2a3f] rounded-lg p-4 border border-gray-700">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h2 className="text-lg font-bold text-white">☀️ Today — Morning Review</h2>
-            <p className="text-[11px] text-gray-400">Last 24 hours of scraper activity</p>
-          </div>
-          <button
-            onClick={() => loadToday(true)}
-            disabled={aiLoading}
-            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded disabled:opacity-50"
-          >
-            {aiLoading ? "Analyzing…" : t.suggestions ? "Refresh AI Brief" : "Generate AI Brief"}
-          </button>
-        </div>
-
-        {todayLoading ? (
-          <p className="text-gray-500 text-sm">Loading…</p>
-        ) : t.suggestions ? (
-          <div className="text-[13px] text-gray-100 whitespace-pre-wrap leading-relaxed font-sans">{t.suggestions}</div>
-        ) : (
-          <p className="text-gray-400 text-sm">Click <span className="text-amber-400">Generate AI Brief</span> for this morning&apos;s review.</p>
-        )}
-      </div>
-
       {/* Master scraper status banner */}
       {masterStatus?.running && (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
