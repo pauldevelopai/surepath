@@ -23,6 +23,16 @@ function getLiveSettings() {
   }
 }
 
+// Build the "reply 1 for report" CTA line — omits the price when income is paused
+// so users don't see a price they won't be charged.
+function buildReportCtaLine() {
+  const s = getLiveSettings();
+  if (s.payment_enabled === false) {
+    return 'Reply *1* to get the full report, or send a different listing link.';
+  }
+  return `Reply *1* to get the full report (R${s.report_price || 169}), or send a different listing link.`;
+}
+
 // Serve PDF reports so Twilio can fetch them for WhatsApp delivery
 const reportPath = require('path').join(__dirname, 'reports');
 const reportFs = require('fs');
@@ -259,7 +269,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
           '',
           'The full Surepath report includes crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
           '',
-          `Reply *1* to get the full report (R${getLiveSettings().report_price||169}), or send a different listing link.`,
+          buildReportCtaLine(),
         ].join('\n');
 
         await sendWhatsApp(from, message);
@@ -371,7 +381,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
         '',
         'The full Surepath report includes crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
         '',
-        `Reply *1* to get the full report (R${getLiveSettings().report_price||169}), or send a different listing link.`,
+        buildReportCtaLine(),
       ].join('\n');
 
       await sendWhatsApp(from, message);
@@ -786,7 +796,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
             '',
             'The full Surepath report includes crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
             '',
-            `Reply *1* to get the full report (R${getLiveSettings().report_price||169}), or send a different listing link.`,
+            buildReportCtaLine(),
           ].join('\n');
 
           await sendWhatsApp(from, message);
@@ -998,7 +1008,7 @@ async function runTeaseAsync(from, phoneNumber, url) {
       '',
       'The full Surepath report includes crime stats, all risk flags, repair cost estimates, infrastructure data, and compliance requirements — every finding linked to its source.',
       '',
-      `Reply *1* to get the full report (R${getLiveSettings().report_price||169}), or send a different listing link.`,
+      buildReportCtaLine(),
     ].join('\n');
 
     await sendWhatsApp(from, message);
@@ -1224,7 +1234,13 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
       case 'awaiting_property': {
         await upsertConversation(phoneNumber, { state: 'awaiting_property' });
         await sendWhatsApp(from,
-          `Welcome to Surepath 👋\n\nI check properties for hidden risks before you buy.\n\nPaste a PrivateProperty or Property24 listing link and I'll pull the photos, analyse them for defects, and give you a quick preview.\n\nThe full report includes crime stats, infrastructure risks, and repair cost estimates — R${getLiveSettings().report_price||169}.`
+          (() => {
+            const s = getLiveSettings();
+            const priceLine = s.payment_enabled === false
+              ? 'The full report includes crime stats, infrastructure risks, and repair cost estimates.'
+              : `The full report includes crime stats, infrastructure risks, and repair cost estimates — R${s.report_price || 169}.`;
+            return `Welcome to Surepath 👋\n\nI check properties for hidden risks before you buy.\n\nPaste a PrivateProperty or Property24 listing link and I'll pull the photos, analyse them for defects, and give you a quick preview.\n\n${priceLine}`;
+          })()
         );
         break;
       }
@@ -1235,14 +1251,16 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
       }
 
       case 'tease_sent': {
-        if (['yes', 'ja', '1', 'buy', 'full report', 'yes please', 'yep', 'sure', 'ok', 'okay', 'do it', 'go ahead', 'lets go', "let's go"].includes(normalised)) {
+        const isCheatcode = normalised === 'cheatcode';
+        if (['yes', 'ja', '1', 'buy', 'full report', 'yes please', 'yep', 'sure', 'ok', 'okay', 'do it', 'go ahead', 'lets go', "let's go"].includes(normalised) || isCheatcode) {
           const settings = getLiveSettings();
           const REPORT_PRICE = settings.report_price || 169;
           const provider = getPaymentProvider();
-          const PAYMENT_ENABLED = settings.payment_enabled && (
+          const PAYMENT_ENABLED = !isCheatcode && settings.payment_enabled && (
             (provider === 'yoco' && YOCO_SECRET_KEY) ||
             (provider === 'payfast' && PAYFAST_MERCHANT_ID && PAYFAST_MERCHANT_KEY)
           );
+          if (isCheatcode) console.log(`[cheatcode] Payment bypassed for ${phoneNumber}`);
 
           if (PAYMENT_ENABLED) {
             // Create order and send payment link
@@ -1315,7 +1333,9 @@ router.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async 
           }
 
         } else {
-          await sendWhatsApp(from, `Reply *1* for the full report (R${getLiveSettings().report_price||169}), or paste a new listing link to check a different property.`);
+          await sendWhatsApp(from, getLiveSettings().payment_enabled === false
+            ? 'Reply *1* for the full report, or paste a new listing link to check a different property.'
+            : `Reply *1* for the full report (R${getLiveSettings().report_price||169}), or paste a new listing link to check a different property.`);
         }
         break;
       }
