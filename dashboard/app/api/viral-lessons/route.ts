@@ -6,8 +6,9 @@ export const GET = withAuth(async () => {
   const rows = await query(`
     SELECT id, source_url, platform, caption, hashtags, hook_text,
            view_count, like_count, comment_count, share_count, duration_sec,
-           niche, hook_style, what_worked, one_line_lesson, score, active, created_at
-    FROM viral_lessons ORDER BY active DESC, score DESC NULLS LAST, created_at DESC LIMIT 100
+           niche, hook_style, what_worked, one_line_lesson, score, active,
+           is_own_content, rag_chunk_key, created_at
+    FROM viral_lessons ORDER BY active DESC, is_own_content DESC, score DESC NULLS LAST, created_at DESC LIMIT 100
   `);
   return NextResponse.json({ lessons: rows });
 });
@@ -17,6 +18,7 @@ export const POST = withAuth(async (req: NextRequest) => {
   const {
     source_url, caption, hashtags, hook_text,
     view_count, like_count, comment_count, share_count, duration_sec, niche,
+    is_own_content,
   } = body;
 
   if (!caption && !source_url) {
@@ -67,25 +69,57 @@ Return JSON only.`,
   const likes = Number(like_count) || 0;
   const comments = Number(comment_count) || 0;
   const shares = Number(share_count) || 0;
-  const score = views > 0
+  let score = views > 0
     ? ((likes + comments * 3 + shares * 5) / views) * 100000
     : (likes + comments + shares);
+  // Our own viral content gets a big boost so it surfaces first in the top 6
+  if (is_own_content) score = score * 10 + 10000;
 
   const rows = await query(
     `INSERT INTO viral_lessons
       (source_url, caption, hashtags, hook_text, view_count, like_count,
        comment_count, share_count, duration_sec, niche,
-       hook_style, what_worked, one_line_lesson, score)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       hook_style, what_worked, one_line_lesson, score, is_own_content)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      RETURNING id`,
     [
       source_url || null, caption || null, hashtags || null, hook_text || null,
       views || null, likes || null, comments || null, shares || null, duration_sec || null,
-      niche || 'property', parsed.hook_style, parsed.what_worked, parsed.one_line_lesson, score,
+      niche || 'property', parsed.hook_style, parsed.what_worked, parsed.one_line_lesson,
+      score, !!is_own_content,
     ]
   );
+  const lessonId = rows[0].id;
 
-  return NextResponse.json({ id: rows[0].id, ...parsed, score });
+  // Seed into RAG so the script generator can retrieve relevant lessons semantically
+  try {
+    // eslint-disable-next-line no-eval
+    const loadModule = (name: string) => eval('require')(require('path').resolve(process.cwd(), '..', name));
+    const { upsertChunk } = loadModule('rag.js');
+
+    const marker = is_own_content ? 'SUREPATH OWN VIRAL VIDEO' : 'VIRAL REFERENCE';
+    const chunkText = [
+      `${marker} [${parsed.hook_style}]`,
+      hook_text ? `Hook: "${hook_text}"` : null,
+      `What worked: ${parsed.what_worked}`,
+      `Lesson: ${parsed.one_line_lesson}`,
+      caption ? `Full caption: ${caption.substring(0, 300)}` : null,
+    ].filter(Boolean).join('\n');
+
+    const chunkKey = `viral_lesson_${lessonId}`;
+    await upsertChunk(chunkText, {
+      hook_style: parsed.hook_style,
+      is_own: !!is_own_content,
+      score,
+      source_url: source_url || null,
+    }, 'viral_lesson', 'viral_lessons', lessonId, chunkKey);
+
+    await query('UPDATE viral_lessons SET rag_chunk_key = $1 WHERE id = $2', [chunkKey, lessonId]);
+  } catch (e) {
+    console.error('[viral-lessons] RAG seeding failed:', e);
+  }
+
+  return NextResponse.json({ id: lessonId, ...parsed, score, is_own_content: !!is_own_content });
 });
 
 export const DELETE = withAuth(async (req: NextRequest) => {

@@ -102,6 +102,30 @@ CREATE TABLE content_posts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE viral_lessons (
+  id SERIAL PRIMARY KEY,
+  source_url TEXT,
+  platform TEXT DEFAULT 'tiktok',
+  caption TEXT,
+  hashtags TEXT,
+  hook_text TEXT,
+  view_count BIGINT,
+  like_count BIGINT,
+  comment_count BIGINT,
+  share_count BIGINT,
+  duration_sec INTEGER,
+  niche TEXT DEFAULT 'property',
+  hook_style TEXT,
+  what_worked TEXT,
+  one_line_lesson TEXT,
+  score NUMERIC,
+  is_own_content BOOLEAN DEFAULT FALSE,
+  rag_chunk_key TEXT,
+  active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_viral_lessons_active_score ON viral_lessons(active, score DESC) WHERE active = TRUE;
+
 CREATE TABLE trending_hashtags (
   id SERIAL PRIMARY KEY,
   tag TEXT UNIQUE NOT NULL,

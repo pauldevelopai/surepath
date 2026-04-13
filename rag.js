@@ -103,14 +103,15 @@ async function retrieve(queryText, opts = {}) {
 
   // Per-layer budgets with 2x oversampling for better reranking
   const layerBudgets = [
-    { layers: ['knowledge'],  limit: 10 },
-    { layers: ['evidence'],   limit: 6 },
-    { layers: ['vision'],     limit: 6 },
-    { layers: ['live'],       limit: 6 },
-    { layers: ['crime'],      limit: 4 },
-    { layers: ['security'],   limit: 2 },
-    { layers: ['report'],     limit: 4 },
-    { layers: ['feedback'],   limit: 4 },
+    { layers: ['knowledge'],     limit: 10 },
+    { layers: ['evidence'],      limit: 6 },
+    { layers: ['vision'],        limit: 6 },
+    { layers: ['live'],          limit: 6 },
+    { layers: ['crime'],         limit: 4 },
+    { layers: ['security'],      limit: 2 },
+    { layers: ['report'],        limit: 4 },
+    { layers: ['feedback'],      limit: 4 },
+    { layers: ['viral_lesson'],  limit: 4 },
   ];
 
   const allResults = [];
@@ -185,6 +186,7 @@ function formatForPrompt(chunks) {
   const report = chunks.filter(c => c.layer === 'report');
   const feedback = chunks.filter(c => c.layer === 'feedback');
   const vision = chunks.filter(c => c.layer === 'vision');
+  const viral = chunks.filter(c => c.layer === 'viral_lesson');
 
   if (knowledge.length > 0) {
     const entries = knowledge.map(c => {
@@ -227,6 +229,12 @@ function formatForPrompt(chunks) {
 
   if (feedback.length > 0) {
     result += `\n\nUSER FEEDBACK (corrections and confirmations from human reviewers):\n${feedback.map(c => c.text).join('\n')}`;
+  }
+
+  if (viral.length > 0) {
+    // Surface own-content lessons first
+    const sorted = [...viral].sort((a, b) => (b.metadata?.is_own ? 1 : 0) - (a.metadata?.is_own ? 1 : 0));
+    result += `\n\nVIRAL LESSONS (proven hook/structure techniques — apply these when writing the script):\n${sorted.map(c => c.text).join('\n\n')}`;
   }
 
   return result;
