@@ -298,13 +298,8 @@ async function synthesiseReport(propertyId, askingPrice) {
   // Step 5: Call Claude Opus for synthesis
   console.log('[synthesis] Calling Claude Opus for report synthesis...');
 
-  const message = await client.messages.create({
-    model: require('./model-config').getModel('synthesis'),
-    max_tokens: 4096,
-    system: SYNTHESIS_SYSTEM_PROMPT,
-    messages: [{
-      role: 'user',
-      content: `Synthesise a complete Surepath property report from this data. Return valid JSON only, no markdown fences.
+  const synthesisModel = require('./model-config').getModel('synthesis');
+  const userPrompt = `Synthesise a complete Surepath property report from this data. Return valid JSON only, no markdown fences.
 
 The JSON must have these exact fields:
 {
@@ -331,9 +326,17 @@ The JSON must have these exact fields:
 }
 
 Property data:
-${JSON.stringify(context, null, 2)}`,
-    }],
+${JSON.stringify(context, null, 2)}`;
+
+  const synthStart = Date.now();
+  const message = await client.messages.create({
+    model: synthesisModel,
+    max_tokens: 4096,
+    system: SYNTHESIS_SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: userPrompt }],
   });
+  const synthDurationMs = Date.now() - synthStart;
+  const rawResponse = message.content[0].text;
 
   // Parse response — resilient to malformed JSON from Claude
   let reportText = message.content[0].text.trim();
@@ -347,6 +350,9 @@ ${JSON.stringify(context, null, 2)}`,
   if (jEnd > 0 && jEnd < reportText.length - 1) reportText = reportText.substring(0, jEnd + 1);
 
   let report;
+  let parsedOk = true;
+  let fallbackUsed = false;
+  let parseError = null;
   try {
     report = JSON.parse(reportText);
   } catch (e) {
@@ -354,7 +360,10 @@ ${JSON.stringify(context, null, 2)}`,
     const fixed = reportText.replace(/,\s*([}\]])/g, '$1').replace(/\n/g, ' ');
     try {
       report = JSON.parse(fixed);
-    } catch {
+    } catch (e2) {
+      parsedOk = false;
+      fallbackUsed = true;
+      parseError = e2.message;
       console.error('[synthesis] JSON parse failed, using fallback report');
       report = {
         decision: 'NEGOTIATE',
@@ -450,6 +459,65 @@ ${JSON.stringify(context, null, 2)}`,
       propertyId,
     ]
   );
+
+  // ML logging — feature-flagged, never blocks the report flow.
+  if (process.env.ML_LOG_SYNTHESIS_RUNS === 'true') {
+    try {
+      await pool.query(
+        `INSERT INTO ml_synthesis_runs (
+          report_id, property_id, model, system_prompt, user_prompt,
+          raw_response, parsed_ok, fallback_used,
+          input_tokens, output_tokens, cost_zar, duration_ms, error_message
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [reportId, propertyId, synthesisModel, SYNTHESIS_SYSTEM_PROMPT, userPrompt,
+         rawResponse, parsedOk, fallbackUsed,
+         inputTokens, outputTokens, costZAR, synthDurationMs, parseError]
+      );
+    } catch (err) {
+      console.error('[synthesis] ml_synthesis_runs log failed (non-fatal):', err.message);
+    }
+  }
+
+  // ML labelling — write report outcomes back to training_data, feature-flagged.
+  // Closes the loop on the existing feature store (populated at scrape time, outcomes never wired).
+  if (process.env.ML_UPDATE_TRAINING_DATA === 'true') {
+    try {
+      const findings = Array.isArray(report.vision_findings) ? report.vision_findings : [];
+      const criticalCount = findings.filter(f => f && f.severity === 'CRITICAL').length;
+      const complianceCount = Array.isArray(report.compliance_flags) ? report.compliance_flags.length : 0;
+      const repairMax = (report.repair_estimates && report.repair_estimates.total_max_zar) || report.maintenance_cost_estimate || null;
+
+      const updateRes = await pool.query(
+        `UPDATE training_data
+            SET decision = COALESCE($1, decision),
+                asbestos_risk = COALESCE($2, asbestos_risk),
+                total_findings = $3,
+                critical_findings = $4,
+                repair_cost_max = COALESCE($5, repair_cost_max),
+                insurance_risk_score = COALESCE($6, insurance_risk_score),
+                solar_suitability_score = COALESCE($7, solar_suitability_score),
+                compliance_cocs_needed = $8,
+                updated_at = NOW()
+          WHERE property_id = $9`,
+        [
+          report.decision || null,
+          report.asbestos_risk || null,
+          findings.length,
+          criticalCount,
+          repairMax,
+          report.insurance_risk_score || null,
+          report.solar_suitability_score || null,
+          complianceCount,
+          propertyId,
+        ]
+      );
+      if (updateRes.rowCount > 0) {
+        console.log(`[synthesis] Labelled ${updateRes.rowCount} training_data row(s) for property ${propertyId}`);
+      }
+    } catch (err) {
+      console.error('[synthesis] training_data labelling failed (non-fatal):', err.message);
+    }
+  }
 
   console.log(`[synthesis] Report ${reportId} created. Cost: R${costZAR}`);
 
